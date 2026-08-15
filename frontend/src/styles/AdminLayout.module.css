@@ -1,0 +1,267 @@
+/**
+ * AdminLayout.module.css
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Companion styles for AdminLayout with smooth sidebar collapse animations.
+ * Using CSS modules for proper scoping and better performance.
+ */
+
+:root {
+  /* Transition values */
+  --transition-duration: 300ms;
+  --transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: all var(--transition-duration) var(--transition-easing);
+
+  /* Sidebar dimensions */
+  --sidebar-width-expanded: 240px;
+  --sidebar-width-collapsed: 80px;
+}
+
+/* Sidebar container transitions */
+.sidebar {
+  transition: var(--transition-fast);
+  will-change: width;
+}
+
+.sidebarExpanded {
+  width: var(--sidebar-width-expanded);
+  min-width: var(--sidebar-width-expanded);
+}
+
+.sidebarCollapsed {
+  width: var(--sidebar-width-collapsed);
+  min-width: var(--sidebar-width-collapsed);
+}
+
+/* Text labels fade in/out on collapse */
+.sidebarLabel {
+  transition: opacity var(--transition-duration) var(--transition-easing),
+              visibility var(--transition-duration) var(--transition-easing);
+  visibility: visible;
+  opacity: 1;
+}
+
+.sidebarCollapsed .sidebarLabel {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Navigation items */
+.navItem {
+  transition: var(--transition-fast);
+  position: relative;
+  will-change: background-color;
+}
+
+.navItemActive {
+  background-color: var(--teal-100);
+  border-left-color: var(--teal-600);
+}
+
+.navItemHover:hover:not(.navItemActive) {
+  background-color: var(--teal-50);
+}
+
+/* Icon alignment in collapsed state */
+.navIcon {
+  flex-shrink: 0;
+  transition: color var(--transition-duration) var(--transition-easing);
+}
+
+/* Tooltip styles for collapsed state */
+.tooltip {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%) translateX(8px);
+  background-color: var(--navy-900);
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-duration) var(--transition-easing);
+  margin-left: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.navItem:hover .tooltip {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Brand section fade-out */
+.brandSection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.brandText {
+  flex: 1;
+  min-width: 0;
+  transition: opacity var(--transition-duration) var(--transition-easing);
+}
+
+.sidebarCollapsed .brandText {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Branch list smooth hide/show */
+.branchList {
+  max-height: 100%;
+  overflow: visible;
+  opacity: 1;
+  transition: max-height var(--transition-duration) var(--transition-easing),
+              opacity var(--transition-duration) var(--transition-easing);
+}
+
+.branchListHidden {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Chevron rotation on branch toggle */
+.branchChevron {
+  transition: transform var(--transition-duration) var(--transition-easing);
+}
+
+.branchChevronOpen {
+  transform: rotate(0deg);
+}
+
+.branchChevronClosed {
+  transform: rotate(-90deg);
+}
+
+/* Collapse button rotation */
+.collapseButton {
+  transition: transform var(--transition-duration) var(--transition-easing);
+}
+
+.collapseButtonExpanded {
+  transform: rotate(0deg);
+}
+
+.collapseButtonCollapsed {
+  transform: rotate(180deg);
+}
+
+/* Main content area adjustment (if needed for responsive) */
+.mainContent {
+  transition: var(--transition-fast);
+  will-change: margin-left;
+}
+
+/* Icon-only nav items in collapsed state */
+.navItemCollapsed {
+  padding: 10px 8px;
+  justify-content: center;
+}
+
+.navItemCollapsed .navIcon {
+  margin: 0 !important;
+}
+
+/* Smooth transitions for all colors */
+.textActive {
+  color: var(--teal-700);
+  transition: color var(--transition-duration) var(--transition-easing);
+}
+
+.textInactive {
+  color: var(--navy-700);
+  transition: color var(--transition-duration) var(--transition-easing);
+}
+
+.iconActive {
+  color: var(--teal-700);
+  transition: color var(--transition-duration) var(--transition-easing);
+}
+
+.iconInactive {
+  color: var(--gray-500);
+  transition: color var(--transition-duration) var(--transition-easing);
+}
+
+/* Accessibility: Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .navItem,
+  .sidebarLabel,
+  .brandText,
+  .branchList,
+  .branchChevron,
+  .collapseButton,
+  .mainContent,
+  .tooltip {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .navItem {
+    will-change: auto;
+  }
+
+  .sidebar {
+    will-change: auto;
+  }
+
+  .mainContent {
+    will-change: auto;
+  }
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    height: 100vh;
+    top: 0;
+    left: 0;
+    transform: translateX(-100%);
+    z-index: 50;
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .sidebarOverlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(15, 23, 42, 0.4);
+    z-index: 40;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-duration) var(--transition-easing);
+  }
+
+  .sidebarOverlayVisible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Print styles */
+@media print {
+  .sidebar,
+  .collapseButton {
+    display: none !important;
+  }
+
+  .mainContent {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+}

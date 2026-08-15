@@ -1,0 +1,230 @@
+/* ═══════════════════════════════════════════════════════════
+   theme.css  —  AttendAI global design tokens
+   Import once in main.tsx / index.css:
+     @import './theme.css';
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Google Fonts ─────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap");
+
+/* ── Core palette ─────────────────────────────────────────── */
+:root {
+  /* ── Typography ────────────────────────────────────────── */
+  --font-body: "Times New Roman", system-ui, -apple-system, sans-serif;
+  --font-heading: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-display:
+    "DM Serif Display", Georgia, serif; /* for hero numbers / big stat values */
+
+  /* Teal family */
+  --teal-900: #134e4a;
+  --teal-800: #115e59;
+  --teal-700: #0f766e;
+  --teal-600: #0d9488; /* PRIMARY — icons, active states, highlights */
+  --teal-500: #14b8a6;
+  --teal-200: #99f6e4;
+  --teal-100: #ccfbf1; /* light teal bg — active nav, calendar bg */
+  --teal-50: #f0fdfa; /* hover / very subtle tint                  */
+
+  /* Navy family (dark headings, today-bar, navy card) */
+  --navy-900: #0c2340;
+  --navy-800: #0f2d4a;
+  --navy-700: #134471; /* heading text colour                        */
+  --navy-600: #164e63; /* chart "today" bar                          */
+  --navy-500: #1d6a89;
+
+  /* Slate (secondary text, icons) */
+  --slate-600: #475569;
+  --slate-500: #64748b;
+  --slate-400: #94a3b8;
+  --slate-200: #e2e8f0;
+  --slate-100: #f1f5f9;
+  --slate-50: #f8fafc;
+
+  /* Semantic */
+  --green-600: #16a34a;
+  --green-100: #f0fdf4;
+  --green-200: #bbf7d0;
+
+  --red-600: #e11d48;
+  --red-100: #fff1f2;
+  --red-200: #fecdd3;
+
+  --amber-600: #d97706;
+  --amber-100: #fffbeb;
+
+  --blue-500: #0ea5e9;
+  --blue-100: #e0f2fe;
+
+  /* Surfaces */
+  --bg-page: #eef2f7; /* page background                            */
+  --bg-card: #ffffff;
+  --border: #e2e8f0;
+
+  /* Typography colours */
+  --text-heading: #1a699f; /* dark navy — ALL headings                */
+  --text-body: #334155; /* slightly lighter body copy              */
+  --text-muted: #64748b; /* captions, labels                        */
+  --text-light: #94a3b8; /* placeholders, timestamps                */
+
+  /* Sidebar */
+  --sidebar-width: 248px;
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e8edf2;
+  --sidebar-active-bg: var(--teal-100); /* light teal        */
+  --sidebar-active-text: var(--teal-600);
+  --sidebar-active-bar: var(--teal-600);
+  --sidebar-icon: var(--slate-400);
+  --sidebar-text: var(--slate-600);
+
+  /* Shadows */
+  --shadow-card:
+    0 1px 3px rgba(15, 45, 74, 0.06), 0 1px 2px rgba(15, 45, 74, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 45, 74, 0.1);
+}
+
+/* ── Global base ──────────────────────────────────────────── */
+/* Single rule — every page inherits body font automatically.  */
+/* No component changes needed.                                */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-body);
+  background: var(--bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings pick up --font-heading automatically */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  color: var(--text-heading);
+  line-height: 1.25;
+  margin: 0;
+}
+
+/* Reset default margin on p so cards stay tight */
+p {
+  margin: 0;
+}
+
+/* ── Tailwind-style utility shorthands (use as className) ─── */
+/* These let you do className="text-heading" etc. in JSX       */
+
+.text-heading {
+  color: var(--text-heading) !important;
+}
+.text-body {
+  color: var(--text-body) !important;
+}
+.text-muted {
+  color: var(--text-muted) !important;
+}
+.text-light {
+  color: var(--text-light) !important;
+}
+.text-teal {
+  color: var(--teal-600) !important;
+}
+.text-navy {
+  color: var(--navy-700) !important;
+}
+
+.bg-page {
+  background: var(--bg-page) !important;
+}
+.bg-card {
+  background: var(--bg-card) !important;
+}
+.bg-teal-light {
+  background: var(--teal-100) !important;
+}
+.bg-teal-50 {
+  background: var(--teal-50) !important;
+}
+
+.border-theme {
+  border-color: var(--border) !important;
+}
+
+/* Font family helpers — apply where you want to override */
+.font-body {
+  font-family: var(--font-body) !important;
+}
+.font-heading {
+  font-family: var(--font-heading) !important;
+}
+.font-display {
+  font-family: var(--font-display) !important;
+}
+
+/* Stat icon circle helpers */
+.icon-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+}
+
+.icon-teal {
+  background: var(--teal-100);
+  color: var(--teal-600);
+}
+.icon-navy {
+  background: #d1e8f0;
+  color: var(--navy-600);
+}
+.icon-red {
+  background: var(--red-100);
+  color: var(--red-600);
+}
+.icon-amber {
+  background: var(--amber-100);
+  color: var(--amber-600);
+}
+.icon-blue {
+  background: var(--blue-100);
+  color: var(--blue-500);
+}
+.icon-green {
+  background: var(--green-100);
+  color: var(--green-600);
+}
+
+/* Card base */
+.theme-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+/* Active sidebar link */
+.nav-link-active {
+  background: var(--sidebar-active-bg) !important;
+  color: var(--sidebar-active-text) !important;
+  border-left: 3px solid var(--sidebar-active-bar) !important;
+}
+
+/* Scrollbar reset */
+.hide-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.hide-scrollbar {
+  scrollbar-width: none;
+}

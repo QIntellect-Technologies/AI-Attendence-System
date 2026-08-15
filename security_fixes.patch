@@ -1,0 +1,1201 @@
+diff -ruN a/app.py b/app.py
+--- a/app.py	2026-08-15 05:31:46.039127085 +0000
++++ b/app.py	2026-08-15 05:31:46.043301300 +0000
+@@ -46,6 +46,7 @@
+     MODELS_DIR, ENABLE_GPU, ANTI_SPOOFING_ENABLED,
+ )
+ from local_node_camera_routes import register_local_node_camera_routes
++import login_throttle
+ import tempfile
+ from shared_face_engine.package_format import parse_embedding_package, PackageImportError
+ 
+@@ -53,7 +54,54 @@
+ 
+ # Initialize Flask app
+ app = Flask(__name__)
+-CORS(app)
++
++# ─── CORS ──────────────────────────────────────────────────────
++# Was a bare CORS(app), i.e. Access-Control-Allow-Origin: * on every route.
++# With the dashboard JWT travelling in an Authorization header (not a
++# cookie), a wildcard doesn't hand out sessions by itself -- but it does let
++# any page on the internet script a victim's browser into calling this API
++# and read the response, which is exactly the amplifier you don't want
++# sitting under the routes fixed above.
++#
++# Allowlist comes from CORS_ALLOWED_ORIGINS (comma-separated). The default
++# below is localhost-only so a misconfigured deploy fails closed and loudly
++# in the browser console, rather than silently staying wide open. Set the
++# env var to the real dashboard origin(s) in Railway.
++_DEFAULT_CORS_ORIGINS = 'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173'
++CORS_ALLOWED_ORIGINS = [
++    origin.strip()
++    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', _DEFAULT_CORS_ORIGINS).split(',')
++    if origin.strip()
++]
++if '*' in CORS_ALLOWED_ORIGINS:
++    # Explicit opt-in only, and never silently: if someone genuinely needs
++    # the old behaviour they have to type it, and it shows up in the logs.
++    logger.warning('CORS_ALLOWED_ORIGINS contains "*" — every origin on the internet can call this API.')
++
++CORS(
++    app,
++    resources={r'/api/*': {'origins': CORS_ALLOWED_ORIGINS},
++               r'/v1/*': {'origins': CORS_ALLOWED_ORIGINS}},
++    supports_credentials=True,
++    allow_headers=['Content-Type', 'Authorization', 'Accept', 'X-Node-Api-Key'],
++    methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
++    max_age=600,
++)
++logger.info('CORS allowlist: %s', CORS_ALLOWED_ORIGINS)
++
++# login_throttle keeps its counters in process memory, which is only
++# correct while gunicorn runs a single worker (as the Dockerfile does).
++# Shout if that ever changes — see login_throttle.py's module docstring.
++_web_concurrency = os.environ.get('WEB_CONCURRENCY') or os.environ.get('GUNICORN_WORKERS')
++try:
++    if _web_concurrency and int(_web_concurrency) > 1:
++        logger.warning(
++            'Running %s workers: login_throttle counters are per-process, so the effective '
++            'brute-force budget is %sx the configured limit. Move it to a shared store.',
++            _web_concurrency, _web_concurrency,
++        )
++except ValueError:
++    pass
+ from internal_routes import internal_bp
+ app.register_blueprint(internal_bp)
+ # ─── Support Dashboard API ─────────────────────────────────────
+@@ -1824,6 +1872,14 @@
+     if not email or not password:
+         return jsonify({'success': False, 'message': 'Email and password required'}), 400
+ 
++    # Brute-force throttle. Checked BEFORE any of the three authentication
++    # backends below are consulted, so a locked-out caller costs us one dict
++    # lookup rather than three credential lookups (two of them network round
++    # trips to Supabase) — the throttle has to be cheaper than the attack to
++    # be worth having. See login_throttle.py.
++    if login_throttle.is_locked_out(email):
++        return login_throttle.lockout_response(email)
++
+     # First try the new Supabase client_users table created from Support Dashboard invites.
+     try:
+         client_user = support_cp_db.authenticate_client_user(email, password)
+@@ -1845,6 +1901,7 @@
+             )
+         except ValueError:
+             token = None
++        login_throttle.register_success(email)
+         return jsonify({
+             'success': True,
+             'user': client_user,
+@@ -1889,6 +1946,7 @@
+             # rights; team-scope alone, without role='admin', still does
+             # not.
+         )
++        login_throttle.register_success(email)
+         return jsonify({
+             'success': True,
+             'user': client_staff,
+@@ -1903,8 +1961,13 @@
+     # Legacy SQLite user auth remains for old local/dev accounts and staff users.
+     user = db.authenticate_user(email, password)
+     if not user:
++        # Only reached once all three backends (client_users, client_staff,
++        # legacy SQLite) have declined — i.e. this really is a bad
++        # credential, not just "wrong table".
++        login_throttle.register_failure(email)
+         return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+ 
++    login_throttle.register_success(email)
+     safe_user = _safe_user(user)
+     try:
+         token = mint_dashboard_token(
+@@ -2344,13 +2407,14 @@
+         return jsonify({'success': False, 'message': str(e)}), 500
+ 
+ @app.route('/api/org/retention-policy', methods=['GET'])
++@require_client_dashboard_auth
+ def api_get_retention_policy():
+-    raw_organization_id = (
+-        request.args.get('organization_id')
+-        or request.args.get('organizationId')
+-        or request.args.get('org_id')
+-        or ''
+-    ).strip()
++    """org_id is pinned to the authenticated dashboard session, never the
++    query string. Previously unauthenticated and org-id-off-the-URL, so any
++    caller could read any tenant's data-wipe schedule. Read stays on plain
++    auth (the Settings screen shows the current value to any dashboard
++    user); the PUT below is admin-only -- see its docstring."""
++    raw_organization_id = str(g.dashboard_user.get('org_id') or '').strip()
+ 
+     if not raw_organization_id:
+         return jsonify({'error': 'organization_id is required'}), 400
+@@ -2373,16 +2437,19 @@
+ 
+ 
+ @app.route('/api/org/retention-policy', methods=['PUT'])
++@require_client_dashboard_admin
+ def api_update_retention_policy():
++    """org_id is pinned to the authenticated dashboard session, never the
++    body. Admin rather than plain auth: this sets how long employee HR
++    records survive before automated deletion, so a wrong value here
++    destroys data org-wide -- same blast radius as the delete/purge routes
++    that already wear this decorator. updated_by is likewise taken from the
++    session, not the payload: it is an audit field, and a caller-supplied
++    one can be forged to point at someone else."""
+     data = request.get_json(silent=True) or {}
+-    raw_organization_id = str(
+-        data.get('organization_id')
+-        or data.get('organizationId')
+-        or data.get('org_id')
+-        or ''
+-    ).strip()
++    raw_organization_id = str(g.dashboard_user.get('org_id') or '').strip()
+     employee_retention_years = data.get('employee_retention_years')
+-    updated_by = data.get('updated_by')
++    updated_by = g.dashboard_user.get('id')
+ 
+     if not raw_organization_id:
+         return jsonify({'error': 'organization_id is required'}), 400
+@@ -3959,15 +4026,29 @@
+     return jsonify(rows)
+ 
+ @app.route('/api/overtime', methods=['POST'])
++@require_client_dashboard_auth
+ def api_add_overtime():
++    """Dashboard-side "file overtime on behalf of a staff member". org_id is
++    always g.dashboard_user's -- a value in the body is ignored for scoping,
++    so a caller can never write into another org by editing the payload.
++    Previously this route had no auth at all and took organization_id off
++    the body. Mirrors api_add_leave exactly, including the team-scope check:
++    a 'team'-scoped caller (a manager) may only file overtime for someone in
++    their own reporting tree, so "who can I see" (GET /api/overtime) and
++    "who can I file overtime for" stay in lockstep.
++    """
+     data = request.get_json() or {}
+-    raw_org_id = str(data.get('organization_id') or data.get('organizationId') or data.get('org_id') or '').strip()
++    dashboard_user = g.dashboard_user
++    raw_org_id = str(dashboard_user.get('org_id') or '').strip()
+     user_id = data.get('user_id') or data.get('userId') or data.get('staff_id') or data.get('staffId')
++    scope_ids = get_team_scope_ids(dashboard_user)
+ 
+     if not raw_org_id:
+         return jsonify({'success': False, 'message': 'organization_id is required'}), 400
+     if not user_id:
+         return jsonify({'success': False}), 400
++    if scope_ids is not None and str(user_id) not in scope_ids:
++        return jsonify({'success': False, 'error': 'Not authorized to file overtime for this staff member', 'message': 'Not authorized to file overtime for this staff member'}), 403
+ 
+     if raw_org_id and not _positive_int(raw_org_id):
+         try:
+@@ -4019,12 +4100,32 @@
+ 
+ 
+ @app.route('/api/overtime/<ot_id>', methods=['PUT'])
++@require_client_dashboard_auth
+ def api_update_overtime(ot_id):
++    """Approve/reject an overtime request. org_id always comes from
++    g.dashboard_user, never the body -- previously this route had no auth at
++    all, and an empty/absent organization_id fell straight through to the
++    legacy db.update_overtime_status call below, so an unauthenticated PUT
++    could approve arbitrary overtime. A 'team'-scoped caller may only decide
++    on a request belonging to someone in their own reporting tree: read the
++    row first (org-scoped, so this also 404s cleanly for an ot_id from
++    another org) and check its owner against get_team_scope_ids before
++    mutating anything. Mirrors api_update_leave.
++    """
+     data = request.get_json() or {}
+-    raw_org_id = str(data.get('organization_id') or data.get('organizationId') or data.get('org_id') or '').strip()
++    dashboard_user = g.dashboard_user
++    raw_org_id = str(dashboard_user.get('org_id') or '').strip()
++    scope_ids = get_team_scope_ids(dashboard_user)
++
++    if not raw_org_id:
++        return jsonify({'success': False, 'message': 'organization_id is required'}), 400
+ 
+     if raw_org_id and not _positive_int(raw_org_id):
+         try:
++            existing = support_cp_db.get_client_overtime_owned_by_org(str(ot_id), raw_org_id)
++            owner_id = str(existing.get('user_id') or existing.get('staff_id') or '')
++            if scope_ids is not None and owner_id not in scope_ids:
++                return jsonify({'success': False, 'error': 'Not authorized to update this overtime request', 'message': 'Not authorized to update this overtime request'}), 403
+             overtime = support_cp_db.update_client_overtime_status(
+                 overtime_id=str(ot_id),
+                 org_id=raw_org_id,
+@@ -4035,6 +4136,9 @@
+         except ValueError as exc:
+             return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 400
+ 
++    if scope_ids is not None:
++        return jsonify({'success': False, 'message': 'Team-scoped accounts cannot use the legacy overtime system'}), 403
++
+     db.update_overtime_status(int(ot_id), data.get('status', 'approved'), data.get('approved_by', 'Admin'))
+     return jsonify({'success': True})
+ 
+@@ -4687,9 +4791,19 @@
+ 
+ 
+ @app.route('/api/payroll/mark-paid', methods=['POST'])
++@require_client_dashboard_admin
+ def api_mark_payroll_paid():
++    """org_id is pinned to the authenticated dashboard session, never the
++    request body -- same tenant boundary api_save_payroll_policy enforces.
++    Previously this route had no auth at all and took organization_id
++    straight off the body, so anyone could flip any org's payroll rows to
++    Paid (and snapshot a computed breakdown into payroll_payments) without
++    a session. Admin rather than plain auth: this is a financial-record
++    mutation, same tier as api_set_salary / api_get_all_salary. Reading the
++    payroll page (/api/v2/payroll/page) stays on plain auth -- unchanged.
++    """
+     data = request.get_json(silent=True) or {}
+-    org_id = _clean_id_text(data.get('organization_id'))
++    org_id = _clean_id_text(g.dashboard_user.get('org_id'))
+     staff_id = _clean_id_text(data.get('staff_id') or data.get('staffId'))
+     period_start = _clean_id_text(data.get('period_start') or data.get('periodStart'))
+     period_end = _clean_id_text(data.get('period_end') or data.get('periodEnd'))
+@@ -4702,9 +4816,13 @@
+ 
+ 
+ @app.route('/api/payroll/mark-pending', methods=['POST'])
++@require_client_dashboard_admin
+ def api_mark_payroll_pending():
++    """Unauthenticated sibling of mark-paid above -- same fix, same reason.
++    Not in the original audit report, but reachable by exactly the same
++    request with one word changed in the path."""
+     data = request.get_json(silent=True) or {}
+-    org_id = _clean_id_text(data.get('organization_id'))
++    org_id = _clean_id_text(g.dashboard_user.get('org_id'))
+     staff_id = _clean_id_text(data.get('staff_id') or data.get('staffId'))
+     period_start = _clean_id_text(data.get('period_start') or data.get('periodStart'))
+     period_end = _clean_id_text(data.get('period_end') or data.get('periodEnd'))
+diff -ruN a/client_staff_auth_routes.py b/client_staff_auth_routes.py
+--- a/client_staff_auth_routes.py	2026-08-15 05:31:46.050953066 +0000
++++ b/client_staff_auth_routes.py	2026-08-15 05:31:46.053061297 +0000
+@@ -18,6 +18,7 @@
+ import support_db as support_cp_db
+ from client_staff_auth import login_client_staff, require_client_staff_auth
+ from client_routes_helpers import ok, err, handle
++import login_throttle
+ 
+ client_staff_auth_bp = Blueprint(
+     "client_staff_auth", __name__, url_prefix="/api/staff"
+@@ -50,7 +51,19 @@
+         if not identifier or not password:
+             raise ValueError("identifier (email or phone) and password are required")
+ 
+-        staff, token = login_client_staff(identifier, password)
++        # Same brute-force throttle as /api/login — this endpoint accepts a
++        # phone number as the identifier, which is a materially smaller
++        # guessing space than an email address, so if anything it needs the
++        # limit more. See login_throttle.py.
++        if login_throttle.is_locked_out(identifier):
++            return login_throttle.lockout_response(identifier)
++
++        try:
++            staff, token = login_client_staff(identifier, password)
++        except Exception:
++            login_throttle.register_failure(identifier)
++            raise
++        login_throttle.register_success(identifier)
+         # Keyed as "user" (not "staff") to match the response shape of
+         # /api/login (client_users/client_staff dashboard login) — one
+         # parsing path on the client regardless of which endpoint it hit.
+diff -ruN a/login_throttle.py b/login_throttle.py
+--- a/login_throttle.py	1970-01-01 00:00:00.000000000 +0000
++++ b/login_throttle.py	2026-08-15 05:31:46.055582484 +0000
+@@ -0,0 +1,182 @@
++"""Brute-force throttling for the three login endpoints.
++
++Covers /api/login (dashboard), /api/staff/login (mobile portal) and
++/v1/support/auth/login (internal support). Before this, none of the three
++had any attempt limiting at all — the audit flagged /api/login as "secure
++against unauthorized access, but vulnerable to password guessing", and the
++other two are the same code shape.
++
++WHY IN-PROCESS AND NOT flask-limiter/redis
++------------------------------------------
++The Dockerfile runs `gunicorn --workers 1 --threads 4`, deliberately (one
++worker keeps the face-model warm-up cache in a single process — see the
++comment in the Dockerfile). One worker means one process, which means a
++plain in-memory dict IS the whole picture: there is no second worker whose
++counters would disagree. A lock makes it safe across the 4 threads.
++
++This assumption is load-bearing. If --workers is ever raised above 1, an
++attacker gets N times the budget, because each worker keeps its own
++counters. If that day comes, swap _ATTEMPTS for Redis (or add
++flask-limiter with a Redis backend) — the call sites below don't change,
++only this module's storage does. There is a startup assertion for exactly
++this in app.py.
++
++DESIGN
++------
++Two independent counters per attempt, and either can trip:
++
++  * per-IP     — stops one host spraying many accounts
++  * per-identifier — stops a distributed/rotating-IP attack on one account
++
++Sliding window: failures older than WINDOW_SECONDS fall out, so a user who
++mistypes their password twice a week is never affected. On the Nth failure
++the key is locked for LOCKOUT_SECONDS and the caller gets 429 with a
++Retry-After header. A successful login clears that identity's counters
++immediately, so a legitimate user who remembers their password on attempt
++4 of 8 is back to a clean slate.
++
++The identifier counter is keyed on a SHA-256 of the lowercased identifier,
++not the raw value — these counters live in memory that ends up in tracebacks
++and heap dumps, and there is no reason for a plaintext list of who has been
++failing to log in to be sitting in there.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import os
++import threading
++import time
++from typing import Iterable
++
++from flask import jsonify, request
++
++# ─── Tunables (env-overridable) ───────────────────────────────────────────────
++# Defaults: 8 failures in 15 minutes → locked out for 15 minutes. That is
++# ~32 guesses/hour against one account sustained, versus the thousands/second
++# an unthrottled endpoint allows, while still leaving room for a human who
++# genuinely can't remember which of their two passwords it was.
++MAX_FAILURES = int(os.environ.get('LOGIN_MAX_FAILURES', '8'))
++WINDOW_SECONDS = int(os.environ.get('LOGIN_FAILURE_WINDOW_SECONDS', '900'))
++LOCKOUT_SECONDS = int(os.environ.get('LOGIN_LOCKOUT_SECONDS', '900'))
++
++_LOCK = threading.Lock()
++# key -> {'failures': [timestamp, ...], 'locked_until': float}
++_ATTEMPTS: dict[str, dict] = {}
++_last_gc = 0.0
++_GC_INTERVAL_SECONDS = 300
++
++
++def _now() -> float:
++    return time.monotonic()
++
++
++def _hash_identifier(identifier: str) -> str:
++    return hashlib.sha256(str(identifier or '').strip().lower().encode('utf-8')).hexdigest()[:32]
++
++
++def client_ip() -> str:
++    """Best-effort client IP.
++
++    Railway/most PaaS front the app with a proxy, so remote_addr is the
++    proxy. X-Forwarded-For's LEFTMOST entry is the original client, but it
++    is also fully attacker-controlled — anyone can send a random one and get
++    a fresh bucket. That is why the per-identifier counter exists and is not
++    optional: IP-keyed throttling alone is defeatable by header spoofing,
++    identifier-keyed throttling is not.
++
++    If you put this behind a proxy you control, set TRUSTED_PROXY_COUNT and
++    prefer werkzeug's ProxyFix so remote_addr becomes trustworthy.
++    """
++    forwarded = request.headers.get('X-Forwarded-For', '')
++    if forwarded:
++        first = forwarded.split(',')[0].strip()
++        if first:
++            return first
++    return request.remote_addr or 'unknown'
++
++
++def _gc_locked() -> None:
++    """Drop keys with no recent activity. Caller must hold _LOCK."""
++    global _last_gc
++    now = _now()
++    if now - _last_gc < _GC_INTERVAL_SECONDS:
++        return
++    _last_gc = now
++    cutoff = now - max(WINDOW_SECONDS, LOCKOUT_SECONDS)
++    for key in [
++        k for k, v in _ATTEMPTS.items()
++        if not v['failures'] and v.get('locked_until', 0) < now
++        or (v['failures'] and v['failures'][-1] < cutoff and v.get('locked_until', 0) < now)
++    ]:
++        _ATTEMPTS.pop(key, None)
++
++
++def _keys_for(identifier: str) -> list[str]:
++    return [f'ip:{client_ip()}', f'id:{_hash_identifier(identifier)}']
++
++
++def retry_after_seconds(identifier: str) -> int:
++    """Seconds until the caller may try again, or 0 if not locked out."""
++    now = _now()
++    with _LOCK:
++        worst = 0.0
++        for key in _keys_for(identifier):
++            entry = _ATTEMPTS.get(key)
++            if entry:
++                worst = max(worst, entry.get('locked_until', 0) - now)
++    return int(worst) + 1 if worst > 0 else 0
++
++
++def is_locked_out(identifier: str) -> bool:
++    return retry_after_seconds(identifier) > 0
++
++
++def register_failure(identifier: str) -> None:
++    """Record one failed attempt against both the IP and the identifier."""
++    now = _now()
++    cutoff = now - WINDOW_SECONDS
++    with _LOCK:
++        for key in _keys_for(identifier):
++            entry = _ATTEMPTS.setdefault(key, {'failures': [], 'locked_until': 0.0})
++            entry['failures'] = [t for t in entry['failures'] if t > cutoff]
++            entry['failures'].append(now)
++            if len(entry['failures']) >= MAX_FAILURES:
++                entry['locked_until'] = now + LOCKOUT_SECONDS
++                # Reset the window so the lockout is a clean N-more-tries
++                # budget when it expires, not an instant re-lock on the
++                # first subsequent typo.
++                entry['failures'] = []
++        _gc_locked()
++
++
++def register_success(identifier: str) -> None:
++    """Clear counters after a genuine login."""
++    with _LOCK:
++        for key in _keys_for(identifier):
++            _ATTEMPTS.pop(key, None)
++
++
++def lockout_response(identifier: str):
++    """The 429 to return when locked out.
++
++    Deliberately says nothing about whether the account exists, or whether
++    it was the IP or the identifier that tripped — that would turn the
++    throttle itself into a user-enumeration oracle.
++    """
++    retry_after = retry_after_seconds(identifier)
++    response = jsonify({
++        'success': False,
++        'message': 'Too many failed login attempts. Please try again later.',
++        'error': 'Too many failed login attempts. Please try again later.',
++        'retry_after_seconds': retry_after,
++    })
++    response.status_code = 429
++    response.headers['Retry-After'] = str(retry_after)
++    return response
++
++
++def reset_all() -> None:
++    """Test helper — wipe all counters."""
++    with _LOCK:
++        _ATTEMPTS.clear()
+diff -ruN a/support_routes.py b/support_routes.py
+--- a/support_routes.py	2026-08-15 05:31:46.046911874 +0000
++++ b/support_routes.py	2026-08-15 05:31:46.049175846 +0000
+@@ -10,6 +10,7 @@
+ from flask import Blueprint, request, jsonify, g, send_file
+ from support_auth import require_support_auth, login_internal_user
+ import support_db as db
++import login_throttle
+ from logger_config import get_logger
+ from pathlib import Path
+ from installer_packager import (
+@@ -71,7 +72,19 @@
+         if not email or not password:
+             return _err("Email and password are required", 400)
+ 
+-        user, token = login_internal_user(email, password)
++        # Same brute-force throttle as /api/login. This one guards the
++        # internal support accounts, which are the highest-privilege
++        # identities in the system (cross-tenant), so it is the last place
++        # that should have been left unlimited. See login_throttle.py.
++        if login_throttle.is_locked_out(email):
++            return login_throttle.lockout_response(email)
++
++        try:
++            user, token = login_internal_user(email, password)
++        except Exception:
++            login_throttle.register_failure(email)
++            raise
++        login_throttle.register_success(email)
+         return _ok({"user": user, "token": token})
+ 
+     return _handle(_run)
+diff -ruN a/test_security_fixes.py b/test_security_fixes.py
+--- a/test_security_fixes.py	1970-01-01 00:00:00.000000000 +0000
++++ b/test_security_fixes.py	2026-08-15 05:31:46.058052906 +0000
+@@ -0,0 +1,676 @@
++"""Regression tests for the five findings fixed in this pass.
++
++Two layers, because neither alone is enough:
++
++  STATIC  — app.py can't be imported in a test process (it pulls in
++            insightface/cv2/numpy/supabase and warms a face model at import
++            time), so route-level invariants are asserted against its AST.
++            This is not a weaker test than calling the route: "does this
++            function object have require_client_dashboard_admin in its
++            decorator list" and "does its body read org_id from
++            request.args" are exactly the two properties that were wrong,
++            and the AST sees them directly.
++
++  LIVE    — the decorators themselves, and login_throttle, are imported for
++            real and exercised over HTTP through a Flask test client. These
++            are the pieces that have actual runtime behaviour to get wrong.
++
++Run: python test_security_fixes.py
++"""
++
++from __future__ import annotations
++
++import ast
++import os
++import sys
++import time
++import unittest
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++APP_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app.py')
++with open(APP_PY, encoding='utf-8', errors='replace') as fh:
++    APP_SOURCE = fh.read()
++APP_TREE = ast.parse(APP_SOURCE)
++
++
++# ─── AST helpers ──────────────────────────────────────────────────────────────
++
++def _decorator_names(node: ast.FunctionDef) -> list[str]:
++    names = []
++    for dec in node.decorator_list:
++        target = dec.func if isinstance(dec, ast.Call) else dec
++        if isinstance(target, ast.Name):
++            names.append(target.id)
++        elif isinstance(target, ast.Attribute):
++            names.append(target.attr)
++    return names
++
++
++def _routes(node: ast.FunctionDef) -> list[tuple[str, list[str]]]:
++    """[(path, methods)] for every @app.route on this function."""
++    out = []
++    for dec in node.decorator_list:
++        if not isinstance(dec, ast.Call):
++            continue
++        target = dec.func
++        if not (isinstance(target, ast.Attribute) and target.attr == 'route'):
++            continue
++        if not dec.args or not isinstance(dec.args[0], ast.Constant):
++            continue
++        methods = ['GET']
++        for kw in dec.keywords:
++            if kw.arg == 'methods' and isinstance(kw.value, ast.List):
++                methods = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
++        out.append((dec.args[0].value, methods))
++    return out
++
++
++ROUTE_FUNCS = [n for n in ast.walk(APP_TREE) if isinstance(n, ast.FunctionDef) and _routes(n)]
++
++
++def find_route(path: str, method: str) -> ast.FunctionDef:
++    for fn in ROUTE_FUNCS:
++        for route_path, methods in _routes(fn):
++            if route_path == path and method in methods:
++                return fn
++    raise AssertionError(f'No route handler found for {method} {path}')
++
++
++ORG_KEYS = {'organization_id', 'organizationId', 'org_id'}
++
++
++def _request_bound_locals(node: ast.FunctionDef) -> set[str]:
++    """Locals in this function that hold client-controlled request data.
++
++    Needed because almost every handler does `data = request.get_json()`
++    first and then reads `data.get(...)` — so a naive check on the
++    receiver name misses the real source. Conversely `dashboard_user =
++    g.dashboard_user` then `dashboard_user.get('org_id')` is SAFE, and a
++    naive check flags it. Resolving the assignment is what separates them.
++    """
++    bound = set()
++    for sub in ast.walk(node):
++        if not isinstance(sub, ast.Assign) or not isinstance(sub.targets[0], ast.Name):
++            continue
++        name = sub.targets[0].id
++        src = ast.dump(sub.value)
++        # BoolOp covers the ubiquitous `request.get_json() or {}`.
++        if "Name(id='request'" in src and 'g.dashboard_user' not in src:
++            if any(tok in src for tok in ("attr='get_json'", "attr='args'",
++                                          "attr='form'", "attr='json'",
++                                          "attr='values'")):
++                bound.add(name)
++    return bound
++
++
++def reads_client_org_id(node: ast.FunctionDef) -> list[str]:
++    """Client-supplied org_id reads in this function body.
++
++    Flags request.args.get('organization_id') and data.get('org_id') where
++    `data` came off the request. Does NOT flag g.dashboard_user.get('org_id')
++    or a local aliased from it — that is the fix, not the bug.
++    An empty list is the property we want.
++    """
++    client_locals = _request_bound_locals(node)
++    hits = []
++    for sub in ast.walk(node):
++        if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)):
++            continue
++        if sub.func.attr != 'get' or not sub.args:
++            continue
++        if not (isinstance(sub.args[0], ast.Constant) and sub.args[0].value in ORG_KEYS):
++            continue
++        root = sub.func.value
++        while isinstance(root, ast.Attribute):
++            root = root.value
++        if isinstance(root, ast.Name) and (root.id == 'request' or root.id in client_locals):
++            hits.append(f'{root.id}...get({sub.args[0].value!r})')
++    return hits
++
++
++# ─── Layer 1: static route invariants ─────────────────────────────────────────
++
++class TestPayrollFixes(unittest.TestCase):
++    """Finding 1: POST /api/payroll/mark-paid (+ its unreported sibling)."""
++
++    def test_mark_paid_requires_admin(self):
++        fn = find_route('/api/payroll/mark-paid', 'POST')
++        self.assertIn('require_client_dashboard_admin', _decorator_names(fn))
++
++    def test_mark_pending_requires_admin(self):
++        fn = find_route('/api/payroll/mark-pending', 'POST')
++        self.assertIn('require_client_dashboard_admin', _decorator_names(fn))
++
++    def test_mark_paid_ignores_body_org_id(self):
++        fn = find_route('/api/payroll/mark-paid', 'POST')
++        self.assertEqual([], reads_client_org_id(fn),
++                         'org_id must come from g.dashboard_user, not the request body')
++
++    def test_mark_pending_ignores_body_org_id(self):
++        fn = find_route('/api/payroll/mark-pending', 'POST')
++        self.assertEqual([], reads_client_org_id(fn))
++
++
++class TestOvertimeFixes(unittest.TestCase):
++    """Finding 2: POST /api/overtime (+ the unreported PUT)."""
++
++    def test_post_overtime_requires_auth(self):
++        fn = find_route('/api/overtime', 'POST')
++        self.assertIn('require_client_dashboard_auth', _decorator_names(fn))
++
++    def test_put_overtime_requires_auth(self):
++        fn = find_route('/api/overtime/<ot_id>', 'PUT')
++        self.assertIn('require_client_dashboard_auth', _decorator_names(fn))
++
++    def test_post_overtime_ignores_body_org_id(self):
++        fn = find_route('/api/overtime', 'POST')
++        self.assertEqual([], reads_client_org_id(fn))
++
++    def test_put_overtime_ignores_body_org_id(self):
++        fn = find_route('/api/overtime/<ot_id>', 'PUT')
++        self.assertEqual([], reads_client_org_id(fn))
++
++    def test_post_overtime_enforces_team_scope(self):
++        """A 'team'-scoped manager must not file overtime for someone outside
++        their reporting tree — the same check /api/leaves POST makes."""
++        fn = find_route('/api/overtime', 'POST')
++        body = ast.dump(fn)
++        self.assertIn('get_team_scope_ids', body)
++
++    def test_put_overtime_checks_ownership_before_mutating(self):
++        fn = find_route('/api/overtime/<ot_id>', 'PUT')
++        body = ast.dump(fn)
++        self.assertIn('get_client_overtime_owned_by_org', body)
++        self.assertIn('get_team_scope_ids', body)
++
++    def test_put_overtime_legacy_path_unreachable_without_org(self):
++        """The old bug: a body with no organization_id skipped the Supabase
++        branch entirely and fell through to db.update_overtime_status. With
++        org_id now sourced from the token, that fall-through must be guarded."""
++        fn = find_route('/api/overtime/<ot_id>', 'PUT')
++        self.assertIn('organization_id is required', ast.dump(fn))
++
++
++class TestRetentionPolicyFixes(unittest.TestCase):
++    """Finding 3: GET/PUT /api/org/retention-policy."""
++
++    def test_get_requires_auth(self):
++        fn = find_route('/api/org/retention-policy', 'GET')
++        self.assertIn('require_client_dashboard_auth', _decorator_names(fn))
++
++    def test_put_requires_admin(self):
++        fn = find_route('/api/org/retention-policy', 'PUT')
++        self.assertIn('require_client_dashboard_admin', _decorator_names(fn),
++                      'setting the data-wipe schedule is an org-wide destructive action')
++
++    def test_get_ignores_query_org_id(self):
++        fn = find_route('/api/org/retention-policy', 'GET')
++        self.assertEqual([], reads_client_org_id(fn))
++
++    def test_put_ignores_body_org_id(self):
++        fn = find_route('/api/org/retention-policy', 'PUT')
++        self.assertEqual([], reads_client_org_id(fn))
++
++    def test_put_does_not_trust_client_supplied_updated_by(self):
++        """updated_by is an audit field; a caller-supplied value can be
++        forged to blame someone else for the change."""
++        fn = find_route('/api/org/retention-policy', 'PUT')
++        for sub in ast.walk(fn):
++            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
++                    and sub.func.attr == 'get' and sub.args
++                    and isinstance(sub.args[0], ast.Constant)
++                    and sub.args[0].value == 'updated_by'):
++                root = sub.func.value
++                while isinstance(root, ast.Attribute):
++                    root = root.value
++                self.assertTrue(isinstance(root, ast.Name) and root.id == 'g',
++                                'updated_by must come from the session')
++
++
++class TestNoRegressionAcrossAllRoutes(unittest.TestCase):
++    """Whole-file sweep: nothing else slipped back to unauthenticated."""
++
++    #: Routes that are legitimately public.
++    PUBLIC = {
++        '/', '/camera', '/live-monitoring', '/<path:path>',
++        '/api/health', '/api/system/health',
++        '/api/login',                      # public by definition, now throttled
++        '/api/stream/<camera_id>',         # guarded by minted stream token
++        '/video_feed/<camera_id>',         # delegates to the above
++    }
++
++    def _is_retired(self, fn: ast.FunctionDef) -> bool:
++        """Retired stubs return 410 and touch no data — safe unauthenticated."""
++        for sub in ast.walk(fn):
++            if isinstance(sub, ast.Constant) and sub.value == 410:
++                return True
++        return False
++
++    def _is_node_api(self, paths: list[str]) -> bool:
++        return all(p.startswith('/v1/') for p in paths)
++
++    def test_no_unauthenticated_data_routes_remain(self):
++        offenders = []
++        for fn in ROUTE_FUNCS:
++            paths = [p for p, _ in _routes(fn)]
++            decs = _decorator_names(fn)
++            if any(d.startswith('require_') for d in decs):
++                continue
++            if all(p in self.PUBLIC for p in paths):
++                continue
++            if self._is_retired(fn):
++                continue
++            if self._is_node_api(paths):
++                continue  # authenticated by node API key inside the handler
++            offenders.append((fn.name, paths))
++        self.assertEqual([], offenders, f'Unauthenticated routes still present: {offenders}')
++
++    def test_node_routes_check_a_credential(self):
++        """Every /v1/ route presents SOME credential. /v1/activate is the
++        bootstrap: it has no node key yet by definition, and trades a
++        one-time install_token for one. Everything after it must use the key."""
++        for fn in ROUTE_FUNCS:
++            paths = [p for p, _ in _routes(fn)]
++            if not paths or not self._is_node_api(paths):
++                continue
++            body = ast.dump(fn)
++            credential = ('_node_api_key_from_request' in body) or ('install_token' in body)
++            self.assertTrue(credential,
++                            f'{fn.name} is under /v1/ but presents no credential')
++
++    def test_authenticated_routes_do_not_trust_client_org_id(self):
++        """The class of bug behind half the original report: a decorator was
++        added but the body kept reading org_id off the wire. Allowlisted
++        below are routes that read it only to compare against the token, or
++        that use it as a non-tenant filter."""
++        allowlist = {
++            'api_client_bootstrap', 'api_get_notifications',
++            'api_get_notifications_unread_count', 'api_mark_notification_read',
++            'api_mark_all_notifications_read', 'api_delete_notification',
++            'api_bulk_delete_notifications', 'api_add_staff',
++            'api_set_staff_dashboard_scope', 'api_bulk_delete_archived_staff',
++        }
++        offenders = []
++        for fn in ROUTE_FUNCS:
++            if not any(d.startswith('require_') for d in _decorator_names(fn)):
++                continue
++            if fn.name in allowlist:
++                continue
++            if reads_client_org_id(fn):
++                offenders.append(fn.name)
++        self.assertEqual([], offenders, f'Routes trusting client org_id: {offenders}')
++
++
++class TestCorsFix(unittest.TestCase):
++    """Finding 4: CORS wildcard."""
++
++    def test_no_bare_cors_app_call(self):
++        for sub in ast.walk(APP_TREE):
++            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
++                    and sub.func.id == 'CORS'):
++                self.assertTrue(sub.keywords, 'CORS(app) with no resources= is a wildcard')
++                self.assertIn('resources', [kw.arg for kw in sub.keywords])
++
++    def test_default_allowlist_is_defined_and_not_wildcard(self):
++        """The earlier version of this test was a string search that passed
++        trivially against the old CORS(app) code — i.e. it proved nothing.
++        Assert on the actual parsed value instead."""
++        default = None
++        for sub in ast.walk(APP_TREE):
++            if (isinstance(sub, ast.Assign) and isinstance(sub.targets[0], ast.Name)
++                    and sub.targets[0].id == '_DEFAULT_CORS_ORIGINS'
++                    and isinstance(sub.value, ast.Constant)):
++                default = sub.value.value
++        self.assertIsNotNone(default, '_DEFAULT_CORS_ORIGINS is not defined')
++        origins = [o.strip() for o in default.split(',') if o.strip()]
++        self.assertTrue(origins, 'empty default would let flask-cors fall back to *')
++        self.assertNotIn('*', origins)
++        for origin in origins:
++            self.assertTrue(origin.startswith('http://localhost')
++                            or origin.startswith('http://127.0.0.1'),
++                            f'default allowlist should be local-only, got {origin}')
++
++    def test_allowlist_is_read_from_env(self):
++        self.assertIn('CORS_ALLOWED_ORIGINS', APP_SOURCE)
++
++
++class TestLoginThrottleWiring(unittest.TestCase):
++    """Finding 5: brute force — all three login routes, not just /api/login."""
++
++    def test_api_login_checks_throttle(self):
++        fn = find_route('/api/login', 'POST')
++        body = ast.dump(fn)
++        self.assertIn('is_locked_out', body)
++        self.assertIn('register_failure', body)
++        self.assertIn('register_success', body)
++
++    def test_every_login_success_path_clears_counters(self):
++        """Three backends, three success returns — miss one and a user who
++        typed their password wrong twice stays counted forever."""
++        fn = find_route('/api/login', 'POST')
++        successes = sum(
++            1 for sub in ast.walk(fn)
++            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
++            and sub.func.attr == 'register_success'
++        )
++        self.assertEqual(3, successes, 'expected register_success on all 3 auth backends')
++
++    def test_other_login_routes_throttled(self):
++        for path in ('client_staff_auth_routes.py', 'support_routes.py'):
++            full = os.path.join(os.path.dirname(APP_PY), path)
++            with open(full, encoding='utf-8', errors='replace') as fh:
++                src = fh.read()
++            self.assertIn('login_throttle.is_locked_out', src, f'{path} login is unthrottled')
++            self.assertIn('login_throttle.register_failure', src, f'{path} never counts failures')
++
++
++# ─── Layer 2: live behaviour ──────────────────────────────────────────────────
++
++class TestAuthDecoratorsLive(unittest.TestCase):
++    """The real decorators, over real HTTP, on stub handlers."""
++
++    @classmethod
++    def setUpClass(cls):
++        # _get_jwt_secret enforces >=32 chars AND distinctness from the two
++        # sibling secrets — a good check, so satisfy it properly rather than
++        # weakening it for tests. Overrides whatever .env loaded.
++        os.environ['CLIENT_DASHBOARD_JWT_SECRET'] = 'a' * 64
++        os.environ['CLIENT_STAFF_JWT_SECRET'] = 'b' * 64
++        os.environ['SUPPORT_JWT_SECRET'] = 'c' * 64
++        from flask import Flask, jsonify, g
++        import client_dashboard_auth as cda
++        cls.cda = cda
++
++        app = Flask(__name__)
++
++        @app.route('/plain')
++        @cda.require_client_dashboard_auth
++        def plain():
++            return jsonify({'org': g.dashboard_user['org_id']})
++
++        @app.route('/admin', methods=['POST'])
++        @cda.require_client_dashboard_admin
++        def admin():
++            return jsonify({'org': g.dashboard_user['org_id']})
++
++        cls.client = app.test_client()
++
++    def _token(self, org_id='11111111-1111-1111-1111-111111111111', role='staff'):
++        return self.cda.mint_dashboard_token(
++            {'id': 'user-1', 'org_id': org_id, 'branch_id': None, 'role': role},
++            account_type='client_staff',
++        )
++
++    def test_no_header_is_401(self):
++        self.assertEqual(401, self.client.get('/plain').status_code)
++
++    def test_garbage_token_is_401(self):
++        r = self.client.get('/plain', headers={'Authorization': 'Bearer not-a-jwt'})
++        self.assertEqual(401, r.status_code)
++
++    def test_valid_token_passes_and_pins_org(self):
++        r = self.client.get('/plain', headers={'Authorization': f'Bearer {self._token()}'})
++        self.assertEqual(200, r.status_code)
++        self.assertEqual('11111111-1111-1111-1111-111111111111', r.get_json()['org'])
++
++    def test_non_admin_token_is_403_on_admin_route(self):
++        r = self.client.post('/admin', headers={'Authorization': f'Bearer {self._token(role="staff")}'})
++        self.assertEqual(403, r.status_code)
++
++    def test_admin_token_passes_admin_route(self):
++        r = self.client.post('/admin', headers={'Authorization': f'Bearer {self._token(role="admin")}'})
++        self.assertEqual(200, r.status_code)
++
++    def test_admin_route_still_401s_without_a_token(self):
++        """require_client_dashboard_admin composes the base decorator, so a
++        missing token must be 401 (not authenticated), never 403."""
++        self.assertEqual(401, self.client.post('/admin').status_code)
++
++    def test_token_from_another_org_cannot_be_repointed(self):
++        """The whole point of pinning: org comes from the signed token, and
++        a query string can't override it."""
++        token = self._token(org_id='22222222-2222-2222-2222-222222222222')
++        r = self.client.get(
++            '/plain?organization_id=11111111-1111-1111-1111-111111111111',
++            headers={'Authorization': f'Bearer {token}'},
++        )
++        self.assertEqual('22222222-2222-2222-2222-222222222222', r.get_json()['org'])
++
++    def test_token_signed_with_wrong_secret_is_rejected(self):
++        import jwt as pyjwt
++        from datetime import datetime, timedelta, timezone
++        forged = pyjwt.encode(
++            {'sub': 'attacker', 'org_id': 'victim-org', 'is_admin': True,
++             'exp': datetime.now(timezone.utc) + timedelta(hours=1)},
++            'attacker-chosen-secret', algorithm='HS256',
++        )
++        r = self.client.post('/admin', headers={'Authorization': f'Bearer {forged}'})
++        self.assertEqual(401, r.status_code)
++
++    def test_expired_token_is_rejected(self):
++        import jwt as pyjwt
++        from datetime import datetime, timedelta, timezone
++        expired = pyjwt.encode(
++            {'sub': 'u', 'org_id': 'o', 'is_admin': True,
++             'exp': datetime.now(timezone.utc) - timedelta(hours=1)},
++            os.environ['CLIENT_DASHBOARD_JWT_SECRET'], algorithm='HS256',
++        )
++        r = self.client.get('/plain', headers={'Authorization': f'Bearer {expired}'})
++        self.assertEqual(401, r.status_code)
++
++    def test_alg_none_token_is_rejected(self):
++        """Classic JWT downgrade: unsigned token claiming alg=none."""
++        import base64, json
++        def b64(d):
++            return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b'=').decode()
++        forged = f"{b64({'alg': 'none', 'typ': 'JWT'})}.{b64({'sub': 'a', 'org_id': 'o', 'is_admin': True})}."
++        r = self.client.post('/admin', headers={'Authorization': f'Bearer {forged}'})
++        self.assertEqual(401, r.status_code)
++
++
++class TestLoginThrottleLive(unittest.TestCase):
++    """login_throttle's actual runtime behaviour."""
++
++    @classmethod
++    def setUpClass(cls):
++        from flask import Flask, request, jsonify
++        import login_throttle
++        cls.throttle = login_throttle
++
++        app = Flask(__name__)
++
++        @app.route('/login', methods=['POST'])
++        def login():
++            body = request.get_json(silent=True) or {}
++            email = body.get('email', '')
++            if login_throttle.is_locked_out(email):
++                return login_throttle.lockout_response(email)
++            if body.get('password') == 'correct-horse':
++                login_throttle.register_success(email)
++                return jsonify({'success': True})
++            login_throttle.register_failure(email)
++            return jsonify({'success': False}), 401
++
++        cls.client = app.test_client()
++
++    def setUp(self):
++        self.throttle.reset_all()
++
++    def _attempt(self, email='victim@example.com', password='wrong', ip='10.0.0.1'):
++        return self.client.post('/login', json={'email': email, 'password': password},
++                                headers={'X-Forwarded-For': ip})
++
++    def test_correct_password_still_works(self):
++        r = self.client.post('/login', json={'email': 'a@b.c', 'password': 'correct-horse'})
++        self.assertEqual(200, r.status_code)
++
++    def test_a_few_failures_are_not_blocked(self):
++        for _ in range(self.throttle.MAX_FAILURES - 1):
++            self.assertEqual(401, self._attempt().status_code)
++
++    def test_lockout_trips_at_the_limit(self):
++        for _ in range(self.throttle.MAX_FAILURES):
++            self._attempt()
++        self.assertEqual(429, self._attempt().status_code)
++
++    def test_lockout_returns_retry_after_header(self):
++        for _ in range(self.throttle.MAX_FAILURES):
++            self._attempt()
++        r = self._attempt()
++        self.assertIn('Retry-After', r.headers)
++        self.assertGreater(int(r.headers['Retry-After']), 0)
++
++    def test_lockout_blocks_even_the_correct_password(self):
++        """Otherwise the throttle is an oracle: 'still 429' vs 'suddenly 200'
++        tells the attacker they just guessed right."""
++        for _ in range(self.throttle.MAX_FAILURES):
++            self._attempt()
++        r = self.client.post('/login',
++                             json={'email': 'victim@example.com', 'password': 'correct-horse'},
++                             headers={'X-Forwarded-For': '10.0.0.1'})
++        self.assertEqual(429, r.status_code)
++
++    def test_success_clears_the_counter(self):
++        for _ in range(self.throttle.MAX_FAILURES - 1):
++            self._attempt()
++        self.client.post('/login', json={'email': 'victim@example.com', 'password': 'correct-horse'},
++                         headers={'X-Forwarded-For': '10.0.0.1'})
++        for _ in range(self.throttle.MAX_FAILURES - 1):
++            self.assertEqual(401, self._attempt().status_code)
++
++    def test_rotating_ip_still_locks_the_targeted_account(self):
++        """The reason there are two counters. An attacker with a botnet gets
++        a fresh IP bucket every request, so IP-keyed limiting alone does
++        nothing — the per-identifier counter has to catch this."""
++        for i in range(self.throttle.MAX_FAILURES):
++            self._attempt(ip=f'10.0.{i}.{i}')
++        r = self._attempt(ip='10.99.99.99')
++        self.assertEqual(429, r.status_code)
++
++    def test_spoofed_xff_cannot_reset_the_identifier_counter(self):
++        for i in range(self.throttle.MAX_FAILURES):
++            self._attempt(ip=f'203.0.113.{i}')
++        self.assertEqual(429, self._attempt(ip='198.51.100.7').status_code)
++
++    def test_one_host_spraying_many_accounts_is_blocked_by_ip(self):
++        """Inverse case: many identifiers, one IP. The per-identifier counter
++        never trips, so the IP counter has to."""
++        for i in range(self.throttle.MAX_FAILURES):
++            self._attempt(email=f'user{i}@example.com', ip='192.0.2.5')
++        r = self._attempt(email='someone-new@example.com', ip='192.0.2.5')
++        self.assertEqual(429, r.status_code)
++
++    def test_innocent_bystander_on_another_ip_is_unaffected(self):
++        """A lockout must not become a denial-of-service against the real
++        user of an unrelated account."""
++        for i in range(self.throttle.MAX_FAILURES):
++            self._attempt(email='target@example.com', ip='192.0.2.5')
++        r = self.client.post('/login',
++                             json={'email': 'bystander@example.com', 'password': 'correct-horse'},
++                             headers={'X-Forwarded-For': '8.8.8.8'})
++        self.assertEqual(200, r.status_code)
++
++    def test_lockout_message_does_not_reveal_which_counter_tripped(self):
++        for _ in range(self.throttle.MAX_FAILURES):
++            self._attempt()
++        payload = self._attempt().get_json()
++        blob = str(payload).lower()
++        for leak in ('ip', 'address', 'account', 'exists', 'email address'):
++            self.assertNotIn(f' {leak} ', f' {blob} ')
++
++    def test_identifiers_are_not_stored_in_plaintext(self):
++        self._attempt(email='secret.person@example.com')
++        self.assertNotIn('secret.person@example.com', str(self.throttle._ATTEMPTS.keys()))
++
++    def test_window_expiry_releases_the_lock(self):
++        original = self.throttle.LOCKOUT_SECONDS
++        try:
++            self.throttle.LOCKOUT_SECONDS = 1
++            for _ in range(self.throttle.MAX_FAILURES):
++                self._attempt()
++            self.assertEqual(429, self._attempt().status_code)
++            time.sleep(1.2)
++            self.assertEqual(401, self._attempt().status_code)
++        finally:
++            self.throttle.LOCKOUT_SECONDS = original
++
++    def test_case_and_whitespace_variants_share_a_counter(self):
++        """Otherwise 'Victim@Example.com ' is a free extra budget."""
++        for _ in range(self.throttle.MAX_FAILURES):
++            self._attempt(email='victim@example.com')
++        r = self._attempt(email='  VICTIM@Example.COM  ')
++        self.assertEqual(429, r.status_code)
++
++
++class TestCorsLive(unittest.TestCase):
++    """The CORS block from app.py, evaluated for real against a stub app."""
++
++    def _build(self, env_value=None):
++        import importlib
++        from flask import Flask, jsonify
++        from flask_cors import CORS
++        if env_value is None:
++            os.environ.pop('CORS_ALLOWED_ORIGINS', None)
++        else:
++            os.environ['CORS_ALLOWED_ORIGINS'] = env_value
++
++        default = 'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173'
++        origins = [o.strip() for o in
++                   os.environ.get('CORS_ALLOWED_ORIGINS', default).split(',') if o.strip()]
++        app = Flask(__name__)
++        CORS(app, resources={r'/api/*': {'origins': origins}},
++             supports_credentials=True,
++             allow_headers=['Content-Type', 'Authorization', 'Accept', 'X-Node-Api-Key'],
++             methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
++
++        @app.route('/api/users')
++        def users():
++            return jsonify({'ok': True})
++
++        return app.test_client()
++
++    def tearDown(self):
++        os.environ.pop('CORS_ALLOWED_ORIGINS', None)
++
++    def test_evil_origin_gets_no_acao_header(self):
++        client = self._build('https://dashboard.example.com')
++        r = client.get('/api/users', headers={'Origin': 'https://evil.example.net'})
++        self.assertNotIn('Access-Control-Allow-Origin', r.headers)
++
++    def test_allowed_origin_gets_acao_header(self):
++        client = self._build('https://dashboard.example.com')
++        r = client.get('/api/users', headers={'Origin': 'https://dashboard.example.com'})
++        self.assertEqual('https://dashboard.example.com',
++                         r.headers.get('Access-Control-Allow-Origin'))
++
++    def test_acao_is_never_literal_wildcard(self):
++        client = self._build('https://dashboard.example.com')
++        r = client.get('/api/users', headers={'Origin': 'https://dashboard.example.com'})
++        self.assertNotEqual('*', r.headers.get('Access-Control-Allow-Origin'))
++
++    def test_preflight_from_evil_origin_is_not_approved(self):
++        """The original report's 'CORS Wildcard OPTIONS /api/users (200)'."""
++        client = self._build('https://dashboard.example.com')
++        r = client.options('/api/users', headers={
++            'Origin': 'https://evil.example.net',
++            'Access-Control-Request-Method': 'GET',
++            'Access-Control-Request-Headers': 'authorization',
++        })
++        self.assertNotIn('Access-Control-Allow-Origin', r.headers)
++
++    def test_default_when_env_unset_is_localhost_only(self):
++        client = self._build(None)
++        r = client.get('/api/users', headers={'Origin': 'https://dashboard.example.com'})
++        self.assertNotIn('Access-Control-Allow-Origin', r.headers,
++                         'unset env must fail closed, not fall back to wildcard')
++
++    def test_multiple_origins_parse(self):
++        client = self._build('https://a.example.com, https://b.example.com')
++        for origin in ('https://a.example.com', 'https://b.example.com'):
++            r = client.get('/api/users', headers={'Origin': origin})
++            self.assertEqual(origin, r.headers.get('Access-Control-Allow-Origin'))
++
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)

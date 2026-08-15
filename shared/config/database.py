@@ -1,0 +1,8 @@
+"""SQLite database tuning and retention constants."""
+from .paths import DB_PATH
+
+__all__ = ["DB_PATH", "BATCH_QUERY_SIZE", "AUTO_VACUUM_INTERVAL", "ATTENDANCE_LOG_RETENTION_DAYS"]
+
+BATCH_QUERY_SIZE = 1000
+AUTO_VACUUM_INTERVAL = 1000
+ATTENDANCE_LOG_RETENTION_DAYS = 365

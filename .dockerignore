@@ -1,0 +1,46 @@
+# Windows-desktop components — not part of the Railway deploy
+local_node/
+trainer_desktop/
+
+# Legacy/local artifacts — you're on Supabase/Postgres now
+attendance.db
+org_databases/
+uploads/
+static/training_uploads/
+logs/
+*.db
+
+# Python virtual environments — never belong in the image (can be GBs)
+venv/
+.venv/
+env/
+ENV/
+
+# Downloaded model weights — re-downloaded fresh by download_models.py at
+# build/runtime; a local models/ folder with weights already in it can be
+# hundreds of MB to multiple GB and should never be sent as build context
+models/
+
+# Build/dev cruft
+.git/
+.history/
+.pytest_cache/
+.vscode/
+.idea/
+dist/
+node_modules/
+__pycache__/
+*.pyc
+nuitka-crash-report.xml
+project-tree.txt
+.env
+
+# Media that shouldn't be in the image regardless of folder
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# OS cruft
+.DS_Store
+Thumbs.db
