@@ -2633,6 +2633,45 @@ def get_leave_type_allocations(org_id: str, branch_id: str | None = None) -> dic
         'leaveTypeQuotas': quotas if isinstance(quotas, dict) else {},
     }
 
+
+_PAYROLL_NON_NEGATIVE_FIELDS = ('otRatePerHour', 'defaultSalary')
+
+def _validate_payroll_policy(policy: dict) -> None:
+    """Reject payroll rules that would break the engine's math.
+
+    Base salary and OT rate are money-per-unit values that the engine
+    multiplies by days/hours worked. A negative here doesn't just produce a
+    small error -- it inverts the sign of the whole computation, so more
+    overtime yields *less* pay and an employee can finish a period owing the
+    company money. There is no legitimate negative here: a deduction is
+    modelled by leaveTypeRules/lateComingPolicy, not by a negative rate.
+    """
+    for field in _PAYROLL_NON_NEGATIVE_FIELDS:
+        if field not in policy:
+            continue
+        raw = policy.get(field)
+        if raw is None or raw == '':
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f'{field} must be a number')
+        if value != value or value in (float('inf'), float('-inf')):
+            raise ValueError(f'{field} must be a finite number')
+        if value < 0:
+            raise ValueError(f'{field} cannot be negative')
+
+    if 'fixedWorkingDaysPerMonth' in policy:
+        raw = policy.get('fixedWorkingDaysPerMonth')
+        if raw not in (None, ''):
+            try:
+                days = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError('fixedWorkingDaysPerMonth must be a number')
+            if not 1 <= days <= 31:
+                raise ValueError('fixedWorkingDaysPerMonth must be between 1 and 31')
+
+
 def save_payroll_policy(org_id: str, policy: dict, branch_id: str | None = None, staff_id: str | None = None) -> dict:
     """Whole-object replace, not a merge — the frontend always sends the
     complete policy, so a partial merge here would let stale keys linger.
@@ -2644,6 +2683,8 @@ def save_payroll_policy(org_id: str, policy: dict, branch_id: str | None = None,
     org_key = str(org_id)
     if not org_key:
         raise ValueError('organization_id is required to save payroll policy')
+
+    _validate_payroll_policy(policy or {})
 
     if branch_id or staff_id:
         # branch_id/staff_id are NOT NULL on this table (sentinel

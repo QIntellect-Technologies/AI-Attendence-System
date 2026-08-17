@@ -325,7 +325,11 @@ def permanently_delete_organization(org_id):
     """
     def _run():
         if not _support_user_is_super_admin():
-            return _err("Only super_admin can permanently delete organization data", 403)
+            return _err(
+                "Permanent deletion requires super_admin approval. "
+                "Use 'Request Delete' to submit this organization for super_admin review.",
+                403,
+            )
 
         payload = request.get_json(silent=True) or {}
         result = db.permanently_delete_organization(

@@ -2633,54 +2633,7 @@ def get_node_config(node_api_key: str) -> dict:
         'manual_instructions': manual_instructions,
     }
 
-def poll_node_training_jobs(node_api_key: str, limit: int = 5) -> list[dict]:
-    from support_db_staff import get_client_staff_member
-    sb = get_supabase()
-    node = get_node_by_api_key(node_api_key)
-    _ensure_org_client_access(str(node['org_id']), 'Local node training sync')
-    safe_limit = max(1, min(int(limit or 5), 20))
 
-    result = (
-        sb.table('face_training_jobs')
-        .select('*')
-        .eq('org_id', str(node['org_id']))
-        .eq('branch_id', str(node['branch_id']))
-        .eq('status', 'pending')
-        .order('created_at')
-        .limit(safe_limit)
-        .execute()
-    )
-
-    jobs = []
-    now = _iso_now()
-    for job in result.data or []:
-        job_id = str(job['id'])
-        update_data = {
-            'status': 'processing',
-            'claimed_by_node_id': node.get('node_id'),
-            'claimed_at': now,
-            'updated_at': now,
-        }
-        try:
-            updated = sb.table('face_training_jobs').update(update_data).eq('id', job_id).eq('status', 'pending').execute()
-            claimed = (updated.data or [job])[0]
-        except Exception:
-            # Older migrations may not have claim columns yet. Keep polling usable.
-            updated = sb.table('face_training_jobs').update({'status': 'processing', 'updated_at': now}).eq('id', job_id).eq('status', 'pending').execute()
-            claimed = (updated.data or [job])[0]
-
-        staff_id = str(claimed.get('client_staff_id') or claimed.get('staff_id'))
-        staff = None
-        try:
-            staff = get_client_staff_member(staff_id)
-        except Exception as exc:
-            logger.warning(f'Could not attach staff to training job {job_id}: {exc}')
-
-        claimed['staff'] = staff
-        claimed['download_url'] = claimed.get('storage_path')
-        jobs.append(claimed)
-
-    return jobs
 
 def _replace_face_embeddings_cloud(
     org_id: str,
@@ -2748,94 +2701,6 @@ def _valid_embedding_list(value: Any) -> list[list[float]]:
 
     return valid
 
-def mark_node_training_job_trained(node_api_key: str, job_id: str, payload: dict) -> dict:
-    from support_db_organizations import get_organization
-    from support_db_staff import update_client_staff
-    sb = get_supabase()
-    node = get_node_by_api_key(node_api_key)
-    requested_status = str(payload.get('status') or 'trained').lower()
-    if requested_status not in ('trained', 'failed'):
-        raise ValueError('status must be trained or failed')
-
-    job_result = (
-        sb.table('face_training_jobs')
-        .select('*')
-        .eq('id', str(job_id))
-        .eq('org_id', str(node['org_id']))
-        .eq('branch_id', str(node['branch_id']))
-        .limit(1)
-        .execute()
-    )
-    if not job_result.data:
-        raise ValueError('Training job not found for this node')
-
-    job = job_result.data[0]
-    staff_id = str(job.get('client_staff_id') or job.get('staff_id'))
-    now = _iso_now()
-
-    min_embeddings = 10
-    try:
-        min_embeddings = max(1, int(payload.get('min_embedding_count') or min_embeddings))
-    except (TypeError, ValueError):
-        min_embeddings = 10
-
-    valid_embeddings = _valid_embedding_list(payload.get('embeddings') or [])
-    embedding_count = len(valid_embeddings)
-    status = requested_status
-    error_message = None
-
-    if requested_status == 'trained' and embedding_count < min_embeddings:
-        status = 'failed'
-        error_message = (
-            f'Training rejected by server: only {embedding_count} valid embeddings were submitted; '
-            f'at least {min_embeddings} are required.'
-        )
-
-    if status == 'trained':
-        org = get_organization(str(node['org_id']))
-        is_fallback = str(org.get('attendance_mode') or '').lower() == 'local'
-
-        _replace_face_embeddings_cloud(
-            org_id=str(node['org_id']),
-            staff_id=staff_id,
-            embeddings=valid_embeddings,
-            is_fallback_copy=is_fallback,
-            source_job_id=str(job_id),
-        )
-
-        update_client_staff(staff_id, {
-            'face_training_status': 'trained',
-            'is_face_verified': True,
-        })
-
-    else:
-        if error_message is None:
-            error_message = str(payload.get('error_message') or 'Training failed')
-        update_client_staff(staff_id, {
-            'face_training_status': 'failed',
-            'is_face_verified': False,
-        })
-
-    update_payload = {
-        'status': status,
-        'error_message': error_message,
-        'processed_at': now,
-        'updated_at': now,
-        'embedding_count': embedding_count,
-        'local_embedding_version': str(payload.get('local_embedding_version') or '') or None,
-    }
-
-    # Optional columns from the node sync migration. Keep this endpoint robust if
-    # the migration was run before these telemetry columns existed.
-    for key in ('training_duration_seconds', 'total_frames_processed', 'avg_quality'):
-        if key in payload:
-            update_payload[key] = payload.get(key)
-
-    updated = sb.table('face_training_jobs').update(update_payload).eq('id', str(job_id)).execute()
-    if not updated.data:
-        raise RuntimeError('Failed to update training job')
-
-    return updated.data[0]
 
 def _node_attendance_metadata(item: dict) -> dict:
     """Build safe attendance metadata for node-submitted events.

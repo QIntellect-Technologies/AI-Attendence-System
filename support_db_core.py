@@ -261,11 +261,57 @@ def _json_dict(value) -> dict:
             return {}
     return {}
 
+# Support-user display names for deletion_requested_by. Cached because
+# _attach_status runs once per organization row in list_organizations, and
+# the same handful of support users request most deletions -- without this
+# a list of 200 orgs would issue 200 internal_users lookups.
+_INTERNAL_USER_NAME_CACHE: dict = {}
+_INTERNAL_USER_NAME_TTL_SECONDS = 300
+
+
+def _internal_user_display_name(user_id) -> str | None:
+    """Resolve an internal_users id to a human-readable name.
+
+    Returns None when the id is missing. Falls back to the raw id (never
+    blank) when the user row is gone, so an audit trail never silently
+    loses who requested a destructive action.
+    """
+    if not user_id:
+        return None
+    key = str(user_id)
+
+    cached = _cache_get(_INTERNAL_USER_NAME_CACHE, key)
+    if cached is not None:
+        return cached
+
+    try:
+        user = get_internal_user_by_id(key)
+        name = (
+            str(user.get('full_name') or '').strip()
+            or str(user.get('email') or '').strip()
+            or key
+        )
+    except Exception:
+        # Deactivated/removed support account, or a transient lookup
+        # failure -- degrade to the id rather than dropping attribution.
+        name = key
+
+    _cache_set_for(_INTERNAL_USER_NAME_CACHE, key, name, _INTERNAL_USER_NAME_TTL_SECONDS)
+    return name
+
+
 def _attach_status(org: dict) -> dict:
     """Attach computed billing/lifecycle status, terminology, and vertical defaults."""
     from support_db_client_users import _normalize_people_kind
     org = dict(org or {})
     org['status'] = _compute_org_status(org['id'])
+
+    # Only resolved when a request actually exists, so the common path
+    # (no pending deletion) costs nothing.
+    if org.get('deletion_requested_by'):
+        org['deletion_requested_by_name'] = _internal_user_display_name(
+            org.get('deletion_requested_by')
+        )
 
     business_type = (
         org.get('business_type')

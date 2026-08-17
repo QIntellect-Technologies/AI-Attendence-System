@@ -1157,39 +1157,6 @@ def update_client_staff_photo(staff_id: str, photo_url: str, filename: str) -> d
         'profile_image_name': filename,
     })
 
-def create_face_training_job_for_staff(staff_id: str, storage_path: str, video_name: str | None = None) -> dict:
-    """Create a Supabase training job for Local Node / Cloud Mode processing."""
-    sb = get_supabase()
-    staff = get_client_staff_member(str(staff_id))
-    org_id = staff.get('organization_id')
-    branch_id = staff.get('backend_branch_id')
-    now = datetime.now(timezone.utc).isoformat()
-
-    payload = {
-        'org_id': org_id,
-        'branch_id': branch_id,
-        'staff_id': str(staff_id),
-        'client_staff_id': str(staff_id),
-        'status': 'pending',
-        'storage_path': storage_path,
-        'job_source': 'client_dashboard',
-        'created_at': now,
-        'updated_at': now,
-    }
-
-    result = sb.table('face_training_jobs').insert(payload).execute()
-    if not result.data:
-        raise RuntimeError('Failed to create face training job')
-
-    update_client_staff(str(staff_id), {
-        'training_video_url': storage_path,
-        'training_video_name': video_name or '',
-        'face_training_status': 'pending',
-        'is_face_verified': False,
-    })
-
-    return result.data[0]
-
 def _normalize_employee_retention_years(value, default: int = 5) -> int:
     try:
         years = int(value)

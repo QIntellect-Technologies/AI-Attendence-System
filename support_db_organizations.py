@@ -21,7 +21,9 @@ import uuid
 import os
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
-from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache
+
+logger = get_logger(__name__)
+from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache, get_internal_user_by_id
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -580,12 +582,33 @@ def request_organization_delete(
     now = datetime.now(timezone.utc).isoformat()
     clean_reason = str(reason or '').strip() or 'Permanent deletion requested by Support'
 
+    # Snapshot the requester's name alongside their id, matching the
+    # actor_user_id/actor_name pair the notifications table already uses.
+    # An audit record must answer "who requested this, as they were known
+    # at the time" -- resolving the id on read would rewrite history when
+    # a name changes, and would lose attribution entirely once a support
+    # account is deactivated.
+    requested_by_name = None
+    if requested_by:
+        try:
+            actor = get_internal_user_by_id(str(requested_by))
+            requested_by_name = (
+                str(actor.get('full_name') or '').strip()
+                or str(actor.get('email') or '').strip()
+                or None
+            )
+        except Exception:
+            logger.warning(
+                'Could not resolve requester name for internal user %s', requested_by
+            )
+
     result = (
         get_supabase()
         .table('organizations')
         .update({
             'deletion_requested_at': now,
             'deletion_requested_by': str(requested_by) if requested_by else None,
+            'deletion_requested_by_name': requested_by_name,
             'delete_reason': clean_reason,
             'updated_at': now,
         })

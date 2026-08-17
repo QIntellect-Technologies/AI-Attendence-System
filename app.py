@@ -35,7 +35,7 @@ from shared_face_engine import (
 from shared_face_engine.spoof import detect_spoofing
 
 from config import (
-    UPLOAD_FOLDER, ALLOWED_EXTENSIONS, IMAGE_EXTENSIONS,
+    UPLOAD_FOLDER,
     MAX_CONTENT_LENGTH, FACE_MATCHING_THRESHOLD, FACE_DETECTION_CONFIDENCE,
     MIN_ENROLLMENT_FRAMES, OPTIMAL_FACES_PER_VIDEO,
     MIN_VIDEO_DURATION, MAX_VIDEO_DURATION,
@@ -131,9 +131,6 @@ supabase = get_supabase()
 app.register_blueprint(support_bp)
 app.register_blueprint(tenant_bp)
 register_local_node_camera_routes(app, supabase)
-from trainer_routes import trainer_bp
-
-app.register_blueprint(trainer_bp)
 
 # ─── Client Dashboard: branch-managed shifts + dynamic attendance timing ──
 from client_shift_routes import client_shifts_bp
@@ -304,11 +301,6 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
-
-
-def allowed_file(filename):
-    """Check if file extension is allowed."""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def _parse_tenant_id(value):
@@ -1799,7 +1791,8 @@ def initialize_system():
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({'error': 'File too large. Max size: 500MB'}), 413
+    max_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+    return jsonify({'error': f'File too large. Max size: {max_mb}MB'}), 413
 
 @app.errorhandler(404)
 def not_found(error):
@@ -1825,11 +1818,20 @@ def upload_user_photo(user_id):
     photo = request.files['photo']
     if photo.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    
+
     # Validate extension
     ext = photo.filename.rsplit('.', 1)[-1].lower()
     if ext not in ['jpg', 'jpeg', 'png', 'webp']:
         return jsonify({'error': 'Only jpg/png/webp allowed'}), 400
+
+    # Per-route size cap. MAX_CONTENT_LENGTH is the global backstop sized
+    # for the embeddings import package; a profile photo needs far less.
+    MAX_PHOTO_BYTES = 5 * 1024 * 1024
+    photo.stream.seek(0, os.SEEK_END)
+    size = photo.stream.tell()
+    photo.stream.seek(0)
+    if size > MAX_PHOTO_BYTES:
+        return jsonify({'error': 'Photo too large. Max size: 5MB'}), 413
     
     # Save to static/profile_photos/
     photos_dir = Path('static/profile_photos')
@@ -2391,6 +2393,15 @@ def api_upload_client_profile_photo():
     ext = photo.filename.rsplit('.', 1)[-1].lower() if '.' in photo.filename else ''
     if ext not in {'jpg', 'jpeg', 'png', 'webp'}:
         return jsonify({'success': False, 'message': 'Only jpg, jpeg, png, or webp are allowed.'}), 400
+
+    # Per-route size cap. MAX_CONTENT_LENGTH is the global backstop sized
+    # for the embeddings import package; a profile photo needs far less.
+    MAX_PHOTO_BYTES = 5 * 1024 * 1024
+    photo.stream.seek(0, os.SEEK_END)
+    size = photo.stream.tell()
+    photo.stream.seek(0)
+    if size > MAX_PHOTO_BYTES:
+        return jsonify({'success': False, 'message': 'Photo too large. Max size: 5MB.'}), 413
 
     try:
         photos_dir = Path('static/client_profile_photos')
@@ -3492,20 +3503,28 @@ def api_staff_photo(staff_id):
     if 'photo' not in request.files:
         return jsonify({'success': False, 'message': 'No photo provided.'}), 400
 
+    if 'photo' not in request.files:
+        return jsonify({'success': False, 'message': 'No photo provided.'}), 400
     photo = request.files['photo']
     if photo.filename == '':
         return jsonify({'success': False, 'message': 'No file selected.'}), 400
-
     ext = photo.filename.rsplit('.', 1)[-1].lower() if '.' in photo.filename else ''
     if ext not in {'jpg', 'jpeg', 'png', 'webp'}:
         return jsonify({'success': False, 'message': 'Only jpg, jpeg, png, or webp are allowed.'}), 400
+
+    # Per-route size cap. MAX_CONTENT_LENGTH is the global backstop sized
+    # for the embeddings import package; a profile photo needs far less.
+    MAX_PHOTO_BYTES = 5 * 1024 * 1024
+    photo.stream.seek(0, os.SEEK_END)
+    size = photo.stream.tell()
+    photo.stream.seek(0)
+    if size > MAX_PHOTO_BYTES:
+        return jsonify({'success': False, 'message': 'Photo too large. Max size: 5MB.'}), 413
 
     try:
         photos_dir.mkdir(parents=True, exist_ok=True)
         safe_ext = 'jpg' if ext == 'jpeg' else ext
         filename = secure_filename(f"staff_{str(staff_id).replace('-', '_')}.{safe_ext}")
-        filepath = photos_dir / filename
-        photo.save(filepath)
 
         # Store an API URL, not a /static-style URL and never a browser blob URL.
         cache_buster = int(datetime.now(timezone.utc).timestamp())
@@ -5644,37 +5663,6 @@ def v1_node_config():
         return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 401
     except Exception as e:
         logger.exception('Node config failed')
-        return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
-
-
-@app.route('/v1/node/poll-jobs', methods=['GET'])
-def v1_node_poll_jobs():
-    node_key = _node_api_key_from_request()
-    limit = request.args.get('limit', 5, type=int)
-    try:
-        jobs = support_cp_db.poll_node_training_jobs(node_key, limit=limit)
-        return jsonify({'success': True, 'jobs': jobs}), 200
-    except ValueError as e:
-        return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 401
-    except Exception as e:
-        logger.exception('Node poll jobs failed')
-        return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
-
-
-@app.route('/v1/node/mark-job-trained', methods=['POST'])
-def v1_node_mark_job_trained():
-    node_key = _node_api_key_from_request()
-    data = request.get_json(silent=True) or {}
-    job_id = data.get('job_id') or data.get('id')
-    if not job_id:
-        return jsonify({'success': False, 'message': 'job_id is required'}), 400
-    try:
-        job = support_cp_db.mark_node_training_job_trained(node_key, str(job_id), data)
-        return jsonify({'success': True, 'job': job}), 200
-    except ValueError as e:
-        return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 400
-    except Exception as e:
-        logger.exception('Node mark-job-trained failed')
         return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
 
 

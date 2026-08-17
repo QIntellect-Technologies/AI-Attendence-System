@@ -1,3 +1,41 @@
+# # Web Framework
+# Flask==3.0.3
+# gunicorn==22.0.0
+# Flask-CORS==4.0.0
+# Werkzeug==3.0.1
+
+# # Scientific Computing
+# numpy==1.24.3
+# scipy==1.11.4
+
+# # Computer Vision
+# opencv-python==4.8.1.78
+# Pillow==10.1.0
+# scikit-image==0.22.0
+
+
+# # Deep Learning & AI
+# torch==2.1.1
+# torchvision==0.16.1
+# # onnxruntime-gpu==1.19.2   # CUDA 12 build — install via: pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+# onnxruntime==1.19.2  # CPU build — Railway has no GPU/CUDA available
+# ultralytics==8.0.228
+# insightface==0.7.3
+
+# # Database
+# SQLAlchemy==2.0.23
+
+# # Utilities
+# python-dotenv==1.0.0
+# requests==2.31.0
+
+# supabase>=2.3.0
+# bcrypt>=4.1.2
+# PyJWT>=2.8.0
+# reportlab>=4.2.0
+
+
+
 # Web Framework
 Flask==3.0.3
 gunicorn==22.0.0
@@ -13,11 +51,14 @@ opencv-python==4.8.1.78
 Pillow==10.1.0
 scikit-image==0.22.0
 
-
 # Deep Learning & AI
+# CPU-only wheels — the default PyPI torch build bundles several GB of
+# NVIDIA CUDA runtime libraries (nccl, cudnn, cublas, etc.) that are
+# useless on Railway's CPU-only compute. This index serves CPU-only
+# builds instead, cutting install size/time drastically.
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.1.1
 torchvision==0.16.1
-# onnxruntime-gpu==1.19.2   # CUDA 12 build — install via: pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 onnxruntime==1.19.2  # CPU build — Railway has no GPU/CUDA available
 ultralytics==8.0.228
 insightface==0.7.3

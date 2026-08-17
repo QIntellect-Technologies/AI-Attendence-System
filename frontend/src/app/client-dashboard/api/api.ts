@@ -975,43 +975,6 @@ export const setSalaryConfig = (
     }),
   });
 
-// ─── Enrollment ────────────────────────────────────────────────────────────────
-
-export const createEnrollmentUser = (name: string, email: string) =>
-  http<{ success: boolean; user_id: TenantId; name: string }>(
-    "/api/enroll/create-user",
-    {
-      method: "POST",
-      body: JSON.stringify({ name, email }),
-    },
-  );
-export interface EnrollmentUploadResponse {
-  success: boolean;
-  user_id: TenantId;
-  embeddings_count: number;
-  total_frames_processed: number;
-  avg_quality: number;
-  spoof_detections?: number;
-  warnings?: string[];
-  message: string;
-}
-
-export const uploadEnrollmentVideo = (user_id: TenantId, videoFile: File) => {
-  const fd = new FormData();
-  fd.append("user_id", String(user_id));
-  fd.append("video", videoFile);
-
-  return httpForm<EnrollmentUploadResponse>("/api/enroll/upload-video", fd);
-};
-
-export const getEnrollmentStatus = (user_id: TenantId) =>
-  http<{
-    enrolled: boolean;
-    user_id: TenantId;
-    embeddings_count: number;
-    message: string;
-  }>(`/api/enroll/status/${user_id}`);
-
 // ─── Live Camera ───────────────────────────────────────────────────────────────
 
 export const getLiveDetections = (params?: {

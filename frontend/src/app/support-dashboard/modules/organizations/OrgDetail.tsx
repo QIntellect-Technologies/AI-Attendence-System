@@ -53,6 +53,7 @@ import BusinessTemplateSelect from "./components/BusinessTemplateSelect";
 import AttendanceScopeSelector from "./components/AttendanceScopeSelector";
 import InvoiceActions from "./components/InvoiceActions";
 import { useInstallToken } from "../../hooks/useInstallToken";
+import { useSupportAuth } from "../../contexts/SupportAuthContext";
 import type {
   Branch,
   BusinessType,
@@ -430,6 +431,7 @@ function OverviewTab({
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
   const [isEditingStaffTypeScope, setIsEditingStaffTypeScope] = useState(false);
+  const [deleteReason, setDeleteReason] = useState(org.delete_reason || "");
   const [enabledStaffTypes, setEnabledStaffTypes] = useState<
     ("office" | "field")[]
   >(
@@ -1737,7 +1739,10 @@ function BranchesTab({
                     onChange={(value) =>
                       setBranchDraft((current) => ({
                         ...current,
-                        max_staff_capacity: Number(value) || 1,
+                        max_staff_capacity: Math.min(
+                          100000,
+                          Math.max(1, Number(value) || 1),
+                        ),
                       }))
                     }
                   />
@@ -1859,6 +1864,16 @@ function BranchesTab({
       </SectionCard>
 
       <SectionCard title="Add Branch">
+        <div
+          style={{
+            marginBottom: 12,
+            color: limitReached ? T.amber : T.textMuted,
+            fontSize: 12,
+            fontWeight: 800,
+          }}
+        >
+          Branches: {state.data.length} / {Number(org.max_branches || 0)}
+        </div>
         {branchError && (
           <div style={{ marginBottom: 12 }}>
             <ErrorBox message={branchError} />
@@ -1889,7 +1904,10 @@ function BranchesTab({
             onChange={(value) =>
               setDraft((d) => ({
                 ...d,
-                max_staff_capacity: Number(value) || 1,
+                max_staff_capacity: Math.min(
+                  100000,
+                  Math.max(1, Number(value) || 1),
+                ),
               }))
             }
           />
@@ -2307,6 +2325,12 @@ function DataAccessTab({
       "Permanent delete request recorded. No data has been deleted yet.",
     );
 
+  const auth = useSupportAuth();
+  const isSuperAdmin =
+    String(auth.user?.role || "")
+      .trim()
+      .toLowerCase() === "super_admin";
+
   const permanentDelete = async () => {
     setIsSaving(true);
     setError(null);
@@ -2319,7 +2343,13 @@ function DataAccessTab({
       setSuccess("Organization data permanently deleted.");
       onDeleted();
     } catch (err) {
-      setError(extractApiError(err, "Permanent delete failed"));
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      setError(
+        status === 403
+          ? "Permanent deletion requires super_admin approval. Use 'Request Delete' above to submit this organization for review."
+          : extractApiError(err, "Permanent delete failed"),
+      );
     } finally {
       setIsSaving(false);
     }
@@ -2589,6 +2619,33 @@ function DataAccessTab({
               }}
             />
           </label>
+          {org.deletion_requested_at && (
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                padding: 12,
+                borderRadius: 10,
+                background: T.amber50,
+                border: `1px solid ${T.amber}`,
+                fontSize: 12,
+                color: T.textBody,
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                Deletion requested — pending super_admin review
+              </div>
+              <div>Requested: {formatDate(org.deletion_requested_at)}</div>
+              <div>
+                Requested by:{" "}
+                {org.deletion_requested_by_name ||
+                  org.deletion_requested_by ||
+                  "—"}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                Reason: {org.delete_reason || "No reason given"}
+              </div>
+            </div>
+          )}
           <label>
             <span style={labelStyle}>
               Type organization name to permanently delete
@@ -2627,13 +2684,26 @@ function DataAccessTab({
           <button
             type="button"
             onClick={() => void permanentDelete()}
-            disabled={isSaving || isDeleted || confirmName.trim() !== org.name}
+            disabled={
+              !isSuperAdmin ||
+              isSaving ||
+              isDeleted ||
+              confirmName.trim() !== org.name
+            }
+            title={
+              !isSuperAdmin
+                ? "Permanent delete is restricted to super_admin. Use Request Delete instead."
+                : undefined
+            }
             style={{
               ...secondaryButton(),
               borderColor: T.red,
               color: T.red,
               opacity:
-                isSaving || isDeleted || confirmName.trim() !== org.name
+                !isSuperAdmin ||
+                isSaving ||
+                isDeleted ||
+                confirmName.trim() !== org.name
                   ? 0.55
                   : 1,
             }}
@@ -2641,6 +2711,21 @@ function DataAccessTab({
             {isSaving ? <Loader2 size={14} /> : <Trash2 size={14} />}
             Permanent Delete
           </button>
+          {!isSuperAdmin && (
+            <span
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 8,
+                color: T.textMuted,
+                fontSize: 11,
+              }}
+            >
+              Permanent delete is restricted to super_admin. Use{" "}
+              <strong>Request Delete</strong> to submit this organization for
+              review.
+            </span>
+          )}
         </div>
       </section>
     </div>

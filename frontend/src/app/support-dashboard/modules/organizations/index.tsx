@@ -137,19 +137,30 @@ const AttendanceModeChip: React.FC<{ mode: "cloud" | "local" }> = ({
   </span>
 );
 
+type OrganizationStatusFilter =
+  | "all"
+  | "active"
+  | "grace_period"
+  | "suspended"
+  | "archived"
+  | "delete_requested";
 
-type OrganizationStatusFilter = "all" | "active" | "grace_period" | "suspended" | "archived";
+const STATUS_FILTERS: Array<{ key: OrganizationStatusFilter; label: string }> =
+  [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "grace_period", label: "Grace Period" },
+    { key: "suspended", label: "Suspended" },
+    { key: "archived", label: "Archived" },
+    { key: "delete_requested", label: "Delete Requested" },
+  ];
 
-const STATUS_FILTERS: Array<{ key: OrganizationStatusFilter; label: string }> = [
-  { key: "all", label: "All" },
-  { key: "active", label: "Active" },
-  { key: "grace_period", label: "Grace Period" },
-  { key: "suspended", label: "Suspended" },
-  { key: "archived", label: "Archived" },
-];
-
-function normalizeStatus(status: OrgStatus | string | null | undefined): string {
-  return String(status || "active").trim().toLowerCase();
+function normalizeStatus(
+  status: OrgStatus | string | null | undefined,
+): string {
+  return String(status || "active")
+    .trim()
+    .toLowerCase();
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -158,7 +169,8 @@ export default function OrganizationsPage() {
   const navigate = useNavigate();
   const { organizations, isLoading, error } = useOrganizations();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<OrganizationStatusFilter>("all");
+  const [statusFilter, setStatusFilter] =
+    useState<OrganizationStatusFilter>("all");
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const filtered = useMemo(() => {
@@ -169,25 +181,40 @@ export default function OrganizationsPage() {
       // Permanent/soft-deleted organizations should not appear in the list.
       // If the backend is still finishing cleanup and returns a deleted row,
       // the frontend hides it as a second safety layer.
-      if (normalizedStatus === "deleted" || Boolean(org.deleted_at)) return false;
+      if (normalizedStatus === "deleted" || Boolean(org.deleted_at))
+        return false;
 
       const matchesSearch =
         !q ||
-        String(org.name || "").toLowerCase().includes(q) ||
-        String(org.contact_email || "").toLowerCase().includes(q) ||
-        String(org.id || "").toLowerCase().includes(q);
+        String(org.name || "")
+          .toLowerCase()
+          .includes(q) ||
+        String(org.contact_email || "")
+          .toLowerCase()
+          .includes(q) ||
+        String(org.id || "")
+          .toLowerCase()
+          .includes(q);
 
+      // delete_requested is a pending-action flag, not a lifecycle status —
+      // an org can be active or archived and still have a request open, so
+      // this is matched on the timestamp rather than on org.status.
       const matchesStatus =
         statusFilter === "all"
           ? normalizedStatus !== "archived"
-          : normalizedStatus === statusFilter;
+          : statusFilter === "delete_requested"
+            ? Boolean(org.deletion_requested_at)
+            : normalizedStatus === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
   }, [organizations, search, statusFilter]);
 
   const visibleTotal = useMemo(
-    () => organizations.filter((org) => normalizeStatus(org.status) !== "deleted" && !org.deleted_at).length,
+    () =>
+      organizations.filter(
+        (org) => normalizeStatus(org.status) !== "deleted" && !org.deleted_at,
+      ).length,
     [organizations],
   );
 
@@ -470,7 +497,36 @@ export default function OrganizationsPage() {
                     </td>
 
                     <td style={{ padding: "13px 16px" }}>
-                      <StatusBadge status={org.status} />
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 4,
+                          alignItems: "center",
+                        }}
+                      >
+                        <StatusBadge status={org.status} />
+                        {org.deletion_requested_at && (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              background: T.red100,
+                              color: T.red600,
+                              borderRadius: 6,
+                              padding: "3px 8px",
+                              fontSize: 10,
+                              fontWeight: 800,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.05em",
+                            }}
+                            title="A support user has requested permanent deletion. Open the organization to review."
+                          >
+                            <AlertCircle size={10} /> Delete Requested
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     <td style={{ padding: "13px 16px" }}>

@@ -420,12 +420,18 @@ function formReducer(state: FormState, action: FormAction): FormState {
         },
       };
     }
-    case "SET_MAX_BRANCHES":
+    case "SET_MAX_BRANCHES": {
+      // Never silently discard a branch the user has already named. Lowering
+      // the limit only trims unnamed placeholder rows from the end; named
+      // branches are kept and validateForm() surfaces the mismatch instead.
+      const named = state.branches.filter((branch) => branch.name.trim());
+      const keep = Math.max(action.maxBranches, named.length, 1);
       return {
         ...state,
         max_branches: action.maxBranches,
-        branches: state.branches.slice(0, action.maxBranches),
+        branches: state.branches.slice(0, keep),
       };
+    }
     default:
       return state;
   }
@@ -876,7 +882,7 @@ export const CreateOrganizationModal: React.FC<
 
               <Field
                 label="Max Branches"
-                helper="Paid branch limit. Client cannot increase this."
+                helper="Paid branch limit. Support can adjust this; the client cannot."
               >
                 <input
                   value={form.max_branches}
@@ -1018,8 +1024,23 @@ export const CreateOrganizationModal: React.FC<
                   cursor: canAddBranch ? "pointer" : "not-allowed",
                 }}
               >
-                <Plus size={13} /> Add Branch
+                <Plus size={13} /> Add Branch ({form.branches.length}/
+                {form.max_branches})
               </button>
+              {!canAddBranch && (
+                <span
+                  style={{
+                    marginLeft: 10,
+                    color: T.amber600,
+                    fontSize: 11,
+                    fontWeight: 800,
+                  }}
+                >
+                  Branch limit reached. Increase <strong>Max Branches</strong>{" "}
+                  above to add more — this is a plan limit, not a permissions
+                  restriction.
+                </span>
+              )}
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>

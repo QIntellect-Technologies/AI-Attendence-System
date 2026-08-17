@@ -1947,11 +1947,13 @@ export default function PayrollModule() {
             <Field label="Default Base Salary">
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={draftPolicy.defaultSalary}
                 onChange={(event) =>
                   setDraftPolicy((p) => ({
                     ...p,
-                    defaultSalary: Number(event.target.value),
+                    defaultSalary: Math.max(0, Number(event.target.value) || 0),
                   }))
                 }
                 style={inputStyle}
@@ -1960,11 +1962,13 @@ export default function PayrollModule() {
             <Field label="OT Rate / Hour">
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={draftPolicy.otRatePerHour}
                 onChange={(event) =>
                   setDraftPolicy((p) => ({
                     ...p,
-                    otRatePerHour: Number(event.target.value),
+                    otRatePerHour: Math.max(0, Number(event.target.value) || 0),
                   }))
                 }
                 style={{
@@ -1995,11 +1999,16 @@ export default function PayrollModule() {
             <Field label="Fixed Working Days / Month">
               <input
                 type="number"
+                min={1}
+                max={31}
                 value={draftPolicy.fixedWorkingDaysPerMonth}
                 onChange={(event) =>
                   setDraftPolicy((p) => ({
                     ...p,
-                    fixedWorkingDaysPerMonth: Number(event.target.value),
+                    fixedWorkingDaysPerMonth: Math.min(
+                      31,
+                      Math.max(1, Number(event.target.value) || 1),
+                    ),
                   }))
                 }
                 style={{ ...inputStyle, marginTop: 10 }}

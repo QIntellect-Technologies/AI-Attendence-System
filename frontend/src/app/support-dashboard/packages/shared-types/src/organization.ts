@@ -162,6 +162,7 @@ export interface Organization {
   retention_policy_updated_by?: string | null;
   deletion_requested_at?: string | null;
   deletion_requested_by?: string | null;
+  deletion_requested_by_name?: string | null;
   deleted_at?: string | null;
   deleted_by?: string | null;
   delete_reason?: string | null;

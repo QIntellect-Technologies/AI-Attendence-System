@@ -545,6 +545,32 @@ def list_branches(org_id: str, include_dropped: bool = False) -> list[dict]:
     _cache_set(_BRANCH_CACHE, cache_key, rows)
     return [dict(branch) for branch in rows]
 
+# Postgres INTEGER tops out at 2147483647; a value above that raises a raw
+# driver error rather than a clean 400. This ceiling is deliberately far
+# lower -- it is a staff headcount for one physical site, so anything past
+# six figures is a typo or an attack, and letting it through breaks
+# occupancy percentages and chart scaling downstream.
+MAX_BRANCH_STAFF_CAPACITY = 100_000
+
+
+def _validate_branch_capacity(raw, *, field: str = 'max_staff_capacity') -> int:
+    """Coerce and bounds-check a branch staff capacity value."""
+    if isinstance(raw, bool):
+        raise ValueError(f'{field} must be a valid number')
+    try:
+        capacity = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f'{field} must be a valid number')
+
+    if capacity < 1:
+        raise ValueError(f'{field} must be at least 1')
+    if capacity > MAX_BRANCH_STAFF_CAPACITY:
+        raise ValueError(
+            f'{field} cannot exceed {MAX_BRANCH_STAFF_CAPACITY:,}'
+        )
+    return capacity
+
+
 def create_branch(payload: dict) -> dict:
     from support_db_client_users import _seed_default_branch_module_people_types
     from support_db_organizations import get_organization
@@ -556,17 +582,23 @@ def create_branch(payload: dict) -> dict:
 
     if current_count >= org['max_branches']:
         raise ValueError(
-            f'Branch limit reached ({org["max_branches"]}). '
-            f'Increase max_branches on the organization first.'
+            f'Branch limit reached ({current_count}/{org["max_branches"]}).'
+            f'Increase max_branches in Organization > Overview to add more branches.'
         )
 
     branch_timezone = _validate_branch_timezone(payload.get('timezone') or 'UTC')
+
+    capacity = _validate_branch_capacity(
+        payload.get('max_staff_capacity', 50)
+        if payload.get('max_staff_capacity') not in (None, '')
+        else 50
+    )
 
     result = sb.table('branches').insert({
         'org_id':               org_id,
         'name':                 payload['name'].strip(),
         'location':             payload.get('location'),
-        'max_staff_capacity':   int(payload.get('max_staff_capacity', 50)),
+        'max_staff_capacity':   capacity,
         'timezone':             branch_timezone,
     }).execute()
 
@@ -659,13 +691,7 @@ def update_branch(branch_id: str, payload: dict, org_id: str | None = None) -> d
         update_data['location'] = location or None
 
     if 'max_staff_capacity' in update_data:
-        try:
-            capacity = int(update_data['max_staff_capacity'])
-        except (TypeError, ValueError):
-            raise ValueError('max_staff_capacity must be a valid number')
-
-        if capacity < 1:
-            raise ValueError('max_staff_capacity must be at least 1')
+        capacity = _validate_branch_capacity(update_data['max_staff_capacity'])
 
         if branch_org_id:
             active_people = _count_active_people_for_branch(branch_org_id, str(branch_id))
