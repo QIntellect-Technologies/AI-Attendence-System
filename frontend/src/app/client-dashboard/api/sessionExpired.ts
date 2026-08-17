@@ -32,6 +32,16 @@ function clearAuthStorage(): void {
   }
 }
 
+/** True once a session-expiry redirect is already in flight.
+ *
+ * The redirect below is deliberately delayed ~5s so the user can read the
+ * dialog. Callers on a render loop (OrgConfigProvider) would otherwise keep
+ * firing tokenless requests for that whole window — hundreds of 401s. Check
+ * this before starting any new request. */
+export function isSessionExpiryHandled(): boolean {
+  return sessionExpiryHandled;
+}
+
 export function handleSessionExpired(
   message = "Session expired. Please log in again.",
 ): void {

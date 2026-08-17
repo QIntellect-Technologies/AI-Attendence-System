@@ -27,6 +27,8 @@ import ModernSelect from "../../../components/ui/ModernSelect";
 import { useAuthenticatedImageUrl } from "../../../hooks/useAuthenticatedImageUrl";
 import { getEnabledModules, getModule } from "../../../config/moduleRegistry";
 import { resolveApiBranchId } from "../../../utils/tenantScope";
+import { MAX_PHOTO_BYTES, checkFileSize } from "../../../utils/uploadLimits";
+
 import {
   configItemClassName as renderConfigItemClassName,
   configItemFamily as renderConfigItemFamily,
@@ -130,6 +132,7 @@ export const StaffModal: FC<{
   const { cfg, organizationId } = useOrg();
   const profileImageFileRef = useRef<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const [form, setForm] = useState<StaffFormData>(
     initial
       ? {
@@ -361,12 +364,26 @@ export const StaffModal: FC<{
       /\.(png|jpe?g|webp|gif)$/i.test(file.name);
 
     if (!isImage) {
-      alert(
+      setMediaError(
         `Please select a valid ${peopleModel.personSingular.toLowerCase()} image file.`,
       );
+      profileImageFileRef.current = null;
       return;
     }
 
+    // Client-side mirror of the server's 5MB per-route cap. Rejecting here
+    // tells the user before a slow upload, not after — but the check in
+    // app.py remains the enforcement point.
+    const sizeError = checkFileSize(file, MAX_PHOTO_BYTES, "Photo");
+    if (sizeError) {
+      setMediaError(sizeError);
+      profileImageFileRef.current = null;
+      set("profileImageUrl", "");
+      set("profileImageName", "");
+      return;
+    }
+
+    setMediaError(null);
     profileImageFileRef.current = file;
 
     const objectUrl = URL.createObjectURL(file);
@@ -1327,7 +1344,11 @@ export const StaffModal: FC<{
                 style={inputStyle}
                 value={form.salary}
                 type="number"
-                onChange={(e) => set("salary", Number(e.target.value))}
+                min={0}
+                step="any"
+                onChange={(e) =>
+                  set("salary", Math.max(0, Number(e.target.value) || 0))
+                }
               />
             </div>
             <div>
@@ -2268,6 +2289,20 @@ export const StaffModal: FC<{
                   }
                 />
 
+                {mediaError && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 8,
+                      color: T.red,
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {mediaError}
+                  </div>
+                )}
+
                 {form.profileImageUrl && (
                   <div
                     style={{
@@ -2373,8 +2408,10 @@ export const StaffModal: FC<{
             type="button"
             variant="primary"
             loading={isSaving}
+            disabled={Boolean(mediaError)}
             onClick={async () => {
               if (isSaving) return;
+              if (mediaError) return;
 
               if (!form.name || !form.personCode) return;
 

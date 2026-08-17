@@ -2046,7 +2046,10 @@ export default function PayrollModule() {
                       ...p,
                       lateComingPolicy: {
                         ...p.lateComingPolicy,
-                        thresholdOccurrences: Number(event.target.value),
+                        thresholdOccurrences: Math.max(
+                          1,
+                          Number(event.target.value) || 1,
+                        ),
                       },
                     }))
                   }
@@ -2068,7 +2071,10 @@ export default function PayrollModule() {
                       ...p,
                       lateComingPolicy: {
                         ...p.lateComingPolicy,
-                        flatAmountPerOccurrence: Number(event.target.value),
+                        flatAmountPerOccurrence: Math.max(
+                          0,
+                          Number(event.target.value) || 0,
+                        ),
                       },
                     }))
                   }
@@ -2294,7 +2300,10 @@ export default function PayrollModule() {
                             ...p.allowanceTypes,
                             [key]: {
                               ...type,
-                              value: Number(event.target.value) || 0,
+                              value: Math.max(
+                                0,
+                                Number(event.target.value) || 0,
+                              ),
                             },
                           },
                         }))
@@ -2421,16 +2430,29 @@ export default function PayrollModule() {
             <Field label="Base Salary (PKR)">
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={draftSalary}
-                onChange={(event) => setDraftSalary(Number(event.target.value))}
+                onChange={(event) =>
+                  setDraftSalary(Math.max(0, Number(event.target.value) || 0))
+                }
                 style={inputStyle}
               />
             </Field>
             <Field label="OT Rate Override (Rs/hr)">
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={draftOtRateOverride}
-                onChange={(event) => setDraftOtRateOverride(event.target.value)}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  // Empty string is meaningful here — it means "no
+                  // override, fall back to the org default" — so don't
+                  // coerce it to 0.
+                  if (raw === "") return setDraftOtRateOverride("");
+                  setDraftOtRateOverride(String(Math.max(0, Number(raw) || 0)));
+                }}
                 placeholder={`Org default: ${otRatePerHour}`}
                 style={{
                   ...inputStyle,

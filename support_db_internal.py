@@ -456,15 +456,26 @@ def list_internal_users_page(page=1, page_size=25, search: str | None = None, ro
         return _support_filter_page_rows(rows, page_number, size)
     return _support_paginated(rows, int(result.count or len(rows)), page_number, size)
 
-_INTERNAL_USER_ROLES = {'super_admin', 'admin', 'support', 'billing', 'operations'}
+# Two roles only -- see support_role_capabilities.py, which is the single
+# source of truth for both the valid set and what each role may do.
+from support_role_capabilities import SUPPORT_ROLES
 
+_INTERNAL_USER_ROLES = set(SUPPORT_ROLES)
+
+# Retired roles are mapped rather than rejected so pre-migration rows and
+# any stale client still resolve to a live role instead of erroring out.
+# 'admin'/'operations' carried full operational access before this split, so
+# they map up to super_admin; every support/billing variant maps to billing.
 _INTERNAL_USER_ROLE_ALIASES = {
-    'support_agent': 'support',
-    'support_admin': 'support',
+    'admin': 'super_admin',
+    'operations': 'super_admin',
+    'ops': 'super_admin',
+    'operation': 'super_admin',
+    'support': 'billing',
+    'support_agent': 'billing',
+    'support_admin': 'billing',
     'billing_admin': 'billing',
     'billing_agent': 'billing',
-    'ops': 'operations',
-    'operation': 'operations',
 }
 
 def _normalize_internal_user_role(value) -> str:
@@ -484,8 +495,8 @@ def create_internal_user(payload: dict, created_by: str | None = None) -> dict:
         raise ValueError('Valid email is required')
     if not full_name:
         raise ValueError('Full name is required')
-    if role not in {'super_admin', 'admin', 'support', 'support_agent', 'billing', 'billing_admin', 'operations'}:
-        raise ValueError('Invalid internal user role')
+    if role not in _INTERNAL_USER_ROLES:
+        raise ValueError("Invalid internal user role. Must be 'super_admin' or 'billing'.")
     if len(password) < 8:
         raise ValueError('Password must be at least 8 characters')
     row = {
@@ -505,8 +516,8 @@ def update_internal_user(user_id: str, payload: dict) -> dict:
     update_data = {k: payload.get(k) for k in allowed if k in payload}
     if 'role' in update_data:
         role = _support_lower(update_data.get('role'))
-        if role not in {'super_admin', 'admin', 'support', 'support_agent', 'billing', 'billing_admin', 'operations'}:
-            raise ValueError('Invalid internal user role')
+        if role not in _INTERNAL_USER_ROLES:
+            raise ValueError("Invalid internal user role. Must be 'super_admin' or 'billing'.")
         update_data['role'] = role
     if 'full_name' in update_data:
         update_data['full_name'] = _support_text(update_data.get('full_name'))

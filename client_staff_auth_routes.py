@@ -64,6 +64,20 @@ def staff_login():
             login_throttle.register_failure(identifier)
             raise
         login_throttle.register_success(identifier)
+
+        # Mobile tokens live 30 days, so an archived/suspended org must be
+        # refused at login rather than only on the next request.
+        from support_db import _compute_org_status, _org_access_allows_client
+        staff_org_id = staff.get("org_id") or staff.get("organization_id")
+        if staff_org_id:
+            org_status = _compute_org_status(str(staff_org_id))
+            if not _org_access_allows_client(org_status):
+                return err(
+                    "This organization is no longer active. "
+                    "Contact your administrator.",
+                    403,
+                )
+
         # Keyed as "user" (not "staff") to match the response shape of
         # /api/login (client_users/client_staff dashboard login) — one
         # parsing path on the client regardless of which endpoint it hit.

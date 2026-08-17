@@ -47,6 +47,12 @@ import React, {
 import { getCurrentOrganization } from "../api/api";
 import { useAuth } from "./useAuth";
 import { resolvePeopleTypesFromBizType } from "../utils/templateRendering";
+import {
+  isSessionExpiryHandled,
+  handleSessionExpired,
+} from "../api/sessionExpired";
+import { ApiRequestError } from "../api/apiClient";
+
 // ─── Master data types ────────────────────────────────────────────────────────
 
 export interface OrgBranch {
@@ -485,6 +491,7 @@ const LAST_SEEN_OPTIONS = [
  *   - `location`   = camera.location || camera.name
  *                    (physical placement preferred; label as fallback)
  */
+
 export function cameraToCctvDevice(
   camera: OrgCamera,
   branches: OrgBranch[],
@@ -1199,6 +1206,12 @@ function getClientBootstrapAuthHeaders(): HeadersInit {
 async function getClientBootstrap(
   organizationId: number | string,
 ): Promise<any> {
+  // A logout/redirect is already in flight — don't issue more requests
+  // during the dialog's countdown.
+  if (isSessionExpiryHandled()) {
+    throw new ApiRequestError("Session ended", 401);
+  }
+
   const res = await fetch(
     `/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
     {
@@ -1210,6 +1223,32 @@ async function getClientBootstrap(
     },
   );
   const data = await res.json().catch(() => ({}));
+
+  // A 401 here is terminal, not transient: the token is absent or invalid
+  // and no amount of re-fetching will change that. Without this, every
+  // re-render re-issues the request and the tab hammers the server
+  // indefinitely while still believing it is authenticated.
+  if (res.status === 401) {
+    handleSessionExpired(
+      data?.message || "Session expired. Please log in again.",
+    );
+    throw new ApiRequestError(data?.message || "Unauthorized", 401);
+  }
+
+  // ORG_ACCESS_BLOCKED is terminal in the same way a 401 is: the org is
+  // archived/suspended/deleted and no amount of retrying changes that.
+  // Without this the provider re-fires bootstrap on every render and the
+  // tab hammers the server indefinitely while still believing it is
+  // authenticated.
+  if (res.status === 403 && data?.code === "ORG_ACCESS_BLOCKED") {
+    handleSessionExpired(
+      data?.error ||
+        data?.message ||
+        "This organization is no longer active. Contact QIntellect Support.",
+    );
+    throw new ApiRequestError(data?.error || "Organization inactive", 403);
+  }
+
   if (!res.ok || data?.success === false) {
     throw new Error(
       data?.message || data?.error || "Failed to load client bootstrap.",
@@ -1246,6 +1285,15 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   const userOrgId = getUserOrganizationId(user);
+
+  // TEMP DEBUG — remove before commit
+  const renderCount = useRef(0);
+  renderCount.current++;
+  console.log("OrgConfigProvider render", renderCount.current, {
+    isAuthenticated,
+    userId: user?.id,
+    userOrgId,
+  });
 
   const [organizationId, setOrganizationId] = useState<number | string | null>(
     null,

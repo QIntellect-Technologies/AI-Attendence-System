@@ -885,7 +885,10 @@ function OverviewTab({
               onChange={(max_branches) =>
                 setProfile((p) => ({
                   ...p,
-                  max_branches: Number(max_branches) || 1,
+                  max_branches: Math.min(
+                    1000,
+                    Math.max(1, Number(max_branches) || 1),
+                  ),
                 }))
               }
             />
@@ -2885,6 +2888,23 @@ function InviteTab({ org }: { org: Organization }) {
 }
 
 export default function OrgDetail() {
+  // Billing may read an organization (an invoice is meaningless without
+  // knowing whose it is) but not its structural or lifecycle config. The
+  // backend enforces this per-route via require_capability; hiding the tabs
+  // just stops a billing user walking into a 403.
+  const auth = useSupportAuth();
+  const isSuperAdmin =
+    String(auth.user?.role || "")
+      .trim()
+      .toLowerCase() === "super_admin";
+  const visibleTabs = useMemo(
+    () =>
+      isSuperAdmin
+        ? TABS
+        : TABS.filter((tab) => tab.key === "overview" || tab.key === "billing"),
+    [isSuperAdmin],
+  );
+
   const params = useParams<{ orgId?: string; id?: string }>();
   const navigate = useNavigate();
   const orgId = String(params.orgId || params.id || "");
@@ -2920,6 +2940,14 @@ export default function OrgDetail() {
   useEffect(() => {
     void loadOrg();
   }, [loadOrg]);
+
+  // A billing user deep-linking to ?tab=branches would otherwise render a
+  // tab their token can't load.
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+      setActiveTab("overview");
+    }
+  }, [visibleTabs, activeTab]);
 
   useEffect(() => {
     if (!orgId) return;
@@ -3158,67 +3186,6 @@ export default function OrgDetail() {
           );
         })()}
 
-        {(() => {
-          const normalizedStatus = String(org.status || "").toLowerCase();
-          if (
-            normalizedStatus !== "suspended" &&
-            normalizedStatus !== "grace_period"
-          ) {
-            return null;
-          }
-          const isSuspended = normalizedStatus === "suspended";
-          return (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                flexWrap: "wrap",
-                padding: "12px 16px",
-                borderRadius: 14,
-                background: isSuspended ? T.red50 : T.amber50,
-                border: `1px solid ${isSuspended ? T.red : T.amber}`,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <ShieldAlert size={18} color={isSuspended ? T.red : T.amber} />
-                <div>
-                  <div
-                    style={{
-                      color: isSuspended ? T.red : T.amber,
-                      fontSize: 12,
-                      fontWeight: 900,
-                    }}
-                  >
-                    {isSuspended
-                      ? "Organization access is suspended"
-                      : "Organization is in its billing grace period"}
-                  </div>
-                  <div
-                    style={{ color: T.textMuted, fontSize: 11, marginTop: 2 }}
-                  >
-                    {isSuspended
-                      ? "An invoice is unpaid past its grace period, so the Client Dashboard and node sync are blocked. Mark the overdue invoice paid in Billing to restore access."
-                      : "An invoice is unpaid but still within its grace period. Access will be suspended automatically if it isn't paid before the deadline."}
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveTab("billing")}
-                style={{
-                  ...primaryButton(),
-                  background: isSuspended ? T.red : T.amber,
-                }}
-              >
-                <RotateCcw size={14} />
-                {isSuspended ? "Restore Access" : "Review Invoice"}
-              </button>
-            </div>
-          );
-        })()}
-
         <div
           style={{
             display: "flex",
@@ -3230,7 +3197,7 @@ export default function OrgDetail() {
             padding: 8,
           }}
         >
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.key}
               type="button"

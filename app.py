@@ -1923,6 +1923,31 @@ def serve_profile_photo_direct(filename):
 # AUTH ENDPOINTS
 # ============================================
 
+def _org_login_blocked_response(org_status):
+    """Return a 403 tuple when an org's commercial state forbids login.
+
+    Returns None when login may proceed. Callers should still count the
+    attempt as a *success* for throttling purposes — the password was
+    correct, and locking out a customer whose invoice is merely late would
+    leave them unable to distinguish suspension from a brute-force block.
+    """
+    status = str(org_status or '').lower()
+    if not status or support_cp_db._org_access_allows_client(status):
+        return None
+
+    messages = {
+        'archived': 'This organization has been archived. Contact QIntellect Support.',
+        'deleted': 'This organization no longer exists. Contact QIntellect Support.',
+        'suspended': 'Access is suspended due to an unpaid invoice. Contact QIntellect Support.',
+    }
+    return jsonify({
+        'success': False,
+        'message': messages.get(status, 'This organization is not active.'),
+        'code': 'ORG_ACCESS_BLOCKED',
+        'organization_status': status,
+    }), 403
+
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.get_json() or {}
@@ -1947,6 +1972,16 @@ def api_login():
         client_user = None
 
     if client_user:
+        # Block the login itself, not just subsequent requests. Without
+        # this, an archived/suspended org's admin authenticates cleanly,
+        # receives a token, and only discovers the block on their next
+        # call — which logs them straight back out. Refusing here means
+        # they never get a session to lose.
+        blocked = _org_login_blocked_response(client_user.get('organization_status'))
+        if blocked is not None:
+            login_throttle.register_success(email)
+            return blocked
+
         try:
             token = mint_dashboard_token(
                 client_user,
@@ -1986,6 +2021,18 @@ def api_login():
         client_staff = None
 
     if client_staff:
+        # This branch hardcodes organization_status='active' in its
+        # response (below) and never consults the real lifecycle state, so
+        # compute it here rather than trusting the payload.
+        staff_org_id = client_staff.get('organization_id')
+        blocked = _org_login_blocked_response(
+            support_cp_db._compute_org_status(str(staff_org_id))
+            if staff_org_id else None
+        )
+        if blocked is not None:
+            login_throttle.register_success(email)
+            return blocked
+
         token = mint_dashboard_token(
             client_staff,
             account_type='client_staff',
@@ -4705,11 +4752,31 @@ def _upsert_tenant_salary_config(data):
         if not _is_missing_supabase_table(exc):
             raise
 
-    def _patched_float(key, default=0):
+    def _patched_float(key, default=0, allow_negative=False):
+        """Sparse-patch a numeric column, rejecting negatives by default.
+
+        basic_salary/allowances/ot_rate are all multiplied by days or hours
+        worked in payroll_engine, so a negative doesn't produce a small
+        error — it inverts the sign of the period calculation. net_pay is
+        floored at 0, which makes the corruption silent: the employee
+        simply earns nothing. Reductions belong in `deductions`, which is
+        the one field where a caller could legitimately mean "subtract".
+        """
         if key in data:
-            return float(data.get(key) or 0)
-        existing_value = existing.get(key)
-        return float(existing_value) if existing_value is not None else default
+            raw = data.get(key)
+            try:
+                value = float(raw or 0)
+            except (TypeError, ValueError):
+                raise ValueError(f'{key} must be a number')
+        else:
+            existing_value = existing.get(key)
+            value = float(existing_value) if existing_value is not None else default
+
+        if value != value or value in (float('inf'), float('-inf')):
+            raise ValueError(f'{key} must be a finite number')
+        if value < 0 and not allow_negative:
+            raise ValueError(f'{key} cannot be negative')
+        return value
 
     basic_salary = _patched_float('basic_salary', default=float(staff.get('salary') or 0))
     allowances = _patched_float('allowances')

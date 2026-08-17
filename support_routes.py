@@ -8,7 +8,7 @@ in support_db.py.
 """
 
 from flask import Blueprint, request, jsonify, g, send_file
-from support_auth import require_support_auth, login_internal_user
+from support_auth import require_support_auth, require_capability, login_internal_user
 import support_db as db
 import login_throttle
 from logger_config import get_logger
@@ -119,7 +119,7 @@ def list_vertical_templates():
     return _handle(_run)
 
 @support_bp.route("/organizations", methods=["GET"])
-@require_support_auth
+@require_capability("orgs:read")
 def list_organizations():
     def _run():
         orgs = db.list_organizations(
@@ -135,7 +135,7 @@ def list_organizations():
 
 
 @support_bp.route("/organizations", methods=["POST"])
-@require_support_auth
+@require_capability("orgs:write")
 def create_organization():
     """Create an organization. Branches/modules/billing are separate steps."""
     def _run():
@@ -153,7 +153,7 @@ def create_organization():
 
 
 @support_bp.route("/organizations/<org_id>", methods=["GET"])
-@require_support_auth
+@require_capability("orgs:read")
 def get_organization(org_id):
     def _run():
         org = db.get_organization(org_id)
@@ -163,7 +163,7 @@ def get_organization(org_id):
 
 
 @support_bp.route("/organizations/<org_id>", methods=["PATCH"])
-@require_support_auth
+@require_capability("orgs:write")
 def update_organization(org_id):
     def _run():
         payload = request.get_json(silent=True) or {}
@@ -174,7 +174,7 @@ def update_organization(org_id):
     return _handle(_run)
 
 @support_bp.route("/organizations/<org_id>/template", methods=["PATCH", "PUT"])
-@require_support_auth
+@require_capability("orgs:write")
 def update_organization_template(org_id):
     """
     Support-only endpoint.
@@ -203,7 +203,7 @@ def update_organization_template(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/staff-type-scope", methods=["PATCH", "PUT"])
-@require_support_auth
+@require_capability("orgs:write")
 def update_organization_staff_type_scope(org_id):
     """
     Support-only endpoint.
@@ -230,7 +230,7 @@ def update_organization_staff_type_scope(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/archive", methods=["PATCH"])
-@require_support_auth
+@require_capability("orgs:lifecycle")
 def archive_organization(org_id):
     """Archive an organization without deleting tenant data."""
     def _run():
@@ -247,7 +247,7 @@ def archive_organization(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/restore", methods=["PATCH"])
-@require_support_auth
+@require_capability("orgs:lifecycle")
 def restore_organization(org_id):
     """Restore an archived organization. Billing status remains invoice-based."""
     def _run():
@@ -261,7 +261,7 @@ def restore_organization(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/retention-policy", methods=["PATCH"])
-@require_support_auth
+@require_capability("orgs:lifecycle")
 def update_organization_retention_policy(org_id):
     """Update organization-level data retention policy."""
     def _run():
@@ -278,7 +278,7 @@ def update_organization_retention_policy(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/request-delete", methods=["POST"])
-@require_support_auth
+@require_capability("orgs:lifecycle")
 def request_organization_delete(org_id):
     """Request permanent deletion. Does not delete data."""
     def _run():
@@ -309,7 +309,7 @@ def _support_user_is_super_admin() -> bool:
 
 @support_bp.route("/organizations/<org_id>/permanent", methods=["DELETE", "POST"])
 @support_bp.route("/organizations/<org_id>/permanent-delete", methods=["POST"])
-@require_support_auth
+@require_capability("orgs:delete")
 def permanently_delete_organization(org_id):
     """
     Permanently delete tenant data. Super-admin only.
@@ -348,7 +348,7 @@ def permanently_delete_organization(org_id):
 # ═════════════════════════════════════════════════════════════
 
 @support_bp.route("/organizations/<org_id>/branches", methods=["GET"])
-@require_support_auth
+@require_capability("branches:read")
 def list_branches(org_id):
     def _run():
         include_dropped = str(
@@ -363,7 +363,7 @@ def list_branches(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/branches", methods=["POST"])
-@require_support_auth
+@require_capability("branches:write")
 def create_branch(org_id):
     """Create a support-owned branch after enforcing org max_branches."""
     def _run():
@@ -380,7 +380,7 @@ def create_branch(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/branches/<branch_id>", methods=["PATCH"])
-@require_support_auth
+@require_capability("branches:write")
 def update_organization_branch(org_id, branch_id):
     """Update one branch after verifying it belongs to this organization."""
     def _run():
@@ -392,7 +392,7 @@ def update_organization_branch(org_id, branch_id):
 
 
 @support_bp.route("/organizations/<org_id>/branches/<branch_id>/module-people-types", methods=["GET"])
-@require_support_auth
+@require_capability("branches:read")
 def get_branch_module_people_types(org_id, branch_id):
     def _run():
         config = db.list_branch_module_people_types(org_id, branch_id)
@@ -402,7 +402,7 @@ def get_branch_module_people_types(org_id, branch_id):
 
 
 @support_bp.route("/organizations/<org_id>/branches/<branch_id>/module-people-types", methods=["PUT"])
-@require_support_auth
+@require_capability("branches:write")
 def set_branch_module_people_types_route(org_id, branch_id):
     def _run():
         payload = request.get_json(silent=True) or {}
@@ -413,7 +413,7 @@ def set_branch_module_people_types_route(org_id, branch_id):
 
 
 @support_bp.route("/branches/<branch_id>", methods=["PATCH"])
-@require_support_auth
+@require_capability("branches:write")
 def update_branch(branch_id):
     """Backward-compatible branch update route. Prefer org-scoped route."""
     def _run():
@@ -425,7 +425,7 @@ def update_branch(branch_id):
 
 
 @support_bp.route("/branches/<branch_id>/fallback", methods=["PATCH"])
-@require_support_auth
+@require_capability("branches:write")
 def set_fallback(branch_id):
     """Manual fallback override from Node Health section."""
     def _run():
@@ -445,7 +445,7 @@ def set_fallback(branch_id):
     "/organizations/<org_id>/branches/<branch_id>/install-token",
     methods=["POST"],
 )
-@require_support_auth
+@require_capability("branches:write")
 def create_branch_install_token(org_id, branch_id):
     """Generate a one-time Local Node install token for a branch."""
     def _run():
@@ -467,7 +467,7 @@ def create_branch_install_token(org_id, branch_id):
     "/organizations/<org_id>/branches/<branch_id>/installer",
     methods=["POST"],
 )
-@require_support_auth
+@require_capability("branches:write")
 def download_branch_node_installer(org_id, branch_id):
     """Generate and download a branch-scoped Local Node installer ZIP."""
     def _run():
@@ -530,7 +530,7 @@ def download_branch_node_installer(org_id, branch_id):
 # ═════════════════════════════════════════════════════════════
 
 @support_bp.route("/organizations/<org_id>/modules", methods=["GET"])
-@require_support_auth
+@require_capability("modules:read")
 def list_modules(org_id):
     def _run():
         modules = db.list_org_modules(org_id)
@@ -540,7 +540,7 @@ def list_modules(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/modules", methods=["PUT"])
-@require_support_auth
+@require_capability("modules:write")
 def set_modules(org_id):
     """Replace the full purchased module set for an organization."""
     def _run():
@@ -557,7 +557,7 @@ def set_modules(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/modules/<module_name>", methods=["PATCH"])
-@require_support_auth
+@require_capability("modules:write")
 def toggle_module(org_id, module_name):
     """Toggle a single module independently from billing."""
     def _run():
@@ -578,7 +578,7 @@ def toggle_module(org_id, module_name):
 # ═════════════════════════════════════════════════════════════
 
 @support_bp.route("/organizations/<org_id>/invite", methods=["POST"])
-@require_support_auth
+@require_capability("orgs:write")
 def invite_client(org_id):
     """Create/reset Client Dashboard admin credentials."""
     def _run():
@@ -598,7 +598,7 @@ def invite_client(org_id):
 # ═════════════════════════════════════════════════════════════
 
 @support_bp.route("/organizations/<org_id>/invoices", methods=["GET"])
-@require_support_auth
+@require_capability("invoices:read")
 def list_invoices(org_id):
     def _run():
         invoices = db.list_invoices(org_id)
@@ -608,7 +608,7 @@ def list_invoices(org_id):
 
 
 @support_bp.route("/organizations/<org_id>/invoices", methods=["POST"])
-@require_support_auth
+@require_capability("invoices:write")
 def create_invoice(org_id):
     """Create first or renewal invoice."""
     def _run():
@@ -630,7 +630,7 @@ def create_invoice(org_id):
 
 
 @support_bp.route("/invoices/<invoice_id>/mark-paid", methods=["PATCH"])
-@require_support_auth
+@require_capability("invoices:write")
 def mark_invoice_paid(invoice_id):
     """Mark invoice paid after receiving payment."""
     def _run():
@@ -645,7 +645,7 @@ def mark_invoice_paid(invoice_id):
     return _handle(_run)
 
 @support_bp.route("/invoices/<invoice_id>/message", methods=["GET"])
-@require_support_auth
+@require_capability("invoices:read")
 def get_invoice_message(invoice_id):
     """Preview the professional invoice message before manual send."""
     def _run():
@@ -660,7 +660,7 @@ def get_invoice_message(invoice_id):
 
 
 @support_bp.route("/invoices/<invoice_id>/mark-sent", methods=["PATCH"])
-@require_support_auth
+@require_capability("invoices:write")
 def mark_invoice_sent(invoice_id):
     """Track that Support copied/opened/sent the invoice manually."""
     def _run():
@@ -679,7 +679,7 @@ def mark_invoice_sent(invoice_id):
 
 
 @support_bp.route("/invoices/<invoice_id>/pdf", methods=["GET"])
-@require_support_auth
+@require_capability("invoices:read")
 def download_invoice_pdf(invoice_id):
     """Download professional invoice PDF generated from source-of-truth deal data."""
     def _run():
@@ -703,7 +703,7 @@ def download_invoice_pdf(invoice_id):
 # ═════════════════════════════════════════════════════════════
 
 @support_bp.route("/organizations/<org_id>/node-health", methods=["GET"])
-@require_support_auth
+@require_capability("nodes:read")
 def node_health(org_id):
     """Per-branch node status, last_seen_at, and fallback flag."""
     def _run():
@@ -726,7 +726,7 @@ def _support_page_request_params():
 
 
 @support_bp.route("/branches", methods=["GET"])
-@require_support_auth
+@require_capability("branches:read")
 def global_branches_page():
     """Global branch overview. Does not load per-org detail tabs."""
     def _run():
@@ -743,7 +743,7 @@ def global_branches_page():
 
 
 @support_bp.route("/invoices", methods=["GET"])
-@require_support_auth
+@require_capability("invoices:read")
 def global_invoices_page():
     """Global invoice center across organizations."""
     def _run():
@@ -760,7 +760,7 @@ def global_invoices_page():
 
 
 @support_bp.route("/modules/entitlements", methods=["GET"])
-@require_support_auth
+@require_capability("modules:read")
 def global_module_entitlements_page():
     """Global module entitlement overview across organizations."""
     def _run():
@@ -778,7 +778,7 @@ def global_module_entitlements_page():
 
 
 @support_bp.route("/node-health", methods=["GET"])
-@require_support_auth
+@require_capability("nodes:read")
 def global_node_health_page():
     """Global node health page across branch nodes."""
     def _run():
@@ -795,7 +795,7 @@ def global_node_health_page():
 
 
 @support_bp.route("/internal-users", methods=["GET"])
-@require_support_auth
+@require_capability("internal_users:read")
 def global_internal_users_page():
     """QIntellect internal users. Not organization scoped."""
     def _run():
@@ -815,7 +815,7 @@ def global_internal_users_page():
 
 
 @support_bp.route("/internal-users", methods=["POST"])
-@require_support_auth
+@require_capability("internal_users:write")
 def create_internal_user_page():
     def _run():
         if g.support_user.get("role") != "super_admin":
@@ -828,7 +828,7 @@ def create_internal_user_page():
 
 
 @support_bp.route("/internal-users/<user_id>", methods=["PATCH"])
-@require_support_auth
+@require_capability("internal_users:write")
 def update_internal_user_page(user_id):
     def _run():
         if g.support_user.get("role") != "super_admin":
@@ -841,7 +841,7 @@ def update_internal_user_page(user_id):
 
 
 @support_bp.route("/internal-users/<user_id>/reset-password", methods=["POST"])
-@require_support_auth
+@require_capability("internal_users:write")
 def reset_internal_user_password_page(user_id):
     def _run():
         if g.support_user.get("role") != "super_admin":

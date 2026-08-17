@@ -51,6 +51,7 @@ const NAV_ITEMS: NavItem[] = [
     to: "/support/branches",
     icon: <GitBranch size={15} />,
     label: "Branches",
+    roles: ["super_admin"],
   },
   {
     to: "/support/invoices",
@@ -61,11 +62,13 @@ const NAV_ITEMS: NavItem[] = [
     to: "/support/modules",
     icon: <Grid3X3 size={15} />,
     label: "Modules",
+    roles: ["super_admin"],
   },
   {
     to: "/support/node-health",
     icon: <Activity size={15} />,
     label: "Node Health",
+    roles: ["super_admin"],
   },
   {
     to: "/support/internal-users",
@@ -77,7 +80,9 @@ const NAV_ITEMS: NavItem[] = [
 
 const Sidebar: React.FC = () => {
   const { user, logout } = useSupportAuth();
-  const role = user?.role || "support";
+  // Fallback must name a REAL role: "support" no longer exists, and an
+  // unknown role resolves to an empty capability set.
+  const role = user?.role || "billing";
   const canSee = (item: NavItem) => !item.roles || item.roles.includes(role);
 
   return (
@@ -142,43 +147,39 @@ const Sidebar: React.FC = () => {
       </div>
 
       <nav style={{ flex: 1, padding: "12px 10px" }}>
-        {NAV_ITEMS.filter(canSee).map(
-          (item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              style={({ isActive }) => ({
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 10,
-                padding: "9px 12px",
-                borderRadius: 9,
-                marginBottom: 2,
-                textDecoration: "none",
-                background: isActive ? "rgba(13,148,136,0.18)" : "transparent",
-                color: isActive ? T.teal400 : T.textMuted,
-                fontSize: 12,
-                fontWeight: isActive ? 800 : 600,
-                transition: "all 0.12s",
-              })}
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    style={{ display: "flex", alignItems: "center", gap: 9 }}
-                  >
-                    {item.icon}
-                    {item.label}
-                  </span>
-                  {isActive && (
-                    <ChevronRight size={11} style={{ opacity: 0.6 }} />
-                  )}
-                </>
-              )}
-            </NavLink>
-          ),
-        )}
+        {NAV_ITEMS.filter(canSee).map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            style={({ isActive }) => ({
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              padding: "9px 12px",
+              borderRadius: 9,
+              marginBottom: 2,
+              textDecoration: "none",
+              background: isActive ? "rgba(13,148,136,0.18)" : "transparent",
+              color: isActive ? T.teal400 : T.textMuted,
+              fontSize: 12,
+              fontWeight: isActive ? 800 : 600,
+              transition: "all 0.12s",
+            })}
+          >
+            {({ isActive }) => (
+              <>
+                <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  {item.icon}
+                  {item.label}
+                </span>
+                {isActive && (
+                  <ChevronRight size={11} style={{ opacity: 0.6 }} />
+                )}
+              </>
+            )}
+          </NavLink>
+        ))}
       </nav>
 
       <div

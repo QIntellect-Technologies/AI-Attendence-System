@@ -609,6 +609,31 @@ def _count_active_staff_for_branch(org_id: str, branch_id: str) -> int:
     )
     return int(result.count or 0)
 
+
+def _coerce_staff_salary(raw) -> float:
+    """Coerce a per-employee salary, rejecting negatives.
+
+    Base salary feeds payroll_engine as a positive figure that deductions
+    subtract from. A negative inverts the whole period calculation, and
+    because net_pay is floored at 0 (payroll_engine.py:244) the corruption
+    is silent — the employee simply earns nothing, with no error raised.
+    Deductions belong in leaveTypeRules/lateComingPolicy, never here.
+    """
+    if raw in (None, ''):
+        return 0.0
+    if isinstance(raw, bool):
+        raise ValueError('salary must be a number')
+    try:
+        salary = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError('salary must be a number')
+    if salary != salary or salary in (float('inf'), float('-inf')):
+        raise ValueError('salary must be a finite number')
+    if salary < 0:
+        raise ValueError('salary cannot be negative')
+    return salary
+
+
 def create_client_staff(
     org_id: str,
     payload: dict,
@@ -714,7 +739,7 @@ def create_client_staff(
         'role_name': role_name,
         'position': role_name,
         'status': status,
-        'salary': float(payload.get('salary') or 0),
+        'salary': _coerce_staff_salary(payload.get('salary')),
         'benefits': _json_list(payload.get('benefits')),
         'join_date': payload.get('join_date') or None,
         'staff_type': staff_type,
@@ -1014,7 +1039,7 @@ def update_client_staff(
         )
 
     if 'salary' in update_data:
-        update_data['salary'] = float(update_data.get('salary') or 0)
+        update_data['salary'] = _coerce_staff_salary(update_data.get('salary'))
     if 'geofence_lat' in update_data:
         update_data['geofence_lat'] = _safe_float(update_data.get('geofence_lat'))
     if 'geofence_lng' in update_data:

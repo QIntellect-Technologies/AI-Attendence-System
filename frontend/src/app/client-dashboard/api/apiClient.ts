@@ -1,4 +1,4 @@
-import { handleSessionExpired } from "./sessionExpired";
+import { isSessionExpiryHandled, handleSessionExpired } from "./sessionExpired";
 
 export type QueryValue = string | number | boolean | null | undefined;
 export type QueryParams = Record<string, QueryValue>;
@@ -59,6 +59,14 @@ async function request<T>(
   params?: QueryParams,
   jsonBody?: unknown,
 ): Promise<T> {
+  // A logout/redirect is already in flight (the session-expired dialog
+  // holds for ~5s before navigating). Short-circuit here so a component
+  // stuck re-rendering can't fire hundreds of tokenless requests during
+  // that window.
+  if (isSessionExpiryHandled()) {
+    throw new ApiRequestError("Session ended", 401);
+  }
+
   const url = `${API_BASE_URL}${path}${buildQuery(params)}`;
   const res = await fetch(url, {
     method,
@@ -76,6 +84,16 @@ async function request<T>(
   if (res.status === 401) {
     const message =
       body?.message || body?.error || "Session expired. Please log in again.";
+    handleSessionExpired(message);
+    throw new ApiRequestError(message, res.status);
+  }
+
+  // Org archived/suspended/deleted — terminal, same handling as a 401.
+  if (res.status === 403 && body?.code === "ORG_ACCESS_BLOCKED") {
+    const message =
+      body?.error ||
+      body?.message ||
+      "This organization is no longer active. Contact QIntellect Support.";
     handleSessionExpired(message);
     throw new ApiRequestError(message, res.status);
   }

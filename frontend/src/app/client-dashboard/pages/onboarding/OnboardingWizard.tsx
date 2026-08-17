@@ -21,6 +21,11 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../contexts/useAuth";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
+import {
+  MAX_PHOTO_BYTES,
+  MAX_UPLOAD_BYTES,
+  checkFileSize,
+} from "../../utils/uploadLimits";
 
 type Branch = {
   id: string;
@@ -1272,6 +1277,12 @@ function CompanyProfileStep({
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
+                const sizeError = checkFileSize(file, MAX_PHOTO_BYTES, "Logo");
+                if (sizeError) {
+                  alert(sizeError);
+                  e.currentTarget.value = "";
+                  return;
+                }
                 const reader = new FileReader();
                 reader.onload = () => {
                   setProfile((p) => ({
@@ -1593,8 +1604,15 @@ function StudentStructureStep({
             type="file"
             accept=".csv,text/csv,text/plain"
             onChange={(e) => {
-              importCsv(e.target.files?.[0]);
+              const file = e.target.files?.[0];
               e.currentTarget.value = "";
+              if (!file) return;
+              const sizeError = checkFileSize(file, MAX_UPLOAD_BYTES, "CSV");
+              if (sizeError) {
+                alert(sizeError);
+                return;
+              }
+              importCsv(file);
             }}
             style={{ fontSize: 12, maxWidth: 240 }}
           />

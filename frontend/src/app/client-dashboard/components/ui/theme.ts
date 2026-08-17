@@ -24,6 +24,7 @@ export const T = {
   amberBd: "#fde68a",
   success: "#118d97",
   successBg: "#e2f3f6",
+  red: "#dc2626",
 } as const;
 
 export const SEMI_COLORS = [

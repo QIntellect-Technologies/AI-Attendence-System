@@ -192,6 +192,50 @@ def _decode_token(token: str) -> dict:
     return jwt.decode(token, _get_jwt_secret(), algorithms=[_JWT_ALGORITHM])
 
 
+# Commercial/lifecycle gate. Deliberately *not* imported at module top:
+# support_db_core imports the supabase client which pulls in config, and
+# this module is imported by app.py before that chain is ready — same
+# circular-import reason the hierarchy_db imports below are function-local.
+#
+# Enforced per-request, not just at login, because dashboard tokens live
+# 12h: archiving an org must lock out sessions already in flight, not only
+# block the next login. _compute_org_status is TTL-cached (60s) and
+# archive/restore invalidate that cache, so this costs one dict lookup on
+# the hot path.
+def _org_access_blocked_response():
+    """Return a 403 tuple if the caller's org may not use the client
+    dashboard, else None."""
+    from support_db_core import _compute_org_status, _org_access_allows_client
+
+    org_id = (g.dashboard_user or {}).get('org_id')
+    if not org_id:
+        return None
+
+    try:
+        status = _compute_org_status(str(org_id))
+    except Exception:
+        # Fail open on a transient Supabase error: a lookup failure must
+        # not lock every tenant out of their dashboard. The org-scoping
+        # guarantees above still hold regardless of commercial status.
+        logger.exception('Org status lookup failed for org_id=%s', org_id)
+        return None
+
+    if _org_access_allows_client(status):
+        return None
+
+    messages = {
+        'archived': 'This organization has been archived. Contact QIntellect Support.',
+        'deleted': 'This organization no longer exists. Contact QIntellect Support.',
+        'suspended': 'Access is suspended due to an unpaid invoice. Contact QIntellect Support.',
+    }
+    return jsonify({
+        'success': False,
+        'error': messages.get(status, 'This organization is not active.'),
+        'code': 'ORG_ACCESS_BLOCKED',
+        'organization_status': status,
+    }), 403
+
+
 # ─── Auth decorator ───────────────────────────────────────────────────────────
 
 def require_client_dashboard_auth(f):
@@ -235,6 +279,11 @@ def require_client_dashboard_auth(f):
             'manager_id':       payload.get('manager_id'),
             'is_admin':         bool(payload.get('is_admin', False)),
         }
+
+        blocked = _org_access_blocked_response()
+        if blocked is not None:
+            return blocked
+
         return f(*args, **kwargs)
 
     return decorated

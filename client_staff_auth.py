@@ -107,6 +107,42 @@ def login_client_staff(identifier: str, password: str) -> tuple[dict, str]:
     return staff, token
 
 
+def _org_access_blocked_response():
+    """Return a 403 tuple if the caller's org may not use the mobile portal.
+
+    Mobile tokens live 30 days (see _TOKEN_TTL_DAYS), so without this an
+    archived or suspended org's field staff would keep checking in for a
+    month. Function-local import for the same circular-import reason as
+    the Client Dashboard decorator.
+    """
+    from support_db_core import _compute_org_status, _org_access_allows_client
+
+    org_id = (g.client_staff or {}).get('org_id')
+    if not org_id:
+        return None
+
+    try:
+        status = _compute_org_status(str(org_id))
+    except Exception:
+        logger.exception('Org status lookup failed for org_id=%s', org_id)
+        return None
+
+    if _org_access_allows_client(status):
+        return None
+
+    messages = {
+        'archived': 'This organization has been archived. Contact your administrator.',
+        'deleted': 'This organization no longer exists. Contact your administrator.',
+        'suspended': 'Access is suspended due to an unpaid invoice. Contact your administrator.',
+    }
+    return jsonify({
+        'success': False,
+        'error': messages.get(status, 'This organization is not active.'),
+        'code': 'ORG_ACCESS_BLOCKED',
+        'organization_status': status,
+    }), 403
+
+
 # ─── Auth decorator ───────────────────────────────────────────────────────────
 
 def require_client_staff_auth(f):
@@ -142,6 +178,11 @@ def require_client_staff_auth(f):
             'staff_type':  payload.get('staff_type'),
             'role':        payload.get('role'),
         }
+
+        blocked = _org_access_blocked_response()
+        if blocked is not None:
+            return blocked
+
         return f(*args, **kwargs)
 
     return decorated

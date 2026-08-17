@@ -156,3 +156,33 @@ def require_super_admin(f):
             return jsonify({'success': False, 'error': 'Super admin access required'}), 403
         return f(*args, **kwargs)
     return decorated
+
+
+def require_capability(capability: str):
+    """Gate a support route on a named capability.
+
+    Composes require_support_auth so there is exactly one place that decodes
+    this JWT (same pattern as require_client_dashboard_admin on the client
+    side). The role is read from g.support_user, which require_support_auth
+    populates from the verified token — never from a request parameter.
+
+    Returns 403 with code=CAPABILITY_DENIED so the frontend can distinguish
+    "your role can't do this" from "your session is invalid" (401) and from
+    "your organization is inactive" (ORG_ACCESS_BLOCKED).
+    """
+    def decorator(f):
+        @require_support_auth
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            from support_role_capabilities import role_has
+            role = (g.support_user or {}).get('role')
+            if not role_has(role, capability):
+                return jsonify({
+                    'success': False,
+                    'error': f'Your role ({role}) does not permit this action.',
+                    'code': 'CAPABILITY_DENIED',
+                    'required_capability': capability,
+                }), 403
+            return f(*args, **kwargs)
+        return decorated
+    return decorator

@@ -454,6 +454,7 @@ function validateForm(state: FormState): string | null {
     }
   }
   if (state.max_branches < 1) return "Max branches must be at least 1.";
+  if (state.max_branches > 1000) return "Max branches cannot exceed 1,000.";
   if (!state.selected_modules.length)
     return "Select at least one purchased module.";
 
@@ -463,6 +464,9 @@ function validateForm(state: FormState): string | null {
     return "Branch count cannot exceed max branches.";
   if (validBranches.some((branch) => branch.max_staff_capacity < 1)) {
     return "Every branch capacity must be at least 1.";
+  }
+  if (validBranches.some((branch) => branch.max_staff_capacity > 100000)) {
+    return "Every branch capacity must be 100,000 or less.";
   }
   if (state.invoice_amount < 0) return "Invoice amount cannot be negative.";
   if (state.invoice_amount > 0 && !state.invoice_due_date)
@@ -886,10 +890,14 @@ export const CreateOrganizationModal: React.FC<
               >
                 <input
                   value={form.max_branches}
+                  max={1000}
                   onChange={(e) =>
                     dispatch({
                       type: "SET_MAX_BRANCHES",
-                      maxBranches: toPositiveInt(e.target.value, 1),
+                      maxBranches: Math.min(
+                        1000,
+                        toPositiveInt(e.target.value, 1),
+                      ),
                     })
                   }
                   type="number"
@@ -1107,9 +1115,9 @@ export const CreateOrganizationModal: React.FC<
                           type: "UPDATE_BRANCH",
                           index,
                           patch: {
-                            max_staff_capacity: toPositiveInt(
-                              e.target.value,
-                              50,
+                            max_staff_capacity: Math.min(
+                              100000,
+                              toPositiveInt(e.target.value, 50),
                             ),
                           },
                         })

@@ -154,6 +154,30 @@ def get_organization(org_id: str) -> dict:
     _cache_set(_ORG_CACHE, org_key, dict(org))
     return dict(org)
 
+
+# An org's branch allowance is a commercial entitlement, not a technical
+# limit — a real customer buys tens of sites, not thousands. The ceiling is
+# deliberately far below Postgres INTEGER (2147483647): an absurd value
+# here silently widens every per-branch quota check downstream and breaks
+# the branch-count UI, and there is no legitimate reason to exceed it.
+MAX_ORG_BRANCHES = 1_000
+
+
+def _validate_org_max_branches(raw, *, field: str = 'max_branches') -> int:
+    """Coerce and bounds-check an organization's branch allowance."""
+    if isinstance(raw, bool):
+        raise ValueError(f'{field} must be a valid number')
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f'{field} must be a valid number')
+
+    if value < 1:
+        raise ValueError(f'{field} must be at least 1')
+    if value > MAX_ORG_BRANCHES:
+        raise ValueError(f'{field} cannot exceed {MAX_ORG_BRANCHES:,}')
+    return value
+
 def create_organization(payload: dict, created_by: str) -> dict:
     """
     Phase 2, Step 1-3 (Architecture Section 3).
@@ -198,7 +222,11 @@ def create_organization(payload: dict, created_by: str) -> dict:
         'terminology_overrides':        payload.get('terminology_overrides') or {},
         'attendance_mode':              attendance_mode,
         'node_offline_threshold_seconds': threshold,
-        'max_branches':                 int(payload.get('max_branches', 1)),
+        'max_branches':                 _validate_org_max_branches(
+            payload.get('max_branches', 1)
+            if payload.get('max_branches') not in (None, '')
+            else 1
+        ),
         'created_by':                   created_by,
     }
 
@@ -295,13 +323,7 @@ def update_organization(org_id: str, payload: dict) -> dict:
             update_data['terminology_overrides'] = {}
 
     if 'max_branches' in update_data:
-        try:
-            max_branches = int(update_data['max_branches'])
-        except (TypeError, ValueError):
-            raise ValueError('max_branches must be a valid number')
-
-        if max_branches < 1:
-            raise ValueError('max_branches must be at least 1')
+        max_branches = _validate_org_max_branches(update_data['max_branches'])
 
         _validate_branch_limit_decrease(
             org_id=str(org_id),

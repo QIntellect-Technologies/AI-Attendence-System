@@ -69,7 +69,7 @@ import {
 import {
   Clock,
   CheckCircle,
-  XCircle,
+  UserX,
   Users,
   AlertCircle,
   MapPin,
@@ -1699,10 +1699,16 @@ export default function AttendanceView() {
       );
       return;
     }
+    const hasRecord = attendance.some(
+      (item) =>
+        item.user_name?.toLowerCase().trim() === staffName.toLowerCase().trim(),
+    );
     const confirm = await Swal.fire({
       icon: "warning",
       title: `Mark "${staffName}" as absent?`,
-      text: "This will delete their check-in record.",
+      text: hasRecord
+        ? "Their existing check-in for today will be cleared and the day recorded as absent."
+        : "Today will be recorded as absent for this person.",
       showCancelButton: true,
       confirmButtonText: "Mark Absent",
       cancelButtonText: "Cancel",
@@ -2981,7 +2987,7 @@ export default function AttendanceView() {
                                   }
                                   className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-rose-100"
                                 >
-                                  <XCircle className="w-3.5 h-3.5" />
+                                  <UserX className="w-3.5 h-3.5" />
                                 </button>
                               </>
                             )}
