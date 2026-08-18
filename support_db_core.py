@@ -61,6 +61,19 @@ _SUPABASE_RETRYABLE_MARKERS = (
     'connect timeout',
     'timeout',
     'temporarily unavailable',
+    # Supabase sits behind Cloudflare. When the edge can't reach the
+    # origin it answers with an HTML error page, which postgrest reports
+    # as a generic 'JSON could not be generated' / code 400 — the same
+    # shape a genuinely malformed query produces. These are transient
+    # infrastructure failures, not client errors, so they belong here:
+    # without them a 15-second edge blip fails every request on its first
+    # attempt with no reconnect.
+    'json could not be generated',
+    'cloudflare',
+    '<html>',
+    'bad gateway',
+    '502',
+    '504',
 )
 
 _TENANT_META_CACHE_TTL_SECONDS = 20.0
@@ -97,6 +110,27 @@ def _is_retryable_supabase_error(exc: Exception) -> bool:
     text = f'{type(exc).__name__}: {exc}'.lower()
     return any(marker in text for marker in _SUPABASE_RETRYABLE_MARKERS)
 
+def _readable_supabase_error(exc: Exception, label: str) -> Exception:
+    """Translate an upstream-infrastructure failure into a human message.
+
+    postgrest wraps any non-JSON response — typically a Cloudflare HTML
+    error page when the edge can't reach the Supabase origin — as
+    'JSON could not be generated', code 400. That reaches the operator as
+    a blob of escaped markup that reads like an application bug, when the
+    actual condition is 'the database was briefly unreachable'.
+
+    Returns the exception to raise, so the caller keeps control of the
+    raise site and the original stays chained for the logs.
+    """
+    text = f'{type(exc).__name__}: {exc}'.lower()
+    if 'cloudflare' in text or '<html>' in text or 'json could not be generated' in text:
+        logger.error('Supabase unreachable during %s: %s', label, exc)
+        return RuntimeError(
+            'The database is temporarily unreachable. Please retry in a moment.'
+        )
+    return exc
+
+
 def _execute_supabase(label: str, factory: Callable[[], Any], attempts: int = 2):
     """Execute a Supabase builder with one reconnect retry for network resets.
 
@@ -112,7 +146,7 @@ def _execute_supabase(label: str, factory: Callable[[], Any], attempts: int = 2)
         except Exception as exc:  # Supabase/httpx/postgrest exceptions vary by version.
             last_exc = exc
             if attempt >= max_attempts - 1 or not _is_retryable_supabase_error(exc):
-                raise
+                raise _readable_supabase_error(exc, label)
             logger.warning(
                 'Supabase request failed once during %s; reconnecting and retrying: %s',
                 label,
@@ -121,7 +155,7 @@ def _execute_supabase(label: str, factory: Callable[[], Any], attempts: int = 2)
             reset_supabase_client()
             time.sleep(0.12 * (attempt + 1))
 
-    raise last_exc  # type: ignore[misc]
+    raise _readable_supabase_error(last_exc, label)  # type: ignore[arg-type]
 
 def _cache_get(cache: dict, key: str):
     item = cache.get(key)

@@ -2282,19 +2282,25 @@ def get_local_node_status(org_id: str) -> dict | None:
     """
     try:
         sb = get_supabase()
-        
-        # Get the organization's node info
+
+        # Same source and same resolver the Support Dashboard's node-health
+        # page uses (support_db_internal.list_support_node_health_page).
+        # This previously read client_onboarding_configs — a client-owned
+        # table that never carries this Support-tier setting — and then
+        # compared a float against the resulting None, which raised
+        # TypeError, got swallowed below, and reported a healthy node as
+        # offline forever. Two implementations of one question is the bug;
+        # there is now one.
         org_result = _execute_supabase(
             'get_local_node_status.org',
-            lambda: sb.table('client_onboarding_configs')
-            .select('node_offline_threshold_seconds')
-            .eq('organization_id', str(org_id))
+            lambda: sb.table('organizations')
+            .select('id, node_offline_threshold_seconds, attendance_mode')
+            .eq('id', str(org_id))
             .limit(1),
         )
-        
-        threshold_seconds = 300  # Default 5 minutes
-        if org_result.data and len(org_result.data) > 0:
-            threshold_seconds = org_result.data[0].get('node_offline_threshold_seconds', 300)
+
+        org = org_result.data[0] if org_result.data else {}
+        threshold_seconds = _resolve_node_offline_threshold_seconds(org)
         
         # Get the node's last heartbeat
         node_result = _execute_supabase(
@@ -2321,16 +2327,14 @@ def get_local_node_status(org_id: str) -> dict | None:
         
         # Check if node is offline based on threshold
         try:
-            from datetime import datetime, timezone, timedelta
-            last_seen_dt = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
-            now_dt = datetime.now(timezone.utc)
-            seconds_since_heartbeat = (now_dt - last_seen_dt).total_seconds()
-            is_offline = seconds_since_heartbeat > threshold_seconds
-            
+            node_status, _minutes_since_seen = _compute_node_status(
+                last_seen, threshold_seconds
+            )
             return {
-                'offline': is_offline,
+                'offline': node_status != 'online',
                 'last_heartbeat': last_seen,
                 'node_id': node.get('node_id'),
+                'threshold_seconds': threshold_seconds,
             }
         except Exception as e:
             logger.warning(f'Could not parse heartbeat time: {e}')

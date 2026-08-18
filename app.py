@@ -1049,11 +1049,16 @@ def api_cctv_live_tracking():
                 f_node_status = pool.submit(
                     support_cp_db.get_local_node_status, raw_org_id
                 )
+                f_detections = pool.submit(
+                    support_cp_db.get_today_detections_by_staff,
+                    raw_org_id, raw_branch_id,
+                )
 
                 raw_cameras = f_cameras.result() or []
                 org = f_org.result()
                 onboarding_config = f_onboarding.result() or {}
                 node_status = f_node_status.result()
+                detections_by_staff = f_detections.result() or {}
 
             # People-type scope comes from the normalized organizations row
             # (get_organization -> _attach_status), the same source the
@@ -1088,6 +1093,9 @@ def api_cctv_live_tracking():
             # Get all people/staff currently in scope
             employees = []
             total_detections_by_camera = {}
+            # list_client_cameras returns both 'id' and 'camera_name'/'location'
+            # (see support_db_attendance_dashboard.list_client_cameras).
+            camera_by_id = {str(cam.get('id')): cam for cam in raw_cameras}
 
             # One list_client_staff call per scoped people-type, also run in
             # parallel — most orgs only have one or two active people-types,
@@ -1150,21 +1158,45 @@ def api_cctv_live_tracking():
                         if fallback_attendance:
                             attendance_status = 'fallback'
                             fallback_marker = True
-                    
+
+                    # The roster says who COULD be detected; only an
+                    # attendance row says who actually WAS, and from which
+                    # camera. Without this the six fields below stay None
+                    # and Movement Logs is indistinguishable from "nobody
+                    # has been seen all day".
+                    detection = detections_by_staff.get(str(person.get('id')))
+                    camera = (
+                        camera_by_id.get(str(detection.get('camera_id')))
+                        if detection and detection.get('camera_id')
+                        else None
+                    )
+                    if detection:
+                        attendance_status = 'Active'
+                        camera_key = str(detection.get('camera_id') or '')
+                        if camera_key:
+                            total_detections_by_camera[camera_key] = (
+                                total_detections_by_camera.get(camera_key, 0) + 1
+                            )
+
                     employee = {
                         'id': person.get('id'),
                         'name': person.get('name') or person.get('display_name'),
                         'personType': person_type,
                         'personCode': person.get('employee_id') or person.get('staff_id'),
                         'employeeId': person.get('id'),
-                        'cameraId': None,
-                        'cameraName': None,
-                        'location': None,
+                        'cameraId': detection.get('camera_id') if detection else None,
+                        'cameraName': camera.get('camera_name') if camera else None,
+                        'location': camera.get('location') if camera else None,
                         'branchId': person.get('branch_id') or raw_branch_id,
                         'branchName': person.get('branch_name'),
-                        'timestamp': None,
-                        'detectedAt': None,
-                        'status': 'offline',
+                        'timestamp': detection.get('timestamp') if detection else None,
+                        'detectedAt': detection.get('timestamp') if detection else None,
+                        # MovementRow renders formatDetectionTime(person.lastSeen)
+                        # — the other two keys are carried for API consumers
+                        # but are not what the table reads.
+                        'lastSeen': detection.get('timestamp') if detection else None,
+                        'status': attendance_status,
+                        'pose': (detection.get('capture_channel') or 'detected') if detection else '—',
                         'duty': 'on_duty',
                         'fallbackMarker': fallback_marker,
                     }
@@ -1193,7 +1225,10 @@ def api_cctv_live_tracking():
                 'cameras': formatted_cameras,
                 'registeredCount': len(set(e.get('id') for e in employees)),
                 'activeFeedCount': len(formatted_cameras),
-                'activeNowCount': sum(1 for e in employees if e.get('fallbackMarker')),
+                # Detected today, not "flagged as fallback" — the old count
+                # only ever incremented while the node was OFFLINE, so an
+                # online node always reported 0 detections.
+                'activeNowCount': sum(1 for e in employees if e.get('status') == 'Active'),
                 'sourceStatus': 'ready' if not is_node_offline else 'degraded',
                 'sourceLabel': (raw_branch_id or 'All Branches') + (' (Local Node Offline)' if is_node_offline else ''),
                 'localNodeStatus': {

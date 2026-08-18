@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,34 @@ def _configured_artifact_path(package_type: str = "exe") -> Path:
 
 
 def installer_filename(branch_name: str | None = None, package_type: str = "exe") -> str:
+    """Build the user-facing download filename.
+
+    Takes a human-readable BRANCH NAME — never an install-token payload.
+    Callers used to pass the token dict returned by
+    create_branch_install_token(), which str()'d into the filename and
+    leaked id / org_id / branch_id / token_hash to the user's Downloads
+    folder (a ~200-char name and a needless disclosure of the token hash).
+    Non-string input is now dropped rather than stringified so that class
+    of bug cannot come back silently.
+    """
     suffix = "zip" if str(package_type).lower() == "zip" else "exe"
-    clean_branch = "".join(ch if ch.isalnum() or ch in {" ", "-", "_"} else "-" for ch in str(branch_name or "").strip()).strip()
     prefix = "QIntellectAttendanceNodeSetup"
+
+    if not isinstance(branch_name, str):
+        branch_name = ""
+
+    clean_branch = "".join(
+        ch if ch.isalnum() or ch in {" ", "-", "_"} else "-"
+        for ch in branch_name.strip()
+    )
+    # Collapse runs of separators left behind by the substitution above and
+    # trim them from the ends, so "Dera Gazi Khan" stays readable and
+    # something like "Main / Branch" doesn't become "Main---Branch".
+    clean_branch = re.sub(r"[-\s]{2,}", "-", clean_branch).strip(" -_")
+    # Windows Explorer truncates long names in the download shelf; keep the
+    # branch fragment short enough that the .exe suffix stays visible.
+    clean_branch = clean_branch[:40].strip(" -_")
+
     return f"{prefix}-{clean_branch}.{suffix}" if clean_branch else f"{prefix}.{suffix}"
 
 

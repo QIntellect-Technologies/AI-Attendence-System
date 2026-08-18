@@ -3423,7 +3423,7 @@ def _format_late_check_in_note(
     if late_dt.tzinfo is None:
         late_dt = late_dt.replace(tzinfo=timezone.utc)
     late_local = late_dt.astimezone(shift_gate._branch_zone(cfg)).strftime("%H:%M")
-    suffix = " Awaiting operator decision." if held else ""
+    suffix = _PENDING_DECISION_CLAUSE if held else ""
 
     if early_marked_at:
         try:
@@ -4355,6 +4355,63 @@ def mark_held_checkouts_overtime(local_event_ids: list[str]) -> dict[str, Any]:
     return _resolve_held_checkouts(local_event_ids, build_update=build_update)
 
 
+def _strip_pending_decision_suffix(notes: str | None) -> str | None:
+    """Remove the "Awaiting operator decision." sentence from a stored note.
+
+    The note is composed ONCE, at hold time, by
+    _format_late_check_in_note(held=True) / _format_checkout_hold_note.
+    Every resolution action below updates the row's flags but never
+    rewrote the note, so a resolved row kept telling the operator — on the
+    node's review panel, the dashboard's attendance view, and the
+    notification body, all of which render this same stored string — that
+    it was still awaiting the decision they had just made.
+
+    Only the trailing pending clause is removed; the factual part of the
+    note ("Detected at 12:05, late — after the 11:45:00 shift start.") is
+    the audit trail and must survive resolution.
+    """
+    if not notes:
+        return notes
+    return notes.replace(" Awaiting operator decision.", "").replace(
+        "Awaiting operator decision.", ""
+    ).rstrip()
+
+
+# The exact clause _format_late_check_in_note appends when held=True
+# (see its `suffix` line). Kept as a module constant so the formatter and
+# the stripper below can never drift apart.
+_PENDING_DECISION_CLAUSE = " Awaiting operator decision."
+
+
+def _strip_pending_decision_clause(notes: str | None) -> str | None:
+    """Remove the "Awaiting operator decision." clause from a stored note.
+
+    The note is composed ONCE, at hold time, by
+    _format_late_check_in_note(held=True). Every resolution action below
+    updates the row's flags (check_in_confirmed / check_in_hold_reason /
+    status) but none rewrote `notes`, so a resolved row kept telling the
+    operator it was still awaiting the decision they had just made — on
+    the node's Held-for-review panel, in the Client Dashboard's attendance
+    view, and in the notification body, all three of which render this
+    same stored string.
+
+    Only the trailing pending clause goes. The factual part ("Detected at
+    12:05, late — after the 11:45:00 shift start.") is the audit trail and
+    must survive resolution.
+
+    Longer term the durable shape is to store the facts and render the
+    sentence at display time — then a pending clause cannot outlive the
+    decision by construction. This keeps the stored-prose design working
+    until then.
+    """
+    if not notes:
+        return notes
+    cleaned = notes.replace(_PENDING_DECISION_CLAUSE, "")
+    # Defensive: an older row may have been written without the leading
+    # space (or had it collapsed by a note merge).
+    cleaned = cleaned.replace(_PENDING_DECISION_CLAUSE.strip(), "")
+    return cleaned.rstrip() or None
+
 def _resolve_held_check_ins(
     local_event_ids: list[str],
     *,
@@ -4379,7 +4436,20 @@ def _resolve_held_check_ins(
                 continue
             sql, params = build_update(row)
             cur.execute(sql, params)
-            (resolved_ids if cur.rowcount > 0 else skipped_ids).append(event_id)
+            if cur.rowcount > 0:
+                # The decision has now been made — the note must stop
+                # claiming otherwise. Done here rather than in each
+                # build_update so all three check-in resolution actions
+                # (late / short_leave / half_day) get it automatically.
+                cleaned = _strip_pending_decision_clause(row.get("notes"))
+                if cleaned != row.get("notes"):
+                    cur.execute(
+                        "UPDATE attendance_buffer SET notes = ? WHERE id = ?",
+                        (cleaned, row["id"]),
+                    )
+                resolved_ids.append(event_id)
+            else:
+                skipped_ids.append(event_id)
         conn.commit()
 
     return {"resolved_ids": resolved_ids, "skipped_ids": skipped_ids}

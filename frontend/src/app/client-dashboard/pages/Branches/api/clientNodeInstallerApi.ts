@@ -1,4 +1,5 @@
-import { BASE_URL } from "../../../api/api";
+import { BASE_URL, dashboardAuthHeaders } from "../../../api/api";
+import { handleSessionExpired } from "../../../api/sessionExpired";
 import { cleanId } from "../../../utils/tenantScope";
 
 export interface DownloadNodeInstallerParams {
@@ -52,6 +53,12 @@ export async function downloadClientNodeInstaller({
       headers: {
         Accept: "application/octet-stream, application/json",
         "Content-Type": "application/json",
+        // The backend derives the acting user from this token alone
+        // (@require_client_dashboard_auth -> g.dashboard_user). Without it
+        // the route 401s with "Authorization header required" before any
+        // installer is built. X-Client-User-Id below is advisory/legacy
+        // only — it is deliberately ignored server-side.
+        ...dashboardAuthHeaders(),
         "X-Client-User-Id": cleanUserId,
       },
       body: JSON.stringify({
@@ -63,7 +70,16 @@ export async function downloadClientNodeInstaller({
     },
   );
 
-  if (!response.ok) throw await errorFromResponse(response);
+  if (!response.ok) {
+    const error = await errorFromResponse(response);
+    // Same convention as staffApi/apiClient: a 401 here means the stored
+    // dashboard token is missing or expired, so prompt a re-login rather
+    // than showing a raw auth string in the branch error banner.
+    if (response.status === 401) {
+      handleSessionExpired(error.message);
+    }
+    throw error;
+  }
 
   const blob = await response.blob();
   const contentDisposition = response.headers.get("content-disposition");

@@ -877,7 +877,17 @@ def create_app() -> Flask:
                 # sync click, not waiting for a decision. Computed here
                 # (not stored) so there is exactly one place that defines
                 # "resolved" instead of every caller re-deriving it.
-                "resolved": not bool(row.get("check_in_hold_reason") or row.get("check_out_hold_reason")),
+                # An EARLY check-in hold carries no hold_reason by design
+                # (local_db.record_attendance_local sets check_in_hold_reason
+                # only for the 'late' case), so absence of a reason cannot
+                # mean "resolved" — for an unconfirmed check-in it means the
+                # opposite: still waiting for the shift window to open. Key
+                # off the confirmation flags, which are what the per-leg
+                # state machine actually advances.
+                "resolved": bool(
+                    row.get("check_in_confirmed")
+                    and not row.get("check_out_hold_reason")
+                ),
             }
             for row in rows
         ]

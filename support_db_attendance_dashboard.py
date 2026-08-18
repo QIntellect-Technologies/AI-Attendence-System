@@ -2158,6 +2158,49 @@ def list_client_cameras(org_id: str, branch_id: object = None) -> list[dict]:
         })
     return rows
 
+
+def get_today_detections_by_staff(org_id: str, branch_id: object = None) -> dict:
+    """Today's attendance rows keyed by staff_id, for the Live CCTV feed.
+
+    The Live CCTV Movement Logs answers "who was seen, on which camera,
+    at what time" — which only the attendance table knows. The endpoint
+    previously iterated the staff roster alone and emitted cameraId/
+    cameraName/location/detectedAt as hardcoded None on every row, so the
+    table rendered a roster dressed up as a detection trail: identical
+    output whether or not anyone had ever been detected.
+
+    Scoped to the same UTC day window the attendance dashboard uses, so
+    both surfaces agree on what "today" means.
+    """
+    sb = get_supabase()
+    org_key = str(org_id)
+    _, day_start_iso, day_end_iso = _dashboard_day_window_utc(None)
+
+    query = (
+        sb.table('attendance')
+        .select(
+            'staff_id, timestamp, camera_id, check_out_timestamp, '
+            'status, capture_channel, check_out_camera_id'
+        )
+        .eq('org_id', org_key)
+        .gte('timestamp', day_start_iso)
+        .lt('timestamp', day_end_iso)
+        .order('timestamp', desc=True)
+    )
+    if branch_id:
+        query = query.eq('branch_id', str(branch_id))
+
+    result = _execute_supabase('get_today_detections_by_staff', lambda: query)
+
+    by_staff: dict = {}
+    for row in (result.data or []):
+        staff_id = str(row.get('staff_id') or '')
+        # Ordered timestamp desc, so the first row per staff_id is the
+        # most recent sighting.
+        if staff_id and staff_id not in by_staff:
+            by_staff[staff_id] = row
+    return by_staff
+
 def get_client_camera_by_id(org_id: str, camera_id: str) -> dict | None:
     from support_db_branches import list_branches
     from support_db_client_users import _branch_maps
