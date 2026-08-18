@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { confirmDestructive } from "../lib/confirmDialogue";
+import { confirmDestructive } from "../utils/confirmDialogue";
 import {
   AlertCircle,
   Calendar,

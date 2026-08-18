@@ -488,9 +488,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [isMobile, hoverExpanded]);
 
-  // Prevent collapse when just hovering out without click
+  // Desktop: collapse on mouse-out. The rail is an overlay, so leaving it
+  // expanded after the pointer moves away permanently covers ~170px of the
+  // page the user is trying to read.
   const handleMouseLeave = useCallback(() => {
     if (isMobile) return;
+    setHoverExpanded(false);
   }, [isMobile]);
 
   const isExpanded = isMobile ? mobileOpen : hoverExpanded;

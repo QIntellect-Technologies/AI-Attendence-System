@@ -346,8 +346,10 @@ export default function LiveCCTVTracking() {
     [filteredByPeopleType, searchTerm],
   );
 
-  // Use cameras from OrgConfigContext if backend returns empty
-  // This is branch-scope aware and dynamically responsive
+  const systemOnline = data.sourceStatus !== "error";
+  const nodeStatus = data.localNodeStatus;
+  const isNodeOffline = Boolean(nodeStatus && !nodeStatus.online);
+
   const displayCameras = useMemo(() => {
     const ensureActiveDetections = (cam: any) => ({
       ...cam,
@@ -392,14 +394,25 @@ export default function LiveCCTVTracking() {
       location: cam.location || cam.name || "Unconfigured",
       branchId: cam.branchId,
       branchName: getBranchName(cam.branchId),
-      status: cam.status || ("Online" as const),
-      activeDetections: 0,
-    }));
-  }, [data.cameras, allCameras, uiBranchIdForCameraFallback, cfg?.branches]);
 
-  const systemOnline = data.sourceStatus !== "error";
-  const nodeStatus = data.localNodeStatus;
-  const isNodeOffline = nodeStatus && !nodeStatus.online;
+      // Never default an unknown status to "Online". A camera that has
+      // reported nothing looks identical to a disconnected one, and
+      // treating that as online renders "0 Detected" — indistinguishable
+      // from an empty room. Unknown must fail closed.
+      status: isNodeOffline
+        ? ("Offline" as const)
+        : cam.status || ("Unknown" as const),
+      // This fallback path has no live detection feed, so the count is not
+      // a measurement — it must never be presented as one.
+      activeDetections: null,
+    }));
+  }, [
+    data.cameras,
+    allCameras,
+    uiBranchIdForCameraFallback,
+    cfg?.branches,
+    isNodeOffline,
+  ]);
 
   return (
     <div
@@ -578,6 +591,7 @@ function Header({
   scopeLabel,
   sourceLabel,
   systemOnline,
+  isNodeOffline,
   refreshing,
   onRefresh,
   terminology,
@@ -586,6 +600,7 @@ function Header({
   scopeLabel: string;
   sourceLabel: string;
   systemOnline: boolean;
+  isNodeOffline?: boolean;
   refreshing: boolean;
   onRefresh: () => Promise<void>;
   terminology: LiveTerminology;
@@ -634,8 +649,9 @@ function Header({
             display: "flex",
             alignItems: "center",
             gap: 8,
-            background: systemOnline ? T.successBg : T.amberBg,
-            border: `1px solid ${systemOnline ? T.teal200 : T.amberBd}`,
+            background:
+              systemOnline && !isNodeOffline ? T.successBg : T.amberBg,
+            border: `1px solid ${systemOnline && !isNodeOffline ? T.teal200 : T.amberBd}`,
             borderRadius: 20,
             padding: "6px 14px",
           }}
@@ -643,20 +659,27 @@ function Header({
           <span
             style={{
               ...liveDotStyle,
-              background: systemOnline ? T.success : T.amber,
-              boxShadow: systemOnline ? `0 0 6px ${T.success}` : "none",
+              background: systemOnline && !isNodeOffline ? T.success : T.amber,
+              boxShadow:
+                systemOnline && !isNodeOffline
+                  ? `0 0 6px ${T.success}`
+                  : "none",
             }}
           />
           <span
             style={{
-              color: systemOnline ? T.success : T.amber,
+              color: systemOnline && !isNodeOffline ? T.success : T.amber,
               fontSize: 11,
               fontWeight: 900,
               textTransform: "uppercase",
               letterSpacing: 0.5,
             }}
           >
-            {systemOnline ? "System Online" : "Source Offline"}
+            {isNodeOffline
+              ? "Local Node Offline"
+              : systemOnline
+                ? "System Online"
+                : "Source Offline"}
           </span>
         </div>
 
@@ -1030,8 +1053,14 @@ function StatCard({ title, value, sub, icon: Icon, color }: StatCardProps) {
 }
 
 function CameraBox({ camera, terminology }: CameraBoxProps) {
-  const online = camera.status !== "Offline";
   const alert = camera.status === "Alert";
+  const offline = camera.status === "Offline";
+  const unknown =
+    !camera.status ||
+    camera.status === "Unknown" ||
+    camera.activeDetections === null ||
+    camera.activeDetections === undefined;
+  const online = !offline && !alert && !unknown;
 
   // Ensure activeDetections is always a number, never undefined
   const safeDetectionCount =
@@ -1101,7 +1130,9 @@ function CameraBox({ camera, terminology }: CameraBoxProps) {
               ? `${safeDetectionCount} ${safePeoplePlural} Detected`
               : alert
                 ? "⚠️ Connection Alert"
-                : "📵 Offline - Fallback Enabled"}
+                : offline
+                  ? "📵 Offline — Fallback Enabled"
+                  : "❔ Status Unknown — No Recent Report"}
           </p>
         </div>
       </div>

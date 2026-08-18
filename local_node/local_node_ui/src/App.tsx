@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { toast, ToastContainer, type Id } from "react-toastify";
 
-import { confirmDestructive } from "./lib/confirmDialogue";
+import { confirmDestructive } from "./utils/confirmDialogue";
 import {
   localNodeApi,
   humanizeError,

@@ -100,8 +100,13 @@ export interface LiveTrackingCamera {
   location: string;
   branchId: number | string;
   branchName: string;
-  status: "Online" | "Alert" | "Offline";
-  activeDetections: number;
+  /** "Unknown" = the camera has not reported recently enough to trust any
+   *  of the fields below. Never collapse it into "Online": an unreported
+   *  camera and an empty room are indistinguishable at the UI otherwise. */
+  status: "Online" | "Alert" | "Offline" | "Unknown";
+  /** null when there is no live detection feed for this camera, so the
+   *  count is not a measurement and must not be rendered as one. */
+  activeDetections: number | null;
   localNodeOffline?: boolean;
   lastHeartbeat?: string | null;
 }
