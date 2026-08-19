@@ -25,7 +25,7 @@
  *   org status, and attendance mode.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft, Download, Loader2 } from "lucide-react";
 import { T } from "./theme";
@@ -45,6 +45,8 @@ type AuthUserLike = {
   id?: number | string | null;
   userId?: number | string | null;
   user_id?: number | string | null;
+  organizationStatus?: string | null;
+  organization_status?: string | null;
 };
 
 type BranchLike = {
@@ -61,8 +63,9 @@ type ConfigLike = {
   modules?: string[];
   attendanceMode?: string | null;
   attendance_mode?: string | null;
-  organizationStatus?: string | null;
-  organization_status?: string | null;
+  // No organizationStatus here on purpose — OrgConfigContext does not put
+  // org status on cfg, it puts it on the auth user. Declaring it here is
+  // what let the old status check compile while silently always passing.
 };
 
 const sameId = (a: unknown, b: unknown): boolean => String(a) === String(b);
@@ -86,12 +89,26 @@ function isLocalAttendanceMode(cfg: ConfigLike): boolean {
   return normalizeKey(cfg.attendanceMode ?? cfg.attendance_mode) === "local";
 }
 
-function isOrgAllowedForInstaller(cfg: ConfigLike): boolean {
+/** Org status lives on the auth user, NOT on cfg.
+ *
+ * OrgConfigContext writes organizationStatus onto the stored currentUser
+ * (see its persist block), and cfg has no such field. Reading it off cfg
+ * meant this check hit the `?? "active"` fallback on every render and
+ * therefore never blocked anything — a suspended org still got an enabled
+ * button that 403s at the backend. Branches.tsx already reads it from the
+ * user; this now matches.
+ *
+ * Allow-list is deliberately the backend's own set — support_db_core.py's
+ * _org_access_allows_client() permits exactly {active, grace_period}. The
+ * previous list here also allowed trial/launched, so a trial org saw an
+ * enabled button that the server always rejected.
+ */
+function isOrgAllowedForInstaller(user: AuthUserLike | null | undefined): boolean {
   const status = normalizeKey(
-    cfg.organizationStatus ?? cfg.organization_status ?? "active",
+    user?.organizationStatus ?? user?.organization_status ?? "active",
   );
 
-  return ["active", "grace_period", "trial", "launched"].includes(status);
+  return ["active", "grace_period"].includes(status);
 }
 
 function isAttendanceModuleEnabled(cfg: ConfigLike): boolean {
@@ -115,17 +132,19 @@ function resolveUserId(user: AuthUserLike | null | undefined): string {
 function installerDisabledReason({
   cfg,
   branch,
+  user,
   userId,
 }: {
   cfg: ConfigLike;
   branch: BranchLike;
+  user: AuthUserLike | null | undefined;
   userId: string;
 }): string | null {
   if (!isLocalAttendanceMode(cfg)) {
     return "Installer is available only for local attendance mode.";
   }
 
-  if (!isOrgAllowedForInstaller(cfg)) {
+  if (!isOrgAllowedForInstaller(user)) {
     return "Installer is unavailable because organization access is not active.";
   }
 
@@ -183,11 +202,30 @@ export const DashboardHeader: React.FC = () => {
     [visibleBranches],
   );
 
-  const isSingleBranchOrg = activeBranches.length === 1;
+  // routes.tsx decides "is this a single-branch org?" from cfg.branches
+  // (activeConfigBranches), while visibleBranches is cfg.branches sliced to
+  // cfg.maxBranches. When those two disagree — a licence cap that doesn't
+  // match the real branch count — routing sends a single-branch org here
+  // but this component saw 2+ and hid the Installer button, which is the
+  // only way such an org can reach it (their Branches tab is redirected
+  // away). Treat the org as single-branch if EITHER source says so.
+  const configBranches = useMemo<BranchLike[]>(
+    () => (Array.isArray(safeCfg.branches) ? safeCfg.branches : []),
+    [safeCfg.branches],
+  );
 
+  const isSingleBranchOrg =
+    activeBranches.length === 1 || configBranches.length === 1;
+
+  // Look the branch up in the full config list, not the sliced one: a branch
+  // trimmed off by maxBranches would otherwise return null here and blank
+  // out the entire header (title, stats and installer) on a route that
+  // BranchDashboard had already validated against cfg.branches.
   const activeBranch = useMemo(
-    () => activeBranches.find((branch) => sameId(branch.id, routeBranchId)),
-    [activeBranches, routeBranchId],
+    () =>
+      configBranches.find((branch) => sameId(branch.id, routeBranchId)) ??
+      activeBranches.find((branch) => sameId(branch.id, routeBranchId)),
+    [activeBranches, configBranches, routeBranchId],
   );
 
   const branchSelector = useBranchSelector(
@@ -196,26 +234,75 @@ export const DashboardHeader: React.FC = () => {
     true,
   );
 
-  const branchStats = useMemo(() => {
-    const staffCount = modules.staff.allItems.filter((member) =>
-      sameId(member.branchId, routeBranchId),
-    ).length;
+  // Staff and attendance rows are matched on EITHER id form.
+  //
+  // staffMappers.toUiBranchId() coerces a branch id to a number and returns 0
+  // when it can't — which is exactly what happens on Supabase tenants, where
+  // branch_id is a UUID (Number(uuid) is NaN). So every staff row arrived
+  // here with branchId === 0 while the route param was "1", nothing matched,
+  // and the header confidently reported "0 staff · 0% attendance" next to a
+  // directory listing four people. The UUID survives on backendBranchId, so
+  // compare against both that and the numeric id.
+  const branchMatchKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (routeBranchId) keys.add(routeBranchId);
+    if (activeBranch) {
+      const backendId = resolveBackendBranchId(activeBranch);
+      if (backendId) keys.add(backendId);
+      if (activeBranch.id !== null && activeBranch.id !== undefined) {
+        keys.add(cleanId(activeBranch.id));
+      }
+    }
+    keys.delete("");
+    return keys;
+  }, [activeBranch, routeBranchId]);
 
-    const attendanceRows = modules.attendance.allItems.filter((record) =>
-      sameId(record.branchId, routeBranchId),
-    );
+  const belongsToBranch = useCallback(
+    (row: { branchId?: unknown; backendBranchId?: unknown }): boolean => {
+      const uiId = cleanId(row.branchId);
+      const backendId = cleanId(
+        (row as { backendBranchId?: unknown; backend_branch_id?: unknown })
+          .backendBranchId ??
+          (row as { backend_branch_id?: unknown }).backend_branch_id,
+      );
+
+      // "0" is toUiBranchId's failure sentinel, not a real branch — ignore it
+      // so it can't collide with a genuine branch whose id is 0.
+      return (
+        (uiId !== "" && uiId !== "0" && branchMatchKeys.has(uiId)) ||
+        (backendId !== "" && branchMatchKeys.has(backendId))
+      );
+    },
+    [branchMatchKeys],
+  );
+
+  const branchStats = useMemo(() => {
+    const staffRows = modules.staff.allItems.filter(belongsToBranch);
+    const attendanceRows = modules.attendance.allItems.filter(belongsToBranch);
 
     const presentCount = attendanceRows.filter((record) => {
       const status = String(record.status || "").toLowerCase();
       return status === "present" || status === "late" || status === "half_day";
     }).length;
 
+    const staffCount = staffRows.length;
     const attendanceRate = staffCount
       ? Math.round((presentCount / staffCount) * 100)
       : 0;
 
-    return { staffCount, attendanceRate };
-  }, [modules.staff.allItems, modules.attendance.allItems, routeBranchId]);
+    // The module stores hydrate in the background, so an empty store means
+    // "not loaded yet", not "this branch has nobody". Reporting a hard 0
+    // during that window is worse than reporting nothing.
+    const hasLoaded =
+      !modules.loading && modules.staff.allItems.length > 0;
+
+    return { staffCount, attendanceRate, hasLoaded };
+  }, [
+    belongsToBranch,
+    modules.loading,
+    modules.staff.allItems,
+    modules.attendance.allItems,
+  ]);
 
   if (!activeBranch) return null;
 
@@ -227,17 +314,22 @@ export const DashboardHeader: React.FC = () => {
   const disabledReason = installerDisabledReason({
     cfg: safeCfg,
     branch: activeBranch,
+    user,
     userId,
   });
 
   const installerDisabled =
     Boolean(disabledReason) || isDownloadingInstaller || !backendBranchId;
 
-  const subtitle = `${branchStats.staffCount} staff · ${branchStats.attendanceRate}% attendance${
-    activeBranch.city || activeBranch.location
-      ? ` · ${activeBranch.city || activeBranch.location}`
-      : ""
-  }`;
+  const branchLocation = activeBranch.city || activeBranch.location || "";
+  const subtitle = [
+    branchStats.hasLoaded
+      ? `${branchStats.staffCount} staff · ${branchStats.attendanceRate}% attendance`
+      : "",
+    branchLocation,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const handleDownloadInstaller = async (): Promise<void> => {
     if (installerDisabled || !backendBranchId) return;
@@ -332,7 +424,10 @@ export const DashboardHeader: React.FC = () => {
               style={iconButtonStyle(installerDisabled)}
             >
               {isDownloadingInstaller ? (
-                <Loader2 size={14} />
+                <Loader2
+                  size={14}
+                  style={{ animation: "spin .8s linear infinite" }}
+                />
               ) : (
                 <Download size={14} />
               )}

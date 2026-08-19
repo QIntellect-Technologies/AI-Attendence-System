@@ -17,6 +17,41 @@
 export type CameraStatus = "Online" | "Normal" | "Alert" | "Offline";
 export type LiveSourceStatus = "ready" | "loading" | "error";
 
+/**
+ * Thrown by every liveStream API call on a non-2xx response.
+ *
+ * `status` lets callers decide whether a failure is worth retrying (503 is
+ * transient, 401/404 are not). `friendly` is the only field safe to render;
+ * `message` may carry a server detail string meant for the console.
+ */
+export class LiveCctvError extends Error {
+  readonly status: number;
+  readonly friendly: string;
+
+  constructor(status: number, friendly: string, detail?: string) {
+    super(detail || friendly);
+    this.name = "LiveCctvError";
+    this.status = status;
+    this.friendly = friendly;
+  }
+}
+
+/**
+ * Maps an HTTP status to text an admin can act on. Says nothing about status
+ * codes or internals — the raw "Live CCTV request failed: 400 Bad Request"
+ * string this replaces was being rendered straight into the dashboard.
+ */
+function friendlyFor(status: number): string {
+  if (status === 401 || status === 403) {
+    return "Your session expired. Sign in again to view camera feeds.";
+  }
+  if (status === 404) return "No camera feed is configured for this branch.";
+  if (status === 400) return "Camera feed unavailable for this branch.";
+  if (status === 429) return "Too many requests. Live updates will resume shortly.";
+  if (status >= 500) return "Camera service is temporarily unavailable.";
+  return "Camera feed unavailable.";
+}
+
 export interface LiveCamera {
   id: string;
   branchId: number | string;
@@ -276,10 +311,18 @@ async function requestJson<T>(
     headers,
   });
 
-  if (!response.ok) {
-    throw new Error(
-      `Live CCTV request failed: ${response.status} ${response.statusText}`,
-    );
+    if (!response.ok) {
+    let detail: string | undefined;
+    try {
+      // The backend returns { error, message } on failure; `message` is for
+      // the console only, never for the UI.
+      const body = await response.json();
+      detail = typeof body?.message === "string" ? body.message : undefined;
+    } catch {
+      // Non-JSON body (HTML error page, empty 502) — friendlyFor covers it.
+    }
+
+    throw new LiveCctvError(response.status, friendlyFor(response.status), detail);
   }
 
   return response.json() as Promise<T>;

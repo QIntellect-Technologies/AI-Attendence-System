@@ -33,6 +33,13 @@ export interface UseBranchSelectorReturn {
   navigateToBranch: (branchId: number) => void;
   isAllBranches: boolean;
   reset: () => void;
+  /**
+   * True when there is more than one branch the current user can actually
+   * pick between. Derived from rawBranches (real branches, post access
+   * filtering) — NOT selectorBranches, which carries the "All Branches"
+   * sentinel and would report 2 for a single-branch org.
+   */
+  hasMultipleBranches: boolean;
 }
 
 interface AuthUser {
@@ -209,7 +216,7 @@ export function useBranchSelector(
     }
   }, [defaultEntry, mode, navigateToBranch, setActiveBranchId]);
 
-  return {
+    return {
     selectorBranches,
     selected,
     onChange,
@@ -217,6 +224,7 @@ export function useBranchSelector(
     navigateToBranch,
     isAllBranches: selectedBranchId === undefined,
     reset,
+    hasMultipleBranches: rawBranches.length > 1,
   };
 }
 

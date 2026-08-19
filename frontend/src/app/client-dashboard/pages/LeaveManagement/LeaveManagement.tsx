@@ -50,7 +50,7 @@ import { useLeaveHistory } from "./hooks/useLeaveHistory";
 import { BranchSelector } from "../../components/ui/BranchSelector";
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import ExportButton from "../../components/ui/ExportButton";
-import { type ExportCsvColumn } from "../../components/ui/ExportCsvButton";
+import { type ExportExcelColumn } from "../../components/ui/ExportExcelButton";
 import DynamicFilterToolbar, {
   type DynamicFilterSection,
 } from "../../components/ui/DynamicFilterToolbar";
@@ -107,13 +107,13 @@ const tabStyle = (isActive: boolean): React.CSSProperties => ({
   color: isActive ? "#fff" : T.textMuted,
 });
 
-// CSV columns for the History tab — kept local to this file (mirrors the
+// Export columns for the History tab — kept local to this file (mirrors the
 // small, page-specific shape useLeaveExport.ts uses for the Leaves tab,
 // but LeaveHistoryRow is a different shape so it doesn't belong in that
 // PendingLeaveItem-specific hook).
 function buildHistoryExportColumns(
   showBranch: boolean,
-): ExportCsvColumn<LeaveHistoryRow>[] {
+): ExportExcelColumn<LeaveHistoryRow>[] {
   return [
     { header: "Staff ID", accessor: (r) => r.staffId },
     { header: "Name", accessor: (r) => r.name },
@@ -852,19 +852,15 @@ export default function LeaveManagement() {
               filename={exportConfig.filename}
               label="Export"
               organization={exportOrganization}
-              csv={{
+              excel={{
                 columns: exportConfig.columns,
-                filters: {
-                  Organization: exportOrganization.name ?? "",
-                  "Report Period": filter.label,
-                  ...exportConfig.metadata,
-                },
-                includeFilterMeta: true,
+                meta: exportConfig.metadata,
               }}
               pdf={{
                 title: "Leave Requests",
                 subtitle: contextLabel,
                 reportPeriod: filter.label,
+                meta: exportConfig.metadata,
                 columns: exportConfig.columns,
               }}
               emptyMessage="No leave requests match the current filters."
@@ -875,13 +871,8 @@ export default function LeaveManagement() {
               filename={`leave-history_${historyYear}`}
               label="Export"
               organization={exportOrganization}
-              csv={{
+              excel={{
                 columns: historyExportColumns,
-                filters: {
-                  Organization: exportOrganization.name ?? "",
-                  "Report Period": String(historyYear),
-                },
-                includeFilterMeta: true,
               }}
               pdf={{
                 title: "Leave History",

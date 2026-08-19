@@ -1286,14 +1286,21 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
   const userOrgId = getUserOrganizationId(user);
 
-  // TEMP DEBUG — remove before commit
+  // Render probe — dev builds only. This was previously unguarded and shipped
+  // to production, logging the signed-in user's id to the browser console on
+  // every render. Kept (rather than deleted) because the render count it
+  // exposes is still unexplained: production showed 150+ renders of this
+  // provider in a single page view. import.meta.env.DEV is statically false
+  // in a production build, so the block is dropped at bundle time.
   const renderCount = useRef(0);
   renderCount.current++;
-  console.log("OrgConfigProvider render", renderCount.current, {
-    isAuthenticated,
-    userId: user?.id,
-    userOrgId,
-  });
+  if (import.meta.env.DEV) {
+    console.log("OrgConfigProvider render", renderCount.current, {
+      isAuthenticated,
+      userId: user?.id,
+      userOrgId,
+    });
+  }
 
   const [organizationId, setOrganizationId] = useState<number | string | null>(
     null,

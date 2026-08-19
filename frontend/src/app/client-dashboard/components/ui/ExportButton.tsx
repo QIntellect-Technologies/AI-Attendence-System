@@ -1,11 +1,18 @@
 /**
  * ExportButton.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Single "Export ▾" trigger with a format dropdown (CSV / PDF Report),
+ * Single "Export ▾" trigger with a format dropdown (Excel / PDF Report),
  * replacing two separate buttons in the toolbar. Reuses the pure, headless
- * build/download functions already exported by ExportCsvButton.tsx and
+ * build/download functions already exported by ExportExcelButton.tsx and
  * ExportPdfButton.tsx — this file adds no new export logic, only the menu
  * chrome that picks which one to run.
+ *
+ * NOTE: plain-CSV export was replaced with formatted Excel (.xlsx) export
+ * across the app — CSV is plain text and cannot carry cell colors, fonts,
+ * borders, or a branded header band, which is what made the old CSV output
+ * look like a raw, unformatted database dump. ExportCsvButton.tsx itself is
+ * unchanged and still available for any future headless/API export flow
+ * that specifically needs raw CSV.
  *
  * Dropdown mechanics (portal + fixed positioning + expand animation) follow
  * the same pattern as BranchSelector.tsx / ModernSelect.tsx:
@@ -22,13 +29,6 @@ import type { JellyButtonAsButton } from "./JellyButton";
 import { T } from "./theme";
 import { useDropdownPosition } from "../../hooks/useDropdownPosition";
 import { useDropdownTransition } from "../../hooks/useDropdownTransition";
-import { formatDisplayDateTime } from "../../utils/formatDate";
-import {
-  buildCsv,
-  downloadCsv,
-  type CsvPrimitive,
-  type ExportCsvColumn,
-} from "./ExportCsvButton";
 import {
   buildPdfDoc,
   downloadPdf,
@@ -38,15 +38,37 @@ import {
   type ExportPdfSummaryItem,
   type ExportPdfOrganization,
 } from "./ExportPdfButton";
+import {
+  buildExcelWorkbook,
+  downloadExcel,
+  type ExcelPrimitive,
+  type ExportExcelColumn,
+  type ExportExcelSummaryItem,
+  type ExportExcelOrganization,
+} from "./ExportExcelButton";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PROPS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface ExportButtonCsvOptions<T> {
-  columns: ExportCsvColumn<T>[];
-  filters?: Record<string, CsvPrimitive>;
-  includeFilterMeta?: boolean;
+export interface ExportButtonExcelOptions<T> {
+  columns: ExportExcelColumn<T>[];
+  /**
+   * Title chrome (title/subtitle/titleTag/reportPeriod) falls back to the
+   * `pdf` config below when omitted here, since both formats share the same
+   * report framing. `meta` and `summary` do NOT fall back: those are filter
+   * context and aggregate rows, which belong in a printed report but corrupt
+   * a spreadsheet meant for sorting and pivoting. Pass them explicitly on
+   * `excel` if a specific export genuinely wants them.
+   */
+  title?: string;
+  subtitle?: string;
+  titleTag?: string;
+  reportPeriod?: string;
+  meta?: Record<string, ExcelPrimitive>;
+  summary?: ExportExcelSummaryItem[];
+  /** Worksheet tab name. Defaults to the resolved title. */
+  sheetName?: string;
 }
 
 export interface ExportButtonPdfOptions<T> {
@@ -68,8 +90,8 @@ export interface ExportButtonPdfOptions<T> {
 
 /**
  * Organization identity for the export. Single source of truth for both
- * formats: rendered in the PDF's header band (name + logo) and as a
- * leading meta row in the CSV, which has no header band to put it in.
+ * formats: rendered in the header band (name + logo) of both the PDF and
+ * the Excel workbook.
  */
 export interface ExportButtonOrganization {
   name?: string;
@@ -96,7 +118,7 @@ export interface ExportButtonProps<T> extends Omit<
   data: T[];
   /** Base filename, without extension — each format appends its own. */
   filename: string;
-  csv: ExportButtonCsvOptions<T>;
+  excel: ExportButtonExcelOptions<T>;
   pdf: ExportButtonPdfOptions<T>;
   /** Organization branding, folded into both export formats automatically. */
   organization?: ExportButtonOrganization;
@@ -112,7 +134,7 @@ function ExportButtonInner<T>(
   {
     data,
     filename,
-    csv,
+    excel,
     pdf,
     organization,
     label = "Export",
@@ -158,24 +180,58 @@ function ExportButtonInner<T>(
     };
   }, [panelRef]);
 
-  const handleExportCsv = () => {
+  // Shared by both PDF and Excel — resolves the org logo URL to embeddable
+  // data: bytes once, rather than duplicating the fetch/try-catch in each
+  // handler. Returns undefined (not just an empty object) when there's
+  // nothing to show, so downstream builders can cleanly omit the header
+  // band's org line instead of rendering an empty one.
+  const resolveOrganizationForExport = async (): Promise<
+    { name?: string; logoDataUrl: string | null } | undefined
+  > => {
+    const logoDataUrl = await resolveImageAsDataUrl(organization?.logoUrl);
+    return organization?.name || logoDataUrl
+      ? { name: organization?.name, logoDataUrl }
+      : undefined;
+  };
+
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  const handleExportExcel = async () => {
     if (isEmpty) {
       window.alert(emptyMessage);
       return;
     }
-    // CSV has no header band, so "Organization" rides along as a leading
-    // meta row instead, and "Exported On" is always appended — both
-    // independent of (and always shown regardless of) the caller's own
-    // opt-in `csv.filters` / `includeFilterMeta`, which keeps its original
-    // behavior for every other module already using this button.
-    const reportInfo: Record<string, CsvPrimitive> = {
-      ...(organization?.name ? { Organization: organization.name } : {}),
-      ...(csv.includeFilterMeta ? csv.filters : undefined),
-      "Exported On": formatDisplayDateTime(new Date()),
-    };
-    const csvString = buildCsv(data, csv.columns, reportInfo, true);
-    downloadCsv(filename, csvString);
-    setOpen(false);
+    setIsExportingExcel(true);
+    try {
+      const exportedAt = new Date();
+      const organizationForExcel: ExportExcelOrganization | undefined =
+        await resolveOrganizationForExport();
+
+      const workbook = buildExcelWorkbook({
+        // Report chrome defaults to the `pdf` config — see
+        // ExportButtonExcelOptions doc comment for why.
+        title: excel.title ?? pdf.title,
+        subtitle: excel.subtitle ?? pdf.subtitle,
+        titleTag: excel.titleTag ?? pdf.titleTag,
+        reportPeriod: excel.reportPeriod ?? pdf.reportPeriod,
+        // Excel deliberately does NOT inherit meta/summary from the PDF config.
+        // A .xlsx is a data file — users sort, filter and pivot it, and leading
+        // context rows shift every column reference and break that. The PDF is
+        // the presentation format and keeps the full filter context.
+        meta: excel.meta,
+        summary: excel.summary,
+        sheetName: excel.sheetName,
+        organization: organizationForExcel,
+        exportedAt,
+        data,
+        columns: excel.columns,
+      });
+      await downloadExcel(filename, workbook);
+      setOpen(false);
+    } finally {
+      setIsExportingExcel(false);
+    }
   };
 
   const handleExportPdf = async () => {
@@ -183,29 +239,31 @@ function ExportButtonInner<T>(
       window.alert(emptyMessage);
       return;
     }
-    const exportedAt = new Date();
-    const logoDataUrl = await resolveImageAsDataUrl(organization?.logoUrl);
-    const organizationForPdf: ExportPdfOrganization | undefined =
-      organization?.name || logoDataUrl
-        ? { name: organization?.name, logoDataUrl }
-        : undefined;
+    setIsExportingPdf(true);
+    try {
+      const exportedAt = new Date();
+      const organizationForPdf: ExportPdfOrganization | undefined =
+        await resolveOrganizationForExport();
 
-    const doc = buildPdfDoc({
-      title: pdf.title,
-      subtitle: pdf.subtitle,
-      titleTag: pdf.titleTag,
-      organization: organizationForPdf,
-      exportedAt,
-      reportPeriod: pdf.reportPeriod,
-      meta: pdf.meta,
-      summary: pdf.summary,
-      otRatePerHour: pdf.otRatePerHour,
-      otRateLabel: pdf.otRateLabel,
-      data,
-      columns: pdf.columns,
-    });
-    downloadPdf(filename, doc);
-    setOpen(false);
+      const doc = buildPdfDoc({
+        title: pdf.title,
+        subtitle: pdf.subtitle,
+        titleTag: pdf.titleTag,
+        organization: organizationForPdf,
+        exportedAt,
+        reportPeriod: pdf.reportPeriod,
+        meta: pdf.meta,
+        summary: pdf.summary,
+        otRatePerHour: pdf.otRatePerHour,
+        otRateLabel: pdf.otRateLabel,
+        data,
+        columns: pdf.columns,
+      });
+      downloadPdf(filename, doc);
+      setOpen(false);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   return (
@@ -257,15 +315,17 @@ function ExportButtonInner<T>(
             <div ref={contentRef}>
               <ExportMenuRow
                 icon={<FileSpreadsheet size={14} color={T.teal600} />}
-                label="Export as CSV"
-                sublabel="Raw rows for spreadsheets"
-                onClick={handleExportCsv}
+                label="Export as Excel"
+                sublabel="Formatted, branded spreadsheet"
+                onClick={handleExportExcel}
+                loading={isExportingExcel}
               />
               <ExportMenuRow
                 icon={<FileText size={14} color={T.teal600} />}
                 label="Export as PDF"
                 sublabel="Formatted report with summary"
                 onClick={handleExportPdf}
+                loading={isExportingPdf}
               />
             </div>
           </div>,
@@ -280,20 +340,24 @@ const ExportMenuRow: React.FC<{
   label: string;
   sublabel: string;
   onClick: () => void;
-}> = ({ icon, label, sublabel, onClick }) => (
+  loading?: boolean;
+}> = ({ icon, label, sublabel, onClick, loading = false }) => (
   <div
     data-dropdown-row
-    onClick={onClick}
+    onClick={loading ? undefined : onClick}
+    aria-busy={loading || undefined}
     style={{
       display: "flex",
       alignItems: "center",
       gap: 10,
       padding: "10px 14px",
-      cursor: "pointer",
-      transition: "background .1s",
+      cursor: loading ? "default" : "pointer",
+      opacity: loading ? 0.6 : 1,
+      transition: "background .1s, opacity .1s",
     }}
     onMouseEnter={(e) => {
-      (e.currentTarget as HTMLDivElement).style.background = T.teal50;
+      if (!loading)
+        (e.currentTarget as HTMLDivElement).style.background = T.teal50;
     }}
     onMouseLeave={(e) => {
       (e.currentTarget as HTMLDivElement).style.background = "transparent";
@@ -315,7 +379,7 @@ const ExportMenuRow: React.FC<{
     </span>
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: T.head }}>
-        {label}
+        {loading ? "Generating…" : label}
       </div>
       <div style={{ fontSize: 10, color: T.muted }}>{sublabel}</div>
     </div>

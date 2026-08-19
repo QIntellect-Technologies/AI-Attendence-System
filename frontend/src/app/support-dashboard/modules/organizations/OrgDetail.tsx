@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   KeyRound,
   Loader2,
+  Copy,
   Pencil,
   Plus,
   RefreshCw,
@@ -111,6 +112,7 @@ const T = {
   bgCard: "#ffffff",
   textHeading: "#1a699f",
   text: "#334155",
+  textBody: "#334155",
   textMuted: "#64748b",
   textLight: "#94a3b8",
   red: "#ef4444",
@@ -856,11 +858,13 @@ function OverviewTab({
                 setProfile((p) => ({ ...p, contact_phone }))
               }
             />
-            <EditField
-              label="Org Type"
-              value={profile.org_type}
-              onChange={(org_type) => setProfile((p) => ({ ...p, org_type }))}
-            />
+            {/*
+              Org Type is set by the Business Template selector further down
+              this page (the "Change Template" panel), which is the single
+              source of truth. Editing it here as free text let the two drift
+              apart on an existing org — the same redundancy that was removed
+              from CreateOrganizationModal.
+            */}
             <label>
               <span style={labelStyle}>Attendance Mode</span>
               <select
@@ -986,6 +990,9 @@ function OverviewTab({
               disabled={templatesLoading || isUpdatingTemplate}
               onChange={(nextBusinessType) => {
                 setBusinessType(nextBusinessType);
+                // org_type mirrors business_type — the free-text editor for it
+                // was removed, so keep the derived value current here.
+                setProfile((p) => ({ ...p, org_type: nextBusinessType }));
                 const nextTemplate = templates.find(
                   (template) =>
                     String(template.business_type) === String(nextBusinessType),
@@ -2735,6 +2742,16 @@ function DataAccessTab({
   );
 }
 
+/**
+ * Opens the support agent's own mail client with recipient, subject and
+ * body pre-filled — no provider, no server-side send, but one click
+ * instead of copy-switch-paste.
+ */
+function buildInviteMailto(to: string, subject: string, body: string): string {
+  const params = new URLSearchParams({ subject, body });
+  return `mailto:${encodeURIComponent(to)}?${params.toString()}`;
+}
+
 function InviteTab({ org }: { org: Organization }) {
   const [email, setEmail] = useState(org.contact_email || "");
   const [fullName, setFullName] = useState(`${org.name} Admin`);
@@ -2747,6 +2764,12 @@ function InviteTab({ org }: { org: Organization }) {
   > | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const subject = useMemo(
+    () => `Your ${org.name} dashboard access — QIntellect AttendAI`,
+    [org.name],
+  );
 
   const message = useMemo(() => {
     if (!invite) return "";
@@ -2781,6 +2804,7 @@ function InviteTab({ org }: { org: Organization }) {
       const createdInvite = await organizationsApi.inviteClient(org.id, {
         email: email.trim(),
         full_name: fullName.trim(),
+        login_url: `${window.location.origin}/login`,
       });
       setInvite(createdInvite);
     } catch (err) {
@@ -2792,11 +2816,46 @@ function InviteTab({ org }: { org: Organization }) {
 
   const copyInvite = async () => {
     if (!message) return;
+    setError(null);
     try {
       await navigator.clipboard.writeText(message);
+      setNotice("Invite text copied.");
     } catch {
-      // Dev browsers may block clipboard. User can still copy from textarea.
+      // clipboard API needs a secure context and fails silently on plain http.
+      // The old bare catch made the button look dead — surface it instead.
+      setNotice(null);
+      setError(
+        "Could not copy automatically. Select the text above and copy manually.",
+      );
     }
+  };
+
+  const openEmail = () => {
+    if (!invite?.email) return;
+    setError(null);
+
+    // mailto: is capped near 2,048 chars on Windows and truncated by several
+    // mail clients. The full invite (deal summary included) is well past that,
+    // so the body carries only the credentials block — the complete text stays
+    // on the Copy button.
+    const shortBody = [
+      `Dear ${invite.full_name || "Client"},`,
+      "",
+      "Welcome to QIntellect AttendAI. Your organization dashboard is ready.",
+      "",
+      "Login Details",
+      `Dashboard URL: ${invite.login_url}`,
+      `Email: ${invite.email}`,
+      `Temporary Password: ${invite.temporary_password}`,
+      "",
+      "For security, please change your password after your first login.",
+      "",
+      "Regards,",
+      "QIntellect Support Team",
+    ].join("\n");
+
+    setNotice("Opening your email app…");
+    window.location.href = buildInviteMailto(invite.email, subject, shortBody);
   };
 
   return (
@@ -2874,13 +2933,35 @@ function InviteTab({ org }: { org: Organization }) {
               marginBottom: 10,
             }}
           />
-          <button
-            type="button"
-            onClick={() => void copyInvite()}
-            style={secondaryButton()}
-          >
-            <CheckCircle2 size={14} /> Copy Invite Text
-          </button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => void copyInvite()}
+              style={secondaryButton()}
+            >
+              <Copy size={14} /> Copy Invite Text
+            </button>
+          </div>
+
+          {notice && (
+            <div
+              style={{
+                marginTop: 10,
+                color: T.textMuted,
+                fontSize: 11,
+                fontWeight: 800,
+              }}
+            >
+              <CheckCircle2 size={12} style={{ verticalAlign: "-2px" }} />{" "}
+              {notice}
+            </div>
+          )}
+
+          {error && (
+            <div style={{ marginTop: 10 }}>
+              <ErrorBox message={error} />
+            </div>
+          )}
         </SectionCard>
       )}
     </div>

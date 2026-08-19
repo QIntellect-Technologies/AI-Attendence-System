@@ -29,7 +29,8 @@ const Login = lazy(() => import("./pages/Login"));
 const OnboardingWizard = lazy(
   () => import("./pages/onboarding/OnboardingWizard"),
 );
-const AdminLayout = lazy(() => import("./layouts/AdminLayout"));
+// const AdminLayout = lazy(() => import("./layouts/AdminLayout"));
+import AdminLayout from "./layouts/AdminLayout";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const BranchesModule = lazy(() => import("./pages/Branches"));
 const AdminSettings = lazy(() => import("./pages/Settings/Settings"));

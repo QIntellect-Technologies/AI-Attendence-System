@@ -55,7 +55,16 @@ def _load_reportlab():
 
 
 def _invoice_number(invoice: Mapping[str, Any]) -> str:
-    return _clean(invoice.get("invoice_number") or invoice.get("number") or invoice.get("id"), "Not specified")
+    number = invoice.get("invoice_number") or invoice.get("number")
+    if number:
+        return _clean(number, "Not specified")
+    # Older invoices created before human-readable numbering was added don't
+    # have an invoice_number yet - fall back to a short, readable id instead
+    # of the full raw UUID.
+    raw_id = str(invoice.get("id") or "").strip()
+    if raw_id:
+        return f"INV-{raw_id[:8].upper()}"
+    return "Not specified"
 
 
 def build_invoice_pdf_bytes(
@@ -155,7 +164,12 @@ def build_invoice_pdf_bytes(
     story.append(_p("Payment Instructions", h2))
     story.append(_p(payment_instructions or "Please complete payment using the payment method agreed with QIntellect Support. After payment, share the payment proof with our team so your invoice can be marked as paid.", body))
     story.append(Spacer(1, 10))
-    story.append(_p(f"Regards,<br/>QIntellect Support Team<br/>{support_contact or ''}", small))
+    default_team_name = "QIntellect Support Team"
+    contact = str(support_contact or "").strip()
+    signature_html = f"Regards,{default_team_name}"
+    if contact and contact != default_team_name:
+        signature_html += f"<br/>{contact}"
+    story.append(_p(signature_html, small))
 
     doc.build(story)
     return buffer.getvalue()

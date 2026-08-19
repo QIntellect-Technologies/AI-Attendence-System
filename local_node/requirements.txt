@@ -6,3 +6,7 @@ pydantic==2.8.2
 cryptography==42.0.8
 numpy==1.26.4
 opencv-python==4.10.0.84
+insightface==0.7.3
+scikit-image==0.22.0
+onnxruntime-gpu==1.19.2
+tzdata==2024.1

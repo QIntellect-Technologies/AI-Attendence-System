@@ -79,18 +79,52 @@ def list_invoices(org_id: str) -> list[dict]:
     )
     return result.data or []
 
+def _generate_invoice_number(sb) -> str:
+    """
+    Human-readable invoice number, e.g. INV-2026-0001, instead of exposing
+    the raw invoice UUID to clients. Sequential per calendar year, based on
+    how many invoices already exist for that year. Falls back to a
+    timestamp-based suffix if a race with another insert causes a collision.
+    """
+    year = datetime.now(timezone.utc).year
+    prefix = f"INV-{year}-"
+    try:
+        count_result = (
+            sb.table('invoices')
+            .select('id', count='exact')
+            .gte('created_at', f'{year}-01-01T00:00:00+00:00')
+            .lt('created_at', f'{year + 1}-01-01T00:00:00+00:00')
+            .execute()
+        )
+        next_seq = (count_result.count or 0) + 1
+    except Exception:
+        next_seq = 1
+    return f"{prefix}{next_seq:04d}"
+
 def create_invoice(org_id: str, amount: float, due_date: str,
                    grace_period_days: int = 7, notes: str = None) -> dict:
     """Phase 2, Step 6. Creates first invoice for a new org."""
     sb = get_supabase()
-    result = sb.table('invoices').insert({
+    invoice_number = _generate_invoice_number(sb)
+    payload = {
         'org_id':           org_id,
         'amount':           amount,
         'due_date':         due_date,
         'grace_period_days': grace_period_days,
         'status':           'pending',
         'notes':            notes,
-    }).execute()
+        'invoice_number':   invoice_number,
+    }
+    try:
+        result = sb.table('invoices').insert(payload).execute()
+    except Exception as exc:
+        # Unique constraint race on invoice_number (concurrent invoice
+        # creation) - retry once with a timestamp-based tiebreaker.
+        if 'invoice_number' in str(exc).lower() or 'duplicate' in str(exc).lower():
+            payload['invoice_number'] = f"{invoice_number}-{int(time.time() * 1000) % 10000:04d}"
+            result = sb.table('invoices').insert(payload).execute()
+        else:
+            raise
 
     if not result.data:
         raise RuntimeError('Failed to create invoice')

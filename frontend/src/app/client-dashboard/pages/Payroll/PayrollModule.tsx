@@ -847,24 +847,32 @@ export default function PayrollModule() {
     [payrollDateFilter.range.startDate, payrollDateFilter.range.endDate],
   );
 
-  // Org identity fed into ExportButton — rendered in the PDF header band
-  // and as a meta row in the CSV.
+  // Org identity fed into ExportButton — rendered in the header band of
+  // both the Excel workbook and the PDF.
   const exportOrganization = useMemo(
     () => ({ name: cfg.orgName || undefined, logoUrl: cfg.logo }),
     [cfg.orgName, cfg.logo],
   );
 
-  // Single source of truth for the export table shape — CSV and PDF used
+  // Single source of truth for the export table shape — Excel and PDF used
   // to carry two hand-duplicated ~14-field column lists that only
   // differed by PKR formatting/alignment, which is exactly the kind of
   // drift that lets one format silently fall out of sync with the other.
   // `staffId` (an internal UUID, not something anyone downstream needs)
   // and `branchName` are deliberately left out — see chat request to drop
   // both from every export.
+  //
+  // "Rs" currency format for Excel cells — the native numeric value stays
+  // sortable/summable in the spreadsheet while still displaying formatted,
+  // unlike the PDF path which has to bake the currency symbol into a
+  // string via `pdfAccessor`. `numFmt` is a no-op for any column whose
+  // accessor isn't numeric.
+  const PKR_NUM_FMT = '"Rs" #,##0';
+
   const payrollExportFields = useMemo<
     Array<{
       header: string;
-      /** Raw value — used as-is for CSV. */
+      /** Raw value — used as-is for the Excel cell's native value. */
       accessor: (row: PayrollRow) => PdfPrimitive;
       /** Formatted override for the PDF (e.g. currency). Falls back to
        *  `accessor` when omitted. Typed explicitly (rather than left to
@@ -872,6 +880,9 @@ export default function PayrollModule() {
        *  `.pdfAccessor` is safe to read on all of them below. */
       pdfAccessor?: (row: PayrollRow) => PdfPrimitive;
       align?: "left" | "right" | "center";
+      /** Excel number format — set on currency columns so the cell renders
+       *  as native, formatted currency instead of a plain number/string. */
+      numFmt?: string;
     }>
   >(
     () => [
@@ -884,12 +895,14 @@ export default function PayrollModule() {
         accessor: (row: PayrollRow) => row.baseSalary,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.baseSalary),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       {
         header: "Allowances",
         accessor: (row: PayrollRow) => row.allowances,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.allowances),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       {
         header: "Present Days",
@@ -906,12 +919,14 @@ export default function PayrollModule() {
         accessor: (row: PayrollRow) => row.otRate,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.otRate),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       {
         header: "OT Pay",
         accessor: (row: PayrollRow) => row.overtimeAmount,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.overtimeAmount),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       {
         header: "Late Comings",
@@ -928,21 +943,28 @@ export default function PayrollModule() {
         accessor: (row: PayrollRow) => row.deductions,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.deductions),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       {
         header: "Net Salary",
         accessor: (row: PayrollRow) => row.netPay,
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.netPay),
         align: "right" as const,
+        numFmt: PKR_NUM_FMT,
       },
       { header: "Status", accessor: (row: PayrollRow) => row.status },
     ],
     [otRatePerHour],
   );
 
-  const payrollCsvColumns = useMemo(
+  const payrollExcelColumns = useMemo(
     () =>
-      payrollExportFields.map(({ header, accessor }) => ({ header, accessor })),
+      payrollExportFields.map(({ header, accessor, align, numFmt }) => ({
+        header,
+        accessor,
+        align,
+        numFmt,
+      })),
     [payrollExportFields],
   );
 
@@ -1501,10 +1523,8 @@ export default function PayrollModule() {
             filename={`Payroll_${contextLabel}_${selectedMonth}_${selectedYear}`}
             data={visibleRows}
             organization={exportOrganization}
-            csv={{
-              columns: payrollCsvColumns,
-              filters: { Period: reportPeriodLabel },
-              includeFilterMeta: true,
+            excel={{
+              columns: payrollExcelColumns,
             }}
             pdf={{
               title: "Payroll Report",

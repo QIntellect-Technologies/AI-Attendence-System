@@ -1,9 +1,9 @@
 """
-support_invite_message.py
+support_invoice_message.py
 ──────────────────────────────────────────────────────────────────────────────
-Builds the full client invite message from support-owned deal settings.
+Build invoice subject/message from real support-owned organization deal data.
 
-No DB calls. Caller passes organization, branches, modules, latest invoice.
+No DB calls. Caller passes org, invoice, modules, branches.
 """
 
 from __future__ import annotations
@@ -42,8 +42,7 @@ def _labels(org: Mapping[str, Any]) -> Mapping[str, str]:
 
 def _people_label(org: Mapping[str, Any], people_type: Any) -> str:
     key = str(people_type or "").strip().lower()
-    labels = _labels(org)
-    return str(labels.get(key) or key.replace("_", " ").title() or "Not specified")
+    return str(_labels(org).get(key) or key.replace("_", " ").title() or "Not specified")
 
 
 def _people_list_label(org: Mapping[str, Any], values: Any) -> str:
@@ -72,15 +71,11 @@ def _structure_summary(org: Mapping[str, Any]) -> str:
     structures = _cfg(org).get("structures")
     if not isinstance(structures, Mapping) or not structures:
         return "Not specified"
-    lines: list[str] = []
+    lines = []
     for people_type, structure in structures.items():
         if not isinstance(structure, Mapping):
             continue
-        units = [
-            _title(value)
-            for _, value in sorted(structure.items())
-            if str(value or "").strip()
-        ]
+        units = [_title(value) for _, value in sorted(structure.items()) if str(value or "").strip()]
         if units:
             lines.append(f"{_people_label(org, people_type)}: {' → '.join(units)}")
     return "\n".join(lines) or "Not specified"
@@ -89,7 +84,7 @@ def _structure_summary(org: Mapping[str, Any]) -> str:
 def _module_summary(modules: Sequence[Mapping[str, Any]] | Sequence[str] | None) -> str:
     if not modules:
         return "No purchased modules listed"
-    labels: list[str] = []
+    labels = []
     for item in modules:
         if isinstance(item, Mapping):
             if str(item.get("status") or "active").lower() not in {"active", "purchased"}:
@@ -105,43 +100,32 @@ def _module_summary(modules: Sequence[Mapping[str, Any]] | Sequence[str] | None)
 def _branch_summary(branches: Sequence[Mapping[str, Any]] | None) -> str:
     if not branches:
         return "No branches configured yet"
-    lines = []
-    for branch in branches:
-        name = _clean(branch.get("name"), "Branch")
-        location = _clean(branch.get("location"), "No location")
-        capacity = _clean(branch.get("max_staff_capacity"), "Not specified")
-        lines.append(f"- {name} — {location} — Max size: {capacity}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"- {_clean(b.get('name'), 'Branch')} — {_clean(b.get('location'), 'No location')} — Max size: {_clean(b.get('max_staff_capacity'))}"
+        for b in branches
+    )
 
 
-def _attendance_summary(org: Mapping[str, Any]) -> str:
-    cfg = _cfg(org)
-    attendance_mode = _title(org.get("attendance_mode") or "cloud")
-    attendance_types = org.get("attendance_people_types") or cfg.get("attendance_people_types") or org.get("enabled_people_types") or cfg.get("enabled_people_types")
-    threshold = org.get("node_offline_threshold_mins")
-    lines = [
-        f"Attendance Mode: {attendance_mode}",
-        f"Attendance Enabled For: {_people_list_label(org, attendance_types)}",
-    ]
-    if str(org.get("attendance_mode") or "").lower() == "local":
-        lines.append(f"Node Offline Threshold: {_clean(threshold, '10')} minutes")
-    return "\n".join(lines)
+def _signature_lines(support_contact: Any) -> list[str]:
+    default_team_name = "QIntellect Support Team"
+    contact = str(support_contact or "").strip()
+    lines = ["Regards,", default_team_name]
+    if contact and contact != default_team_name:
+        lines.append(contact)
+    return lines
 
 
-def _invoice_lines(invoice: Mapping[str, Any] | None) -> list[str]:
-    if not invoice:
-        return [
-            "Billing Cycle: Not specified",
-            "First Invoice Amount: Not specified",
-            "Due Date: Not specified",
-            "Grace Period: Not specified",
-        ]
-    return [
-        f"Billing Cycle: {_clean(invoice.get('billing_cycle'))}",
-        f"First Invoice Amount: {_money(invoice.get('amount'))}",
-        f"Due Date: {_clean(invoice.get('due_date'))}",
-        f"Grace Period: {_clean(invoice.get('grace_period_days'), '0')} days",
-    ]
+def _invoice_number(invoice: Mapping[str, Any]) -> str:
+    number = invoice.get("invoice_number") or invoice.get("number")
+    if number:
+        return _clean(number, "Not specified")
+    # Older invoices created before human-readable numbering was added don't
+    # have an invoice_number yet - fall back to a short, readable id instead
+    # of the full raw UUID.
+    raw_id = str(invoice.get("id") or "").strip()
+    if raw_id:
+        return f"INV-{raw_id[:8].upper()}"
+    return "Not specified"
 
 
 def build_client_invite_message(
@@ -156,44 +140,95 @@ def build_client_invite_message(
     latest_invoice: Mapping[str, Any] | None = None,
     support_contact: str = "QIntellect Support Team",
 ) -> str:
-    cfg = _cfg(organization)
-    enabled_types = organization.get("enabled_people_types") or cfg.get("enabled_people_types")
-    attendance_types = organization.get("attendance_people_types") or cfg.get("attendance_people_types") or enabled_types
-    primary = organization.get("primary_people_type") or cfg.get("primary_people_type")
+    org = organization or {}
+    cfg = _cfg(org)
+    enabled_types = org.get("enabled_people_types") or cfg.get("enabled_people_types")
+    attendance_types = org.get("attendance_people_types") or cfg.get("attendance_people_types") or enabled_types
 
-    billing_lines = _invoice_lines(latest_invoice)
+    invoice_lines: list[str] = []
+    if latest_invoice:
+        invoice_lines = [
+            "",
+            "Latest Invoice",
+            f"Invoice Number: {_invoice_number(latest_invoice)}",
+            f"Amount: {_money(latest_invoice.get('amount'))}",
+            f"Due Date: {_clean(latest_invoice.get('due_date'))}",
+            f"Status: {_title(latest_invoice.get('status') or 'pending')}",
+        ]
 
     return "\n".join([
         f"Dear {_clean(client_name, 'Client')},",
         "",
-        "Welcome to QIntellect AttendAI.",
-        "",
-        "Your organization dashboard has been created according to the agreed setup and commercial configuration. Please find your dashboard access details and applied settings below.",
+        f"Welcome to QIntellect AttendAI! An account has been created for you on behalf of "
+        f"{_clean(org.get('name'), 'your organization')}.",
         "",
         "Login Details",
-        f"Dashboard URL: {_clean(login_url)}",
-        f"Email: {_clean(client_email)}",
-        f"Temporary Password: {_clean(temporary_password)}",
+        f"Login URL: {_clean(login_url, 'Not specified')}",
+        f"Email: {_clean(client_email, 'Not specified')}",
+        f"Temporary Password: {_clean(temporary_password, 'Not specified')}",
         "",
-        "For security, please change your password after your first login.",
+        "You will be asked to set a new password the first time you log in.",
         "",
-        "Organization Setup",
-        f"Organization Name: {_clean(organization.get('name'))}",
-        f"Organization Type: {_business_label(organization)}",
-        f"Attendance Mode: {_title(organization.get('attendance_mode') or 'cloud')}",
-        f"Maximum Branches Allowed: {_clean(organization.get('max_branches'))}",
-        "Max size of each branch",
-        _branch_summary(branches),
-        f"Current Access Status: {_title(organization.get('status'))}",
-        "",
-        "Business Template Applied",
-        f"Template: {_business_label(organization)}",
-        f"Primary People Type: {_people_label(organization, primary)}",
-        f"Enabled People Types: {_people_list_label(organization, enabled_types)}",
-        f"Attendance Enabled For: {_people_list_label(organization, attendance_types)}",
+        "Organization Details",
+        f"Organization Type: {_business_label(org)}",
+        f"Attendance Mode: {_title(org.get('attendance_mode') or 'cloud')}",
+        f"Maximum Branches: {_clean(org.get('max_branches'))}",
+        f"Enabled People Types: {_people_list_label(org, enabled_types)}",
+        f"Attendance Enabled For: {_people_list_label(org, attendance_types)}",
         "",
         "Structure Configuration",
-        _structure_summary(organization),
+        _structure_summary(org),
+        "",
+        "Purchased Modules",
+        _module_summary(modules),
+        "",
+        "Branch Configuration",
+        _branch_summary(branches),
+        *invoice_lines,
+        "",
+        "If you have any questions or need assistance getting started, please don't hesitate to reach out.",
+        "",
+        *_signature_lines(support_contact),
+    ])
+
+
+def build_invoice_subject(org: Mapping[str, Any], invoice: Mapping[str, Any]) -> str:
+    return f"QIntellect AttendAI Invoice {_invoice_number(invoice)} — {_clean(org.get('name'), 'Organization')}"
+
+
+def build_invoice_message(
+    *,
+    org: Mapping[str, Any],
+    invoice: Mapping[str, Any],
+    modules: Sequence[Mapping[str, Any]] | Sequence[str] | None = None,
+    branches: Sequence[Mapping[str, Any]] | None = None,
+    support_contact: str = "QIntellect Support Team",
+    payment_instructions: str | None = None,
+) -> str:
+    cfg = _cfg(org)
+    enabled_types = org.get("enabled_people_types") or cfg.get("enabled_people_types")
+    attendance_types = org.get("attendance_people_types") or cfg.get("attendance_people_types") or enabled_types
+    return "\n".join([
+        f"Dear {_clean(org.get('name'), 'Client')},",
+        "",
+        "Please find your QIntellect AttendAI invoice details below.",
+        "",
+        "Invoice Details",
+        f"Invoice Number: {_invoice_number(invoice)}",
+        f"Amount: {_money(invoice.get('amount'))}",
+        f"Due Date: {_clean(invoice.get('due_date'))}",
+        f"Grace Period: {_clean(invoice.get('grace_period_days'), '0')} days",
+        f"Status: {_title(invoice.get('status') or 'pending')}",
+        "",
+        "Applied Deal Settings",
+        f"Organization Type: {_business_label(org)}",
+        f"Attendance Mode: {_title(org.get('attendance_mode') or 'cloud')}",
+        f"Maximum Branches: {_clean(org.get('max_branches'))}",
+        f"Enabled People Types: {_people_list_label(org, enabled_types)}",
+        f"Attendance Enabled For: {_people_list_label(org, attendance_types)}",
+        "",
+        "Structure Configuration",
+        _structure_summary(org),
         "",
         "Purchased Modules",
         _module_summary(modules),
@@ -201,41 +236,8 @@ def build_client_invite_message(
         "Branch Configuration",
         _branch_summary(branches),
         "",
-        "Attendance Configuration",
-        _attendance_summary(organization),
+        "Payment Instructions",
+        payment_instructions or "Please complete payment using the payment method agreed with QIntellect Support. After payment, share payment proof with our team so the invoice can be marked as paid.",
         "",
-        "Important Access Rules",
-        "Your dashboard has been configured according to the purchased package and agreed deal. The following settings are controlled by QIntellect Support and cannot be changed from the Client Dashboard:",
-        "",
-        "- Organization type and business template",
-        "- Attendance mode",
-        "- Purchased modules",
-        "- Maximum branch limit",
-        "- Branch capacity limits",
-        "- Billing and subscription status",
-        "- Attendance people-type scope",
-        "",
-        "You may configure your operational data inside the dashboard, such as organization profile details, allowed branch-level setup, cameras, departments/classes/sections where applicable, staff/student/worker records, and other enabled module data.",
-        "",
-        "Local Attendance Node Setup",
-        "If your organization is configured in Local Attendance Mode, each branch may require a local attendance node installed on the branch machine. The installer and activation token will be provided from the dashboard or by QIntellect Support according to your branch setup.",
-        "",
-        "Billing Information",
-        *billing_lines,
-        "",
-        "Your dashboard access remains active according to the invoice and grace-period policy agreed in the deal.",
-        "",
-        "Next Steps",
-        "",
-        "1. Login using the credentials above.",
-        "2. Change your temporary password.",
-        "3. Complete the onboarding/setup form.",
-        "4. Add your operational configuration such as logo, branch setup details, cameras, and people records.",
-        "5. Contact QIntellect Support if any commercial setting needs to be changed.",
-        "",
-        "Please keep your login credentials secure and do not share them with unauthorized users.",
-        "",
-        "Regards,",
-        "QIntellect Support Team",
-        _clean(support_contact, ""),
+        *_signature_lines(support_contact),
     ])

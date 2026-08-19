@@ -52,8 +52,18 @@ from shared_face_engine.package_format import parse_embedding_package, PackageIm
 
 logger = get_logger(__name__)
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 # Initialize Flask app
 app = Flask(__name__)
+
+# Railway terminates TLS at its edge and forwards to gunicorn over plain
+# HTTP, so request.host_url reports "http://" without this — and that value
+# is what /v1/activate hands back to the node as railway_api_base_url.
+# The node then stores an http:// URL, Railway 301-redirects it, and
+# requests downgrades POST to GET on the redirect: heartbeat and
+# push-attendance silently die while GET config polls keep working.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # ─── CORS ──────────────────────────────────────────────────────
 # Was a bare CORS(app), i.e. Access-Control-Allow-Origin: * on every route.
@@ -2333,6 +2343,10 @@ def api_client_branch_node_installer(branch_id):
         ).strip().rstrip('/')
         use_public_ip = bool(data.get('use_public_ip', False))
 
+        # token carries branch_name (set in create_branch_install_token);
+        # pass that, NOT the token dict — see installer_packager.installer_filename.
+        branch_label = token.get('branch_name') if isinstance(token, dict) else None
+
         if package_type == 'exe':
             package = build_node_installer_exe(
                 project_root=Path(__file__).resolve().parent,
@@ -2345,7 +2359,7 @@ def api_client_branch_node_installer(branch_id):
                 package,
                 mimetype='application/vnd.microsoft.portable-executable',
                 as_attachment=True,
-                download_name=node_exe_installer_filename(token),
+                download_name=node_exe_installer_filename(branch_label),
             )
 
         package = build_node_installer_zip(
@@ -2359,7 +2373,7 @@ def api_client_branch_node_installer(branch_id):
             package,
             mimetype='application/zip',
             as_attachment=True,
-            download_name=node_installer_filename(token),
+            download_name=node_installer_filename(branch_label),
         )
     except ValueError as e:
         return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 400

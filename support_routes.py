@@ -13,6 +13,7 @@ import support_db as db
 import login_throttle
 from logger_config import get_logger
 from pathlib import Path
+from supabase_client import get_supabase
 from installer_packager import (
     build_node_installer_exe,
     build_node_installer_zip,
@@ -492,6 +493,10 @@ def download_branch_node_installer(org_id, branch_id):
         if package_type not in {"exe", "zip"}:
             return _err("package_type must be exe or zip", 400)
 
+        # branch_name comes back on the token row; never pass the token
+        # dict itself here (see installer_packager.installer_filename).
+        branch_label = token.get("branch_name") if isinstance(token, dict) else None
+
         if package_type == "exe":
             package = build_node_installer_exe(
                 project_root=Path(__file__).resolve().parent,
@@ -504,7 +509,7 @@ def download_branch_node_installer(org_id, branch_id):
                 package,
                 mimetype="application/vnd.microsoft.portable-executable",
                 as_attachment=True,
-                download_name=node_exe_installer_filename(token),
+                download_name=node_exe_installer_filename(branch_label),
             )
 
         package = build_node_installer_zip(
@@ -519,7 +524,7 @@ def download_branch_node_installer(org_id, branch_id):
             package,
             mimetype="application/zip",
             as_attachment=True,
-            download_name=node_installer_filename(token),
+            download_name=node_installer_filename(branch_label),
         )
 
     return _handle(_run)
@@ -650,7 +655,7 @@ def get_invoice_message(invoice_id):
     """Preview the professional invoice message before manual send."""
     def _run():
         data = build_invoice_delivery_message(
-            db.get_supabase(),
+            get_supabase(),
             db.get_organization,
             invoice_id,
         )
@@ -666,7 +671,7 @@ def mark_invoice_sent(invoice_id):
     def _run():
         payload = request.get_json(silent=True) or {}
         invoice = mark_invoice_sent_manually(
-            db.get_supabase(),
+            get_supabase(),
             invoice_id,
             sent_by=g.support_user["id"],
             sent_to=payload.get("sent_to"),
@@ -684,7 +689,7 @@ def download_invoice_pdf(invoice_id):
     """Download professional invoice PDF generated from source-of-truth deal data."""
     def _run():
         pdf_bytes, filename = build_invoice_pdf(
-            db.get_supabase(),
+            get_supabase(),
             db.get_organization,
             invoice_id,
         )

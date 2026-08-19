@@ -215,6 +215,12 @@ def _cuda_provider_probe_succeeds(models_root: Path, timeout: int = 30) -> bool:
     import subprocess
     import sys
 
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        # sys.executable is the node exe here, so the subprocess probe would
+        # relaunch the application instead of running Python. Skip it and let
+        # provider init happen normally.
+        return True
+
     det_model = _target_model_path(models_root) / "det_10g.onnx"
     if not det_model.exists():
         return False

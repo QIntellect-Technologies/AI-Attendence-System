@@ -83,9 +83,12 @@ export async function downloadClientNodeInstaller({
 
   const blob = await response.blob();
   const contentDisposition = response.headers.get("content-disposition");
+  // Fallback only — the server normally supplies a branch-named filename.
+  // Deliberately no branch id here: this is the name the user sees in their
+  // Downloads folder, and a raw UUID is noise to them.
   const filename =
     filenameFromContentDisposition(contentDisposition) ||
-    `QIntellectAttendanceNodeSetup-${cleanBranchId}.${packageType}`;
+    `QIntellectAttendanceNodeSetup.${packageType}`;
 
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

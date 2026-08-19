@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import cv2
-from local_node.config_store import write_runtime_status
+from local_node.config_store import read_runtime_status, write_runtime_status
 from local_node.recognition_engine import detect_and_extract, FaceEngineUnavailableError
 from local_node import local_db
 from local_node import shift_gate
@@ -468,6 +468,7 @@ class CameraStreamManager:
                     state.camera_id, exc,
                 )
                 write_runtime_status({
+                    **read_runtime_status(),
                     "cycle_status": "error",
                     "last_error": f"Detection error ({state.camera_id}): {exc}",
                 })
@@ -487,6 +488,7 @@ class CameraStreamManager:
                 state.camera_id, exc,
             )
             write_runtime_status({
+                **read_runtime_status(),
                 "cycle_status": "error",
                 "last_error": f"Face engine unavailable ({state.camera_id}): {exc}",
             })

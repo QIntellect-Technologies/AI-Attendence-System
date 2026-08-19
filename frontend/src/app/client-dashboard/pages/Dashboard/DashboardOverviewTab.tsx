@@ -294,7 +294,7 @@ const DashboardOverviewTab: React.FC = () => {
             />
           )}
 
-          {data.branchFilterOptions.length > 1 && (
+          {branch.hasMultipleBranches && (
             <BranchSelector
               branches={branch.selectorBranches}
               selected={branch.selected}

@@ -1710,14 +1710,21 @@ const StaffDirectory: FC = () => {
               data={filtered}
               filename={`${peopleModel.exportFilenamePrefix}_${selectedBranchLabel}_${selectedDepartmentLabel}_${selectedRoleLabel}_${selectedStatusLabel}`}
               organization={exportOrganization}
-              csv={{
+                            excel={{
                 columns: exportColumns,
-                filters: exportFilters,
-                includeFilterMeta: true,
+                // Explicitly empty, not omitted: ExportButton falls back to
+                // pdf.meta when excel.meta is undefined, which is what put the
+                // filter block (module/scope/branch/search/sort) at the top of
+                // the spreadsheet. A .xlsx is meant to be sorted and pivoted,
+                // so it carries records only — the filter context stays in the
+                // PDF report, where it belongs.
+                meta: {},
+                summary: [],
               }}
               pdf={{
                 title: `${peopleModel.exportModuleLabel} Report`,
                 reportPeriod: exportReportPeriod,
+                meta: exportFilters,
                 summary: [
                   { label: "Total Records", value: String(filtered.length) },
                   { label: "Branch", value: selectedBranchLabel },

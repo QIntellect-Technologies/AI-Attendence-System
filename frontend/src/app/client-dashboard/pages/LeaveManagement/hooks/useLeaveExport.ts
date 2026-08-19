@@ -1,16 +1,21 @@
 /**
  * src/modules/leave/hooks/useLeaveExport.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * Configure CSV export for leave management.
+ * Configure Excel/PDF export for leave management.
  *
  * TYPE FIX: UseLeaveExportOptions.filterMetadata was typed as LeaveExportMetadata
  * (a named interface with required keys). Now that LeaveExportMetadata is a
  * type alias for Record<string, string | undefined>, the assignment from
  * useLeaveFilters.exportMetadata compiles without error. No logic changed.
+ *
+ * Column definitions are typed as ExportExcelColumn — structurally a superset
+ * of the old CSV-only column shape ({header, key?, accessor?}) plus optional
+ * align/numFmt, so the same accessor functions serve both the Excel and PDF
+ * export formats without duplication.
  */
 
 import { useMemo } from "react";
-import type { ExportCsvColumn } from "../../../components/ui/ExportCsvButton";
+import type { ExportExcelColumn } from "../../../components/ui/ExportExcelButton";
 import type { PendingLeaveItem, LeaveExportMetadata } from "../types/leave";
 
 function leaveTreatmentLabel(item: PendingLeaveItem): string {
@@ -43,7 +48,7 @@ export interface UseLeaveExportOptions {
 // ─── Return ────────────────────────────────────────────────────────────────
 
 export interface UseLeaveExportReturn {
-  columns: ExportCsvColumn<PendingLeaveItem>[];
+  columns: ExportExcelColumn<PendingLeaveItem>[];
   filename: string;
   metadata: LeaveExportMetadata;
   itemCount: number;
@@ -52,7 +57,7 @@ export interface UseLeaveExportReturn {
 
 // ─── Column definitions ────────────────────────────────────────────────────
 
-const LEAVE_CSV_COLUMNS_BRANCH: ExportCsvColumn<PendingLeaveItem>[] = [
+const LEAVE_EXPORT_COLUMNS_BRANCH: ExportExcelColumn<PendingLeaveItem>[] = [
   { header: "Employee Name", accessor: (r) => r.name },
   { header: "Department", accessor: (r) => r.dept },
   { header: "Leave Type", accessor: (r) => r.type },
@@ -75,7 +80,7 @@ const LEAVE_CSV_COLUMNS_BRANCH: ExportCsvColumn<PendingLeaveItem>[] = [
   },
 ];
 
-const LEAVE_CSV_COLUMNS_GLOBAL: ExportCsvColumn<PendingLeaveItem>[] = [
+const LEAVE_EXPORT_COLUMNS_GLOBAL: ExportExcelColumn<PendingLeaveItem>[] = [
   { header: "Employee Name", accessor: (r) => r.name },
   { header: "Department", accessor: (r) => r.dept },
   { header: "Leave Type", accessor: (r) => r.type },
@@ -123,8 +128,8 @@ export function useLeaveExport({
   branchLabel,
   filterMetadata,
 }: UseLeaveExportOptions): UseLeaveExportReturn {
-  const columns = useMemo<ExportCsvColumn<PendingLeaveItem>[]>(
-    () => (isGlobal ? LEAVE_CSV_COLUMNS_GLOBAL : LEAVE_CSV_COLUMNS_BRANCH),
+  const columns = useMemo<ExportExcelColumn<PendingLeaveItem>[]>(
+    () => (isGlobal ? LEAVE_EXPORT_COLUMNS_GLOBAL : LEAVE_EXPORT_COLUMNS_BRANCH),
     [isGlobal],
   );
 

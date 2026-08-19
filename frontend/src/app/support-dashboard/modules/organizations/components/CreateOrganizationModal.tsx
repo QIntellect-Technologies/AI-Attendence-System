@@ -786,29 +786,23 @@ export const CreateOrganizationModal: React.FC<
                 />
               </Field>
 
-              <Field
-                label="Organization Type"
-                helper="Stored for compatibility; template is the main source of rendering truth."
-              >
-                <input
-                  value={form.org_type}
-                  onChange={(e) =>
-                    dispatch({
-                      type: "PATCH",
-                      patch: { org_type: e.target.value },
-                    })
-                  }
-                  placeholder="company, school, factory"
-                  style={inputStyle}
-                />
-              </Field>
-
+              {/*
+                The "Organization Type" free-text input that sat here was
+                removed. handleTemplateChange (line 522) already derives
+                org_type from the selected template via
+                orgTypeForBusinessType(), so the input only let a user
+                overwrite a correct derived value with a typed one, producing
+                rows where org_type and business_type disagreed and nothing
+                downstream knew which to trust. org_type is still submitted;
+                it is now purely derived from the dropdown below.
+              */}
               <BusinessTemplateSelect
                 value={form.business_type}
                 templates={templates}
                 disabled={isSaving || templatesLoading}
                 onChange={handleTemplateChange}
                 required
+                label="Organization Type"
                 helper={
                   selectedTemplate
                     ? `Primary people type: ${peopleTypeLabel(templateLabels, selectedTemplate.primary_people_type)}`

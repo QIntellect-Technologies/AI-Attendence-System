@@ -7,9 +7,24 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-export const FLASK_ORIGIN =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ||
-  "http://localhost:5000";
+/** Origin to prefix onto relative backend media paths.
+ *
+ * MUST mirror api.ts's BASE_URL: empty string = same origin. When
+ * VITE_API_BASE_URL is unset the frontend is served from the same origin as
+ * Flask (Vite's /api proxy in dev, one Railway service in production), so a
+ * relative path is already correct and needs no prefix.
+ *
+ * The old "http://localhost:5000" fallback was baked into the production
+ * bundle at build time, so every deployed staff photo pointed at the
+ * viewer's own machine and died in the browser's CORS preflight:
+ *   Access to fetch at 'http://localhost:5000/api/staff/<id>/photo'
+ *   from origin 'https://<app>.up.railway.app' has been blocked...
+ * A missing env var must degrade to same-origin, never to a hardcoded host.
+ */
+export const FLASK_ORIGIN = (() => {
+  const raw = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
+  return raw && raw !== "/api" ? raw.replace(/\/$/, "") : "";
+})();
 
 export function resolveProfileImageUrl(
   url: string | undefined,

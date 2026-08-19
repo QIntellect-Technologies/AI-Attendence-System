@@ -346,7 +346,7 @@ export default function LiveCCTVTracking() {
     [filteredByPeopleType, searchTerm],
   );
 
-  const systemOnline = data.sourceStatus !== "error";
+  const systemOnline = data.sourceStatus !== "error" && !tracking.stopped;
   const nodeStatus = data.localNodeStatus;
   const isNodeOffline = Boolean(nodeStatus && !nodeStatus.online);
 
@@ -447,9 +447,37 @@ export default function LiveCCTVTracking() {
               borderColor: T.amberBd,
               fontSize: 12,
               fontWeight: 800,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
             }}
           >
-            {tracking.error}
+            <span>
+              {tracking.error}
+              {tracking.stopped && " Live updates paused."}
+            </span>
+
+            {tracking.stopped && (
+              <button
+                type="button"
+                onClick={tracking.retry}
+                style={{
+                  border: `1px solid ${T.amberBd}`,
+                  background: "transparent",
+                  color: T.amber,
+                  borderRadius: 8,
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
 
@@ -499,7 +527,7 @@ export default function LiveCCTVTracking() {
               id: "cctv-branch-scope",
               type: "select",
               label: "Branch",
-              hidden: !(isGlobalRoute && branchOptions.length > 1),
+              hidden: !(isGlobalRoute && cfg.branches.length > 1),
               value: branchFilter,
               minWidth: 200,
               options: branchOptions,

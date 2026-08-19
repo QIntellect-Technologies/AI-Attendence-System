@@ -15,7 +15,13 @@
  * context silently degrading to `never` after the `useAuth` null-guard.
  */
 
-import React, { createContext, useState, useCallback, ReactNode } from "react";
+import React, {
+  createContext,
+  useState,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from "react";
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 
@@ -572,20 +578,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     [_commitUser],
   );
 
+  // Memoised deliberately. This was a fresh object literal on every render,
+  // so every useAuth() consumer in the app — and there are many, including
+  // the providers wrapping the whole dashboard — was forced to re-render
+  // whenever AuthProvider rendered for any reason, even when user and
+  // isAuthenticated were unchanged. All the callbacks below are already
+  // useCallback-stable, so this value now changes only when the auth state
+  // actually changes.
+  const contextValue = useMemo(
+    () => ({
+      user,
+      isAuthenticated,
+      login,
+      signup,
+      logout,
+      refreshUser,
+      clearOrganizationStorage,
+    }),
+    [
+      user,
+      isAuthenticated,
+      login,
+      signup,
+      logout,
+      refreshUser,
+      clearOrganizationStorage,
+    ],
+  );
+
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated,
-        login,
-        signup,
-        logout,
-        refreshUser,
-        clearOrganizationStorage,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
   );
 };
 

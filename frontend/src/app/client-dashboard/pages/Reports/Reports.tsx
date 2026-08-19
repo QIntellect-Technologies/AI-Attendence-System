@@ -2,7 +2,7 @@
  * modules/reports/index.tsx — REFACTORED
  * ─────────────────────────────────────────────────────────────────────────────
  * Reports & Analytics — follows OvertimeManagement architecture pattern.
- * Uses ExportCsvButton with jelly hover fill effect.
+ * Uses ExportExcelButton (formatted, branded .xlsx) with jelly hover fill effect.
  *
  * Scope resolution:
  *   - Route param :branchId + ModuleContext.activeBranchId (same as OvertimeManagement)
@@ -59,9 +59,9 @@ import { T } from "../../components/ui/theme";
 import DynamicFilterToolbar, {
   type DynamicFilterSection,
 } from "../../components/ui/DynamicFilterToolbar";
-import ExportCsvButton, {
-  type ExportCsvColumn,
-} from "../../components/ui/ExportCsvButton";
+import ExportExcelButton, {
+  type ExportExcelColumn,
+} from "../../components/ui/ExportExcelButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 
 import { useReportMetrics } from "./hooks/useReportMetrics";
@@ -458,7 +458,7 @@ const Reports: React.FC = () => {
   );
 
   // ── Export columns ─────────────────────────────────────────────────────────
-  const exportColumns = useMemo<ExportCsvColumn<ReportExportRow>[]>(
+  const exportColumns = useMemo<ExportExcelColumn<ReportExportRow>[]>(
     () => [
       {
         header: "Branch",
@@ -683,11 +683,15 @@ const Reports: React.FC = () => {
             onClick={refresh}
             ariaLabel="Refresh reports data"
           />
-          <ExportCsvButton
+          <ExportExcelButton
             data={exportRows}
             columns={exportColumns}
-            filename={`reports_${selectedBranchLabel}_${periodLabel(period)}_${effectiveTab}_${new Date().toISOString().split("T")[0]}.csv`}
-            label="Export CSV"
+            filename={`reports_${selectedBranchLabel}_${periodLabel(period)}_${effectiveTab}_${new Date().toISOString().split("T")[0]}`}
+            organization={{ name: cfg.orgName || undefined }}
+            title="Reports & Analytics"
+            subtitle={`${selectedBranchLabel} · ${effectiveTab}`}
+            reportPeriod={periodLabel(period)}
+            label="Export Excel"
             emptyMessage="No report data available to export."
           />
         </div>

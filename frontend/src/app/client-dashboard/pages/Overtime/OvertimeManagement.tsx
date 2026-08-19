@@ -2,7 +2,7 @@
  * src/modules/overtime/OvertimeManagement.tsx — REFACTORED
  * ─────────────────────────────────────────────────────────────────────────────
  * Overtime request management with approve/reject workflow.
- * Uses ExportCsvButton with jelly hover fill effect.
+ * Uses ExportExcelButton (formatted, branded .xlsx) with jelly hover fill effect.
  *
  * Single source of truth: ModuleContext.overtime (ScopedStore<OvertimeRequest>)
  *   - Seeded from generateOrgDummyData.overtime (org/branch-aware)
@@ -58,10 +58,9 @@ import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { StatCard, StatusBadge } from "../../components/ui/DashboardComponents";
-import ExportCsvButton, {
-  type ExportCsvColumn,
-  buildCsv,
-} from "../../components/ui/ExportCsvButton";
+import ExportExcelButton, {
+  type ExportExcelColumn,
+} from "../../components/ui/ExportExcelButton";
 
 import type { BranchOption, DecidableStatus } from "./types/overtime";
 import { API_STATUS_MAP, DEFAULT_OVERTIME_POLICY } from "./types/overtime";
@@ -635,7 +634,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
   }, [finalFilteredRequests, policy, getStaffMonthlySalary]);
 
   // ── Export columns ─────────────────────────────────────────────────────────
-  const exportColumns = useMemo<ExportCsvColumn<OvertimeRequest>[]>(
+  const exportColumns = useMemo<ExportExcelColumn<OvertimeRequest>[]>(
     () => [
       {
         header: "Employee",
@@ -665,6 +664,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
       {
         header: "Hours",
         accessor: (row) => row.hours.toFixed(1),
+        align: "right" as const,
       },
       {
         header: "Pay",
@@ -678,6 +678,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
             : policy;
           return `${policy.currencyLabel} ${calculateOvertimePay(row.hours, effective, getStaffMonthlySalary(row)).toLocaleString()}`;
         },
+        align: "right" as const,
       },
       {
         header: "Status",
@@ -740,11 +741,23 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
               onClick={refresh}
               ariaLabel="Refresh overtime requests"
             />
-            <ExportCsvButton
+            <ExportExcelButton
               data={finalFilteredRequests}
               columns={exportColumns}
-              filename={`Overtime_${safeBranchName(fallbackBranchId, branches)}_${new Date().toISOString().split("T")[0]}.csv`}
-              label="Export CSV"
+              filename={`Overtime_${safeBranchName(fallbackBranchId, branches)}_${new Date().toISOString().split("T")[0]}`}
+              organization={{ name: cfg.orgName || undefined }}
+              title="Overtime Report"
+              reportPeriod={new Date().toLocaleDateString(undefined, {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })}
+              summary={[
+                { label: "Pending", value: String(stats.pending) },
+                { label: "Approved", value: String(stats.approved) },
+                { label: "Total Hours", value: stats.totalHours.toFixed(1) },
+              ]}
+              label="Export Excel"
               emptyMessage="No overtime requests to export."
             />
             {/*<JellyButton

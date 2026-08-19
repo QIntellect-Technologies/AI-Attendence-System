@@ -2221,7 +2221,11 @@ def _build_client_config(org: dict, branches: list[dict], module_keys: list[str]
     }
 
     return {
-        'bizType': org.get('org_type') or business_type,
+        # business_type is the source of truth; org_type is a derived mirror
+        # kept for backwards compatibility. Preferring org_type here let a
+        # free-text value ('Software House') reach tenant rendering, where it
+        # matched no known type and fell through to defaults.
+        'bizType': business_type or org.get('org_type'),
         'businessType': business_type,
         'business_type': business_type,
         'primaryPeopleType': primary_people_type,
@@ -3173,7 +3177,12 @@ def _extract_company_profile(config: dict, org: dict) -> dict:
 
     return {
         'orgName': org.get('name') or config.get('orgName') or '',
-        'bizType': org.get('org_type') or config.get('bizType') or 'business',
+        'bizType': (
+            org.get('business_type')
+            or org.get('org_type')
+            or config.get('bizType')
+            or 'business'
+        ),
         'tagline': profile.get('tagline') or config.get('tagline') or '',
         'address': profile.get('address') or config.get('address') or '',
         'city': profile.get('city') or config.get('city') or '',

@@ -47,7 +47,7 @@ import DynamicFilterToolbar, {
   type DynamicFilterSection,
 } from "../../components/ui/DynamicFilterToolbar";
 import ExportButton from "../../components/ui/ExportButton";
-import type { ExportCsvColumn } from "../../components/ui/ExportCsvButton";
+import type { ExportExcelColumn } from "../../components/ui/ExportExcelButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { FastPagination } from "../../components/common/FastPagination";
 import { useStatefulPagination } from "../LeaveManagement/shared/hooks/usePagination";
@@ -2086,7 +2086,7 @@ export default function AttendanceView() {
   );
 
   const attendanceExportColumns = useMemo<
-    ExportCsvColumn<AttendanceExportRow>[]
+    ExportExcelColumn<AttendanceExportRow>[]
   >(
     () => [
       ...attendanceTemplateColumns
@@ -2498,9 +2498,8 @@ export default function AttendanceView() {
               name: cfg.orgName || undefined,
               logoUrl: cfg.logo || undefined,
             }}
-            csv={{
+            excel={{
               columns: attendanceExportColumns,
-              includeFilterMeta: false,
             }}
             pdf={{
               title: "Attendance Report",
@@ -2510,6 +2509,7 @@ export default function AttendanceView() {
                   : `Period: ${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
                       exportDateRange.to,
                     )}`,
+              meta: attendanceExportFilters,
               columns: attendanceExportColumns,
             }}
             label="Export"

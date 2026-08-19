@@ -92,7 +92,7 @@ def detect_and_extract(frame: np.ndarray) -> list[dict[str, Any]]:
     try:
         return _shared_detect_and_extract(frame, MODELS_DIR)
     except Exception as exc:
-        logger.error(f"Face detection/extraction failed: {exc}")
+        logger.exception("Face detection/extraction failed")
         raise FaceEngineUnavailableError(str(exc)) from exc
     
 

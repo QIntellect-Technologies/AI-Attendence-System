@@ -2,28 +2,36 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $NodeUiDir = Join-Path $Root "local_node\local_node_ui"
-$VenvPython = Join-Path $Root "venv\Scripts\python.exe"
+$VenvPython = Join-Path $Root "venv-node\Scripts\python.exe"
 
 Write-Host "QIntellect Attendance Node build" -ForegroundColor Cyan
 Write-Host "Repo root: $Root"
 
 if (!(Test-Path $VenvPython)) {
-  throw "Python virtual environment was not found at $VenvPython. Activate or create the root venv first."
+    throw "Node build virtual environment was not found at $VenvPython. Create venv-node first (GPU onnxruntime)."
 }
 
 if (!(Test-Path $NodeUiDir)) {
   throw "local_node\local_node_ui was not found at $NodeUiDir."
 }
 
-Write-Host "Checking Python build dependencies..." -ForegroundColor Yellow
-& $VenvPython -c "import onnxruntime, insightface"
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Repairing onnxruntime / numpy in the root venv..." -ForegroundColor Yellow
-  & $VenvPython -m pip install --force-reinstall numpy==1.26.4 onnxruntime==1.17.0
-  if ($LASTEXITCODE -ne 0) {
-    throw "Failed to repair the Python build environment."
-  }
+# insightface ka wheel apni data_files ko venv ki jad mein rakh deta hai,
+# jabke asal package lib\site-packages mein hota hai. Nuitka dono ko ek hi
+# module samajh kar "duplicate locals name" par crash kar jata hai.
+$StrayInsightface = Join-Path $Root "venv-node\insightface"
+if (Test-Path $StrayInsightface) {
+  Write-Host "Removing stray insightface data_files copy from venv root..." -ForegroundColor Yellow
+  Remove-Item $StrayInsightface -Recurse -Force
 }
+
+Write-Host "Checking Python build dependencies..." -ForegroundColor Yellow
+& $VenvPython -c "import onnxruntime, insightface, skimage"
+if ($LASTEXITCODE -ne 0) {
+  throw "Build venv is missing onnxruntime / insightface / scikit-image. Install local_node\requirements.txt into venv-node - do not let the build mutate package versions."
+}
+
+Write-Host "Build environment versions:" -ForegroundColor Yellow
+& $VenvPython -c "import insightface, onnxruntime, numpy, skimage; print('insightface', insightface.__version__, '| onnxruntime', onnxruntime.__version__, '| numpy', numpy.__version__, '| skimage', skimage.__version__)"
 
 Push-Location $Root
 try {

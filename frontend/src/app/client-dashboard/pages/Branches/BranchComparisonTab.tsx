@@ -44,6 +44,11 @@ import useDashboardOverviewData, {
   type BranchPerformanceItem,
   type BranchPayrollSeries,
 } from "../../hooks/useDashboardOverviewData";
+import { useOrg } from "../../contexts/OrgConfigContext";
+import {
+  buildExcelWorkbook,
+  downloadExcel,
+} from "../../components/ui/ExportExcelButton";
 
 // ── Shared filter hook + component (isolated per page) ──────────────────────
 import { useDateFilter } from "../../hooks/useDateFilter";
@@ -165,82 +170,127 @@ function healthLabel(score: number): {
   return { label: "Needs Attention", color: "#E11D48", bg: "#FFF1F2" };
 }
 
-// ─── CSV export ───────────────────────────────────────────────────────────────
+// ─── Excel export ─────────────────────────────────────────────────────────────
+// Was a hand-rolled, duplicate CSV builder that bypassed the shared export
+// engine entirely (ExportExcelButton.tsx / buildExcelWorkbook) — including
+// hand-rolled comma escaping that only handled commas, not quotes or
+// newlines, unlike the shared engine's escaping. Rebuilt on the shared
+// engine so this page gets the same branded header band, styled table, and
+// number formatting as every other export in the app (DRY), and — since
+// Excel workbooks support multiple tabs natively — the "full" scope's
+// payroll breakdown now gets its own sheet instead of being CSV-appended
+// as extra rows under a different header shape in the same table.
+type BranchComparisonRow = BranchPerformanceItem & { score: number };
 
-function exportCSV(
+const BRANCH_COMPARISON_COLUMNS: Array<{
+  header: string;
+  accessor: (row: BranchComparisonRow) => string | number;
+  align?: "left" | "right" | "center";
+  numFmt?: string;
+}> = [
+  { header: "Branch", accessor: (b) => b.branchName },
+  { header: "City", accessor: (b) => b.city ?? "" },
+  { header: "Total Staff", accessor: (b) => b.totalStaff, align: "right" },
+  { header: "Present Today", accessor: (b) => b.presentToday, align: "right" },
+  { header: "Absent Today", accessor: (b) => b.absentToday, align: "right" },
+  {
+    header: "Avg Attendance %",
+    accessor: (b) => b.avgAttendance,
+    align: "right",
+    numFmt: "0.0\"%\"",
+  },
+  { header: "Late Today", accessor: (b) => b.lateToday, align: "right" },
+  { header: "CCTV Alerts", accessor: (b) => b.cctvAlerts, align: "right" },
+  { header: "Health Score", accessor: (b) => b.score, align: "right" },
+  {
+    header: "Monthly Payroll",
+    accessor: (b) => b.payroll,
+    align: "right",
+    numFmt: "#,##0",
+  },
+];
+
+async function exportBranchComparisonExcel(
   branches: BranchPerformanceItem[],
   payrollSeries: BranchPayrollSeries[],
   scope: "visible" | "full",
   periodLabel: string,
+  organization: { name?: string } | undefined,
 ) {
-  const headers = [
-    "Branch",
-    "City",
-    "Total Staff",
-    "Present Today",
-    "Absent Today",
-    "Avg Attendance %",
-    "Late Today",
-    "CCTV Alerts",
-    "Health Score",
-    "Monthly Payroll",
-  ];
+  const rows: BranchComparisonRow[] = branches.map((b) => ({
+    ...b,
+    score: computeHealthScore(b),
+  }));
 
-  const rows = branches.map((b) => {
-    const score = computeHealthScore(b);
-    return [
-      b.branchName,
-      b.city ?? "",
-      b.totalStaff,
-      b.presentToday,
-      b.absentToday,
-      `${b.avgAttendance}%`,
-      b.lateToday,
-      b.cctvAlerts,
-      score,
-      b.payroll,
-    ];
+  const workbook = buildExcelWorkbook({
+    title: "Branch Comparison",
+    titleTag: scope === "full" ? "Full Report" : "Visible Period",
+    reportPeriod: periodLabel,
+    organization,
+    sheetName: "Branch Comparison",
+    data: rows,
+    columns: BRANCH_COMPARISON_COLUMNS,
   });
 
-  const extraRows: (string | number)[][] = [];
-  if (scope === "full") {
-    extraRows.push([]);
-    extraRows.push(["--- Monthly Payroll Breakdown ---"]);
-    extraRows.push(["Branch", "Month", "Payroll", "Overtime"]);
-    payrollSeries.forEach((ps) => {
-      ps.data.forEach((d) => {
-        extraRows.push([ps.branchName, d.month, d.Payroll, d.Overtime]);
-      });
+  if (scope === "full" && payrollSeries.length) {
+    const payrollRows = payrollSeries.flatMap((ps) =>
+      ps.data.map((d) => ({
+        branchName: ps.branchName,
+        month: d.month,
+        payroll: d.Payroll,
+        overtime: d.Overtime,
+      })),
+    );
+    const payrollSheetWorkbook = buildExcelWorkbook({
+      title: "Monthly Payroll Breakdown",
+      reportPeriod: periodLabel,
+      organization,
+      sheetName: "Payroll Breakdown",
+      data: payrollRows,
+      columns: [
+        { header: "Branch", accessor: (r) => r.branchName },
+        { header: "Month", accessor: (r) => r.month },
+        {
+          header: "Payroll",
+          accessor: (r) => r.payroll,
+          align: "right",
+          numFmt: "#,##0",
+        },
+        {
+          header: "Overtime",
+          accessor: (r) => r.overtime,
+          align: "right",
+          numFmt: "#,##0",
+        },
+      ],
     });
+    // buildExcelWorkbook always produces a single-sheet workbook — build the
+    // breakdown as its own workbook, then move its one worksheet onto the
+    // main workbook as a second tab, rather than teaching the shared
+    // builder about a multi-table/multi-sheet shape only this page needs.
+    const [payrollSheet] = payrollSheetWorkbook.worksheets;
+    if (payrollSheet) {
+      const clonedSheet = workbook.addWorksheet(payrollSheet.name);
+      payrollSheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+        const targetRow = clonedSheet.getRow(rowNumber);
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const targetCell = targetRow.getCell(colNumber);
+          targetCell.value = cell.value;
+          targetCell.style = { ...cell.style };
+        });
+        targetRow.height = row.height;
+      });
+      payrollSheet.columns.forEach((col, i) => {
+        clonedSheet.getColumn(i + 1).width = col.width;
+      });
+      // Re-apply merged ranges (the header band / meta lines rely on these)
+      // — cell-by-cell copy above doesn't carry merge state on its own.
+      const mergeRanges = (payrollSheet.model.merges ?? []) as string[];
+      mergeRanges.forEach((range) => clonedSheet.mergeCells(range));
+    }
   }
 
-  const allRows = [
-    [`Period: ${periodLabel}`, `Exported: ${new Date().toLocaleString()}`],
-    [],
-    headers,
-    ...rows,
-    ...extraRows,
-  ];
-
-  const csv = allRows
-    .map((row) =>
-      row
-        .map((cell) =>
-          typeof cell === "string" && cell.includes(",")
-            ? `"${cell}"`
-            : String(cell),
-        )
-        .join(","),
-    )
-    .join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `branch-comparison-${scope}-${Date.now()}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadExcel(`branch-comparison-${scope}-${Date.now()}`, workbook);
 }
 
 // ─── Small sub-components ─────────────────────────────────────────────────────
@@ -453,6 +503,13 @@ const BranchComparisonTab: React.FC = () => {
   // ── Date filter — isolated to THIS component only ─────────────────────────
   const filter = useDateFilter("monthly");
 
+  // ── Org identity for the export header band ─────────────────────────────
+  const { cfg } = useOrg();
+  const exportOrganization = useMemo(
+    () => ({ name: cfg.orgName || undefined }),
+    [cfg.orgName],
+  );
+
   // ── Other state ───────────────────────────────────────────────────────────
   const [activeMetric, setActiveMetric] = useState<MetricKey>("avgAttendance");
   const [showExportModal, setShowExportModal] = useState(false);
@@ -531,14 +588,15 @@ const BranchComparisonTab: React.FC = () => {
 
   const handleExport = useCallback(
     (scope: "visible" | "full") => {
-      exportCSV(
+      void exportBranchComparisonExcel(
         filteredBranchPerformance,
         branchPayrollTrends,
         scope,
         filter.label,
+        exportOrganization,
       );
     },
-    [filteredBranchPerformance, branchPayrollTrends, filter.label],
+    [filteredBranchPerformance, branchPayrollTrends, filter.label, exportOrganization],
   );
 
   const handleSort = (key: MetricKey) => {
@@ -627,7 +685,7 @@ const BranchComparisonTab: React.FC = () => {
             leftIcon={<Download />}
             onClick={() => setShowExportModal(true)}
           >
-            Export CSV
+            Export Excel
           </JellyButton>
         </div>
       </div>
