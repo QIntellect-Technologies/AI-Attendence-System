@@ -3504,6 +3504,13 @@ def api_client_staff_detail(staff_id):
                 data,
                 granted_by_is_admin=bool(g.dashboard_user.get('is_admin')),
             )
+            if 'salary' in data:
+                _upsert_tenant_salary_config({
+                    **data,
+                    'user_id': str(staff_id),
+                    'organization_id': str(g.dashboard_user.get('org_id') or ''),
+                    'basic_salary': data.get('salary'),
+                })
             return jsonify({'success': True, 'user': user}), 200
 
         if request.method == 'DELETE':
@@ -4047,6 +4054,115 @@ def api_update_attendance_record(record_id):
         return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 400
     except Exception as exc:
         logger.exception('Attendance record update failed')
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 500
+
+
+@app.route('/api/attendance/manual', methods=['POST'])
+@require_client_dashboard_auth
+def api_create_manual_attendance_record():
+    """Admin "Add Attendance" -- hand-enter a brand-new attendance row for
+    an employee CCTV never captured a check-in for at all that day, so the
+    next real detection isn't misread as a fresh check-in for a new shift.
+    See create_manual_attendance_record's docstring
+    (support_db_attendance_dashboard.py) for the full field contract.
+
+    Body:
+      { "staff_id"|"staffId": id (required),
+        "check_in"|"checkIn": ISO datetime (required),
+        "check_out"|"checkOut": ISO datetime (optional),
+        "arrival_status"|"arrivalStatus"|"status":
+            "on_time" | "late" | "early" | "unscheduled" (default on_time),
+        "notes": string (optional) }
+
+    Supabase/UUID organizations only, same trust boundary as
+    api_update_attendance_record and every other attendance write route
+    in this file.
+    """
+    dashboard_user = g.dashboard_user
+    org_id = str(dashboard_user.get('org_id') or '').strip()
+    if not org_id or _positive_int(org_id):
+        return jsonify({
+            'success': False,
+            'message': 'Adding attendance records is only supported for Supabase organizations',
+            'error': 'unsupported_organization',
+        }), 400
+
+    payload = dict(request.get_json(silent=True) or {})
+    # branch_id: same admin-aware resolution as api_attendance_today /
+    # api_get_attendance -- a non-admin's token branch always wins (a
+    # branch-scoped operator can't add attendance into another branch by
+    # editing the query string or body), while an admin's own home branch
+    # must not silently override the branch they picked in the Attendance
+    # table's filter.
+    raw_branch_id = (
+        request.args.get('branch_id')
+        or request.args.get('branchId')
+        or payload.get('branch_id')
+        or payload.get('branchId')
+    )
+    if not dashboard_user.get('is_admin'):
+        raw_branch_id = dashboard_user.get('branch_id') or raw_branch_id
+    if raw_branch_id:
+        payload['branch_id'] = raw_branch_id
+
+    # Resolve a human-readable name for the "Added manually by ..." note
+    # instead of writing the caller's raw UUID -- client_users and
+    # client_staff are separate tables, so which lookup applies depends on
+    # account_type. Never let a lookup failure block the write itself;
+    # fall back to the raw id so the record still gets attributed to
+    # someone traceable.
+    actor_id = dashboard_user.get('id')
+    actor_name = None
+    try:
+        if dashboard_user.get('account_type') == 'client_staff':
+            actor_name = support_cp_db.get_client_staff_member(str(actor_id)).get('name')
+        else:
+            actor_name = support_cp_db.get_client_user_basic(str(actor_id)).get('name')
+    except Exception:
+        logger.warning('Could not resolve actor name for manual attendance note; falling back to id')
+
+    try:
+        record = support_cp_db.create_manual_attendance_record(
+            org_id, payload, created_by=actor_name or actor_id,
+        )
+        return jsonify({'success': True, 'record': record}), 201
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception('Manual attendance record creation failed')
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 500
+
+
+@app.route('/api/attendance/manual/<record_id>', methods=['PATCH'])
+@require_client_dashboard_auth
+def api_update_manual_attendance_record(record_id):
+    """Edit button on the manual "Add Attendance" form. The row it's
+    correcting already exists by this point (either hand-entered via
+    api_create_manual_attendance_record above, or any other attendance row
+    an admin opens the same form to fix), so this is deliberately the same
+    field-level update as api_update_attendance_record / PATCH
+    /api/attendance/<id> -- the separate /manual/<id> path exists only so
+    ManualAttendanceModal.tsx's updateManualAttendanceRecord has a stable
+    counterpart to createManualAttendanceRecord to call, not because the
+    write itself is any different.
+    """
+    dashboard_user = g.dashboard_user
+    org_id = str(dashboard_user.get('org_id') or '').strip()
+    if not org_id or _positive_int(org_id):
+        return jsonify({
+            'success': False,
+            'message': 'Editing attendance records is only supported for Supabase organizations',
+            'error': 'unsupported_organization',
+        }), 400
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        record = support_cp_db.update_client_attendance_record(org_id, record_id, payload)
+        return jsonify({'success': True, 'record': record}), 200
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 400
+    except Exception as exc:
+        logger.exception('Manual attendance record update failed')
         return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 500
 
 

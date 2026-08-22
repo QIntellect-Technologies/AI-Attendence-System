@@ -151,7 +151,8 @@ function readTimingFields(
   const captureChannel =
     captureChannelRaw === "local_node" ||
     captureChannelRaw === "cloud" ||
-    captureChannelRaw === "mobile_app"
+    captureChannelRaw === "mobile_app" ||
+    captureChannelRaw === "manual"
       ? captureChannelRaw
       : null;
   const workDuration = textOrNull(raw.workDuration ?? raw.work_duration);

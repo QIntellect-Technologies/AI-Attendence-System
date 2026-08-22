@@ -79,14 +79,15 @@ export interface AttendanceTimingFields {
    * one resolved via half-day/leave-open. */
   checkOutHoldReason?: "early" | "late" | null;
   check_out_hold_reason?: "early" | "late" | null;
-  /** local_node | cloud | mobile_app | null — coarse capture-origin label
-   * written additively by support_db.py alongside the existing (more
+  /** local_node | cloud | mobile_app | manual | null — coarse capture-origin
+   * label written additively by support_db.py alongside the existing (more
    * granular, constraint-bound) `source` column. Null for any row written
    * before that column existed; the app must treat it as optional. See
-   * support_db.py's capture_channel migration notes for the three exact
-   * write sites this maps to 1:1. */
-  captureChannel?: "local_node" | "cloud" | "mobile_app" | null;
-  capture_channel?: "local_node" | "cloud" | "mobile_app" | null;
+   * support_db.py's capture_channel migration notes for the exact write
+   * sites this maps to 1:1 (including the hand-entered 'manual' rows from
+   * save_manual_attendance_record). */
+  captureChannel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  capture_channel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
   /** Server-computed from timestamp/check_out_timestamp via the same
    * compute_duration() helper both the dashboard row mapper and the mobile
    * history endpoint call, so the two surfaces never disagree. Only
@@ -378,7 +379,8 @@ function mapTimingFields(raw: Record<string, unknown>): AttendanceTimingFields {
   const captureChannel =
     captureChannelRaw === "local_node" ||
     captureChannelRaw === "cloud" ||
-    captureChannelRaw === "mobile_app"
+    captureChannelRaw === "mobile_app" ||
+    captureChannelRaw === "manual"
       ? captureChannelRaw
       : null;
   const workDuration =
@@ -752,6 +754,73 @@ export async function updateAttendanceRecord(
     {
       method: "PATCH",
       body: JSON.stringify(edit),
+    },
+  );
+  const record =
+    (raw as { record?: RawTodayAttendance })?.record ??
+    (raw as RawTodayAttendance);
+  return mapTodayRecord(record);
+}
+
+export interface ManualAttendanceInput {
+  staffId?: number | string;
+  staff_id?: number | string;
+  branchId?: number | string | null;
+  branch_id?: number | string | null;
+  checkIn?: string | null;
+  check_in?: string | null;
+  checkOut?: string | null;
+  check_out?: string | null;
+  /** 'on_time' | 'late' | 'early' | 'unscheduled' */
+  arrivalStatus?: string | null;
+  arrival_status?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * Admin "Add Attendance" form -- hand-enter a full day's attendance
+ * (check-in and/or check-out) for an employee CCTV never captured a
+ * check-in for. Without this, that employee's next CCTV detection reads
+ * as a fresh check-in for a new shift window instead of the checkout it
+ * actually is. See api_create_manual_attendance_record /
+ * save_manual_attendance_record on the backend for the exact contract.
+ */
+export async function createManualAttendanceRecord(
+  input: ManualAttendanceInput,
+  params: AttendanceQueryParams = {},
+): Promise<TodayAttendanceRecord> {
+  const raw = await requestJson<
+    { record?: RawTodayAttendance } | RawTodayAttendance
+  >(appendAttendanceQuery("/attendance/manual", params), {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  const record =
+    (raw as { record?: RawTodayAttendance })?.record ??
+    (raw as RawTodayAttendance);
+  return mapTodayRecord(record);
+}
+
+/**
+ * Edit button on the manual "Add Attendance" form -- reopens the same
+ * form pre-filled with an existing row and saves through the same
+ * validation path createManualAttendanceRecord uses.
+ */
+export async function updateManualAttendanceRecord(
+  recordId: number | string,
+  input: ManualAttendanceInput,
+  params: AttendanceQueryParams = {},
+): Promise<TodayAttendanceRecord> {
+  const raw = await requestJson<
+    { record?: RawTodayAttendance } | RawTodayAttendance
+  >(
+    appendAttendanceQuery(
+      `/attendance/manual/${encodeURIComponent(String(recordId))}`,
+      params,
+    ),
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
     },
   );
   const record =

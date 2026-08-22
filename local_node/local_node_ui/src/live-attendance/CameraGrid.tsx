@@ -115,6 +115,10 @@ function CameraTile({
 
     if (!streaming) {
       clearPendingTeardown();
+      // Clear any stale error from a previous connection attempt — this is
+      // an intentional stop, not a failure, and should show "Press Start
+      // to connect", not the red error state.
+      setErrored(false);
       img.src = "";
       return clearPendingTeardown;
     }
@@ -203,7 +207,12 @@ function CameraTile({
           ...styles.feed,
           display: streaming && !errored ? "block" : "none",
         }}
-        onError={() => setErrored(true)}
+        onError={() => {
+          // Guard against the empty-`src` teardown above (setting img.src =
+          // "" fires a spurious error in some browsers) — only a failure
+          // while we're actually trying to stream counts as a real error.
+          if (streaming) setErrored(true);
+        }}
       />
 
       <div className="qia-cam-footer" style={styles.footer}>

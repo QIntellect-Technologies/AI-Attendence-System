@@ -29,7 +29,7 @@ import { useMemo } from "react";
 export interface BranchLike {
   id: number;
   name: string;
-  city?: string;
+  timezone?: string;
 }
 
 export interface AttendanceStaffLike {
@@ -146,7 +146,7 @@ export function computeAttendanceBranchSummaries(
     return {
       branchId: Number(branch.id),
       branchName: branch.name,
-      city: branch.city,
+      timezone: branch.timezone,
       primaryCount: branchStaff.length,
       attendanceRate,
     };

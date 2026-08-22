@@ -4,8 +4,8 @@ import { useOrg, useOrgMasterData } from "../contexts/OrgConfigContext";
 import type {
   AttendanceLog,
   TodayAttendanceRecord,
-} from "../pages/Attendance/api/attendanceApi";
-import { useAttendanceData } from "../pages/attendance/hooks/useAttendanceData";
+} from "../pages/attendance_temp/api/attendanceApi";
+import { useAttendanceData } from "../pages/attendance_temp/hooks/useAttendanceData";
 
 export interface UseAttendanceDashboardCardsOptions {
   branchId?: number | string | null;

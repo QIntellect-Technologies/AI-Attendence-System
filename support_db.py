@@ -227,6 +227,7 @@ from support_db_attendance_dashboard import (
     mark_client_staff_absent_today,
     _EDITABLE_ATTENDANCE_STATUS_VALUES,
     update_client_attendance_record,
+    create_manual_attendance_record,
     complete_face_training_job_from_dashboard,
     _support_clean_text,
     _resolve_owned_backend_branch_id,

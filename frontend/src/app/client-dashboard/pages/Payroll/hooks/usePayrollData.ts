@@ -764,6 +764,22 @@ export function usePayrollData(
   }, [refresh]);
 
   useEffect(() => {
+    const handlePayrollInvalidation = () => {
+      invalidatePayrollPageCache(scope?.organizationId);
+      void refresh({ force: true });
+    };
+    window.addEventListener(
+      "payroll-data-invalidated",
+      handlePayrollInvalidation,
+    );
+    return () =>
+      window.removeEventListener(
+        "payroll-data-invalidated",
+        handlePayrollInvalidation,
+      );
+  }, [refresh, scope?.organizationId]);
+
+  useEffect(() => {
     if (!options.autoRefresh) return undefined;
     const id = window.setInterval(
       () => void refresh(),

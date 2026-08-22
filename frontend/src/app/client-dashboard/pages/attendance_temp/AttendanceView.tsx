@@ -32,6 +32,8 @@ import {
 import {
   markAttendanceAbsent,
   updateAttendanceRecord,
+  createManualAttendanceRecord,
+  updateManualAttendanceRecord,
   type AttendanceRecordEdit,
 } from "./api/attendanceApi";
 import { useOrg } from "../../contexts/OrgConfigContext";
@@ -77,9 +79,24 @@ import {
   ArrowUpRight,
   ClipboardCheck,
   Pencil,
+  Plus,
   Check,
   X,
 } from "lucide-react";
+
+import {
+  T,
+  type BranchLike,
+  getBranchTimezone,
+  toDatetimeLocalValue,
+  fromDatetimeLocalValue,
+} from "./utils/attendanceDisplay";
+
+import ManualAttendanceModal, {
+  type ManualAttendanceStaffOption,
+  type ManualAttendanceRecordSeed,
+  type ManualAttendanceSubmitValues,
+} from "./ManualAttendanceModal";
 
 import {
   resolveBranchFromList,
@@ -89,30 +106,10 @@ import {
 } from "../../utils/tenantScope";
 
 // ─── Design Tokens ───────────────────────────────────────────────────
-
-const T = {
-  teal600: "#0d9488",
-  teal50: "#f0fdfa",
-  teal100: "#ccfbf1",
-  navy700: "#134471",
-  slate50: "#f8fafc",
-  slate100: "#f1f5f9",
-  slate200: "#e2e8f0",
-  green600: "#16a34a",
-  green100: "#f0fdf4",
-  red600: "#e11d48",
-  red100: "#fff1f2",
-  amber600: "#d97706",
-  amber100: "#fffbeb",
-  bgPage: "#f5f6fa",
-  bgCard: "#ffffff",
-  border: "#e2e8f0",
-  textHeading: "#1a699f",
-  textBody: "#334155",
-  textMuted: "#64748b",
-  textLight: "#94a3b8",
-  shadow: "0 1px 3px rgba(15,45,74,0.07),0 1px 2px rgba(15,45,74,0.04)",
-} as const;
+// T, BranchLike, and the timezone helpers below now live in
+// ./utils/attendanceDisplay (imported above) so ManualAttendanceModal can
+// share them without a circular import with this file. See that module's
+// header comment for why.
 
 // ─── Dynamic label helpers ───────────────────────────────────────────────────
 
@@ -175,13 +172,6 @@ function readEntityLabel(masterData: unknown, peopleType: string): string {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type BranchLike = {
-  id: number;
-  name: string;
-  city?: string;
-  timezone?: string;
-  backendBranchId?: string | null;
-};
 type AttendanceStatusFilter = "all" | "present" | "absent" | "late" | "onTime";
 
 interface AttendanceStaff {
@@ -247,8 +237,8 @@ interface ApiAttendance {
   notes?: string | null;
   /** local_node | cloud | mobile_app | null — see attendanceApi.ts's
    *  AttendanceTimingFields for the shared definition/migration note. */
-  capture_channel?: "local_node" | "cloud" | "mobile_app" | null;
-  captureChannel?: "local_node" | "cloud" | "mobile_app" | null;
+  capture_channel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  captureChannel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
   branchId?: number;
   branch_id?: number | string;
   staffId?: string | number;
@@ -395,9 +385,17 @@ function nodeAttendanceToView(
     staffName: name,
     confidence: Number.isFinite(row.confidence) ? row.confidence : 0,
     source: row.source ?? "camera",
-    capture_channel: (row.capture_channel ??
-      row.captureChannel ??
-      "local_node") as "local_node" | "cloud" | "mobile_app",
+    // No fallback default here on purpose: a missing/unknown value should
+    // stay unknown (renders as "—" via captureChannelBadge) rather than
+    // being guessed as "local_node", which previously mislabeled manually
+    // -added and any other non-local_node rows whenever this field came
+    // through as null/undefined.
+    capture_channel: (row.capture_channel ?? row.captureChannel ?? null) as
+      | "local_node"
+      | "cloud"
+      | "mobile_app"
+      | "manual"
+      | null,
     date: row.logDate ?? row.log_date ?? String(row.checkIn ?? "").slice(0, 10),
     time: row.checkIn ?? row.check_in ?? null,
     check_in: row.checkIn ?? row.check_in ?? null,
@@ -626,6 +624,7 @@ type AttendanceCellContext = {
   member: AttendanceStaff;
   record?: {
     id?: string | number;
+    date?: string; // add this line
     inTime?: string;
     outTime?: string;
     workDuration?: string;
@@ -636,15 +635,6 @@ type AttendanceCellContext = {
     isLate?: boolean;
   };
   getBranchName: (branchId: number) => string;
-  /**
-   * Required, not optional. This used to be `branches?: BranchLike[]`, and
-   * one call site (the generic/fallback cell renderer) silently omitted it.
-   * getBranchTimezone() then returned undefined and formatTimeForDisplay()
-   * defaulted to "UTC" — check-out timestamps rendered hours off from the
-   * branch's actual local time with no error, no warning, nothing.
-   * Making this required turns that class of bug into a TS compile error
-   * instead of a silent runtime one.
-   */
   branches: BranchLike[];
 };
 
@@ -664,121 +654,8 @@ interface AttendanceRowDraft {
   notes: string;
 }
 
-/**
- * Renders a stored UTC/ISO timestamp in a specific IANA timezone.
- *
- * `timeZone` is intentionally required (no `?`, no default param) — see the
- * note on AttendanceCellContext.branches. A missing timezone must fail loud
- * at the call site, not be quietly papered over here with "UTC". The one
- * legitimate "UTC" case — a branch that truly has no timezone configured —
- * is resolved by getBranchTimezone()/the backend's own default, not by this
- * function guessing.
- */
-/**
- * Offset (in minutes) between a given IANA timezone's wall-clock reading and
- * true UTC, at a specific instant. Positive means the zone is ahead of UTC
- * (e.g. +300 for UTC+5). Computed by asking Intl what the wall-clock time
- * would read in that zone for this instant, then diffing against the
- * instant itself -- this is the standard technique zoned-time libraries use
- * since JS has no native "getTimezoneOffset(zone, date)".
- */
-function getTimezoneOffsetMinutes(timeZone: string, date: Date): number {
-  const dtf = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const parts = dtf
-    .formatToParts(date)
-    .reduce<Record<string, string>>((acc, part) => {
-      if (part.type !== "literal") acc[part.type] = part.value;
-      return acc;
-    }, {});
-  const asUtc = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second),
-  );
-  return (asUtc - date.getTime()) / 60_000;
-}
-
-/**
- * Converts an ISO timestamp to the value a `<input type="datetime-local">`
- * expects ("YYYY-MM-DDTHH:mm"), rendered as wall-clock time in the given
- * BRANCH timezone -- not the admin's browser timezone. This matches how
- * formatTimeForDisplay already shows check-in/check-out elsewhere in this
- * table, so the value shown in edit mode is the same clock time the admin
- * was just looking at, not a silently different one.
- */
-function toDatetimeLocalValue(
-  value: string | null | undefined,
-  timeZone: string,
-): string {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-
-  const dtf = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const parts = dtf
-    .formatToParts(parsed)
-    .reduce<Record<string, string>>((acc, part) => {
-      if (part.type !== "literal") acc[part.type] = part.value;
-      return acc;
-    }, {});
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-}
-
-/**
- * Inverse of toDatetimeLocalValue -- takes the "YYYY-MM-DDTHH:mm" wall-clock
- * value the admin typed (meant as a time IN THE BRANCH'S TIMEZONE) and
- * returns the true UTC ISO instant to send to the backend. "" (cleared
- * input) becomes null so a checkout can be explicitly unset rather than
- * sent as an invalid date.
- *
- * One offset lookup is enough for virtually every edit (branch timezones
- * changing UTC offset mid-edit, i.e. a DST transition falling exactly in
- * the minute being edited, is not worth a second iteration here).
- */
-function fromDatetimeLocalValue(
-  value: string,
-  timeZone: string,
-): string | null {
-  if (!value) return null;
-  const [datePart, timePart] = value.split("T");
-  if (!datePart || !timePart) return null;
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [hour, minute] = timePart.split(":").map(Number);
-  if ([year, month, day, hour, minute].some((n) => Number.isNaN(n)))
-    return null;
-
-  // First guess: treat the typed wall-clock numbers as if they were UTC,
-  // then find out how far the branch's timezone actually sits from UTC at
-  // that moment, and correct for it.
-  const guessUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
-  const offsetMinutes = getTimezoneOffsetMinutes(
-    timeZone,
-    new Date(guessUtcMs),
-  );
-  const utcMs = guessUtcMs - offsetMinutes * 60_000;
-  const result = new Date(utcMs);
-  return Number.isNaN(result.getTime()) ? null : result.toISOString();
-}
+// getTimezoneOffsetMinutes / toDatetimeLocalValue / fromDatetimeLocalValue
+// now live in ./utils/attendanceDisplay (imported above).
 
 function formatTimeForDisplay(
   value: string | null | undefined,
@@ -804,17 +681,8 @@ function formatTimeForDisplay(
   }
 }
 
-/**
- * "UTC" here is not a display fallback (that bug is fixed — see
- * AttendanceCellContext.branches) — it mirrors _DEFAULT_TZ in
- * support_db_attendance_gate.py / the 'UTC' default in
- * _validate_branch_timezone, for a branch row whose `timezone` column is
- * genuinely unset in Supabase. Keeping this single default in one place
- * means "no timezone configured" renders identically to how the backend
- * itself would classify that event, instead of two independently-guessed
- * fallbacks silently drifting apart.
- */
-const FALLBACK_TIMEZONE = "UTC";
+// FALLBACK_TIMEZONE now lives in ./utils/attendanceDisplay (imported
+// above) -- see that module's header comment.
 
 /**
  * Duration is derived entirely on the client from inTime/outTime — neither
@@ -878,12 +746,8 @@ function calculateWorkDuration(
   return `${hours}h ${minutes}m`;
 }
 
-function getBranchTimezone(branchId: number, branches: BranchLike[]): string {
-  return (
-    branches.find((branch) => Number(branch.id) === Number(branchId))
-      ?.timezone || FALLBACK_TIMEZONE
-  );
-}
+// getBranchTimezone now lives in ./utils/attendanceDisplay (imported
+// above) -- see that module's header comment.
 
 function attendanceColumnText(
   column: AttendanceTemplateColumn,
@@ -1204,7 +1068,7 @@ function deriveDayStatusBadge(record: {
  * missing data, rather than throwing or rendering "undefined".
  */
 const CAPTURE_CHANNEL_LABELS: Record<
-  "local_node" | "cloud" | "mobile_app",
+  "local_node" | "cloud" | "mobile_app" | "manual",
   { label: string; className: string }
 > = {
   local_node: {
@@ -1218,6 +1082,10 @@ const CAPTURE_CHANNEL_LABELS: Record<
   mobile_app: {
     label: "Mobile App",
     className: "bg-teal-50 text-teal-700 border-teal-100",
+  },
+  manual: {
+    label: "Manual",
+    className: "bg-slate-50 text-slate-600 border-slate-200",
   },
 };
 
@@ -1746,8 +1614,8 @@ export default function AttendanceView() {
     }
     const hasRecord = attendance.some(
       (item) =>
-        item.user_name?.toLowerCase().trim() === staffName.toLowerCase().trim() &&
-        item.date === targetDate,
+        item.user_name?.toLowerCase().trim() ===
+          staffName.toLowerCase().trim() && item.date === targetDate,
     );
     const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
     const confirm = await Swal.fire({
@@ -1791,7 +1659,9 @@ export default function AttendanceView() {
         peopleType,
         date: targetDate,
       });
-      toastSuccess(`${staffName} has been marked as absent on ${formattedDate}.`);
+      toastSuccess(
+        `${staffName} has been marked as absent on ${formattedDate}.`,
+      );
       await fetchAttendance();
     } catch (error) {
       toastError(
@@ -1884,6 +1754,149 @@ export default function AttendanceView() {
       );
     } finally {
       setSavingRowId(null);
+    }
+  };
+
+  // ─── Manual "Add Attendance" / Edit modal ─────────────────────────────
+  // Separate from the inline row edit above: this is the form that lets
+  // an admin hand-enter a day's attendance for an employee CCTV never
+  // captured a check-in for at all (so there's no existing row for the
+  // inline edit to attach to), and it's also what the Edit button now
+  // opens for a row that DOES exist -- one shared form for both cases,
+  // per how the dashboard's Add/Edit UX works everywhere else (see
+  // StaffModal for the same add/edit-shares-a-form pattern).
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualModalMode, setManualModalMode] = useState<"add" | "edit">("add");
+  const [manualModalRecord, setManualModalRecord] =
+    useState<ManualAttendanceRecordSeed | null>(null);
+  const [manualModalStaffId, setManualModalStaffId] = useState<
+    string | number | null
+  >(null);
+  const [manualModalSaving, setManualModalSaving] = useState(false);
+  const [manualModalError, setManualModalError] = useState<string | null>(null);
+
+  const openAddAttendanceModal = (presetStaffId?: string | number | null) => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to add attendance records.",
+      );
+      return;
+    }
+    setManualModalMode("add");
+    setManualModalRecord(null);
+    setManualModalStaffId(presetStaffId ?? null);
+    setManualModalError(null);
+    setManualModalOpen(true);
+  };
+
+  const openEditAttendanceModal = (
+    member: AttendanceStaff,
+    todayRecord: AttendanceCellContext["record"] | undefined,
+  ) => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to edit attendance records.",
+      );
+      return;
+    }
+    if (!todayRecord?.id) {
+      openAddAttendanceModal(member.id);
+      return;
+    }
+    setManualModalMode("edit");
+    setManualModalRecord({
+      id: todayRecord.id,
+      staffId: member.id,
+      staffName: member.name,
+      date: todayRecord.date ?? filter.selectedDate,
+      inTime: todayRecord.inTime || null,
+      outTime: todayRecord.outTime || null,
+      checkInStatus: (todayRecord as any)?.checkInStatus ?? "on_time",
+      notes: todayRecord.notes ?? null,
+    });
+    setManualModalStaffId(null);
+    setManualModalError(null);
+    setManualModalOpen(true);
+  };
+
+  const closeAttendanceModal = () => {
+    if (manualModalSaving) return;
+    setManualModalOpen(false);
+    setManualModalRecord(null);
+    setManualModalError(null);
+  };
+
+  const manualModalStaffOptions: ManualAttendanceStaffOption[] = useMemo(
+    () =>
+      staff.map((member) => ({
+        id: member.id,
+        name: member.name,
+        code: getStaffCode(member) || null,
+        branchId: (member as any).branchId ?? null,
+      })),
+    [staff],
+  );
+
+  const getBranchTimezoneForModalStaff = (
+    staffId: string | number | undefined,
+  ): string => {
+    const member = staff.find(
+      (item) => String(item.id) === String(staffId ?? ""),
+    );
+    return getBranchTimezone(Number((member as any)?.branchId), branches);
+  };
+
+  const submitManualAttendance = async (
+    values: ManualAttendanceSubmitValues,
+  ) => {
+    setManualModalSaving(true);
+    setManualModalError(null);
+    try {
+      const commonParams = {
+        organizationId: organizationIdForApi ?? undefined,
+        branchId:
+          backendBranchIdForUi(
+            branches,
+            scopedBranchId ?? activeBranchId ?? null,
+          ) ?? undefined,
+        peopleType,
+      };
+      if (manualModalMode === "edit" && manualModalRecord) {
+        await updateManualAttendanceRecord(
+          manualModalRecord.id,
+          {
+            checkIn: values.checkIn,
+            checkOut: values.checkOut,
+            arrivalStatus: values.arrivalStatus,
+            notes: values.notes,
+          },
+          commonParams,
+        );
+        toastSuccess("Attendance record updated.");
+      } else {
+        await createManualAttendanceRecord(
+          {
+            staffId: values.staffId,
+            checkIn: values.checkIn,
+            checkOut: values.checkOut,
+            arrivalStatus: values.arrivalStatus,
+            notes: values.notes,
+          },
+          commonParams,
+        );
+        toastSuccess("Attendance record added.");
+      }
+      await fetchAttendance();
+      setManualModalOpen(false);
+      setManualModalRecord(null);
+    } catch (error) {
+      setManualModalError(
+        error instanceof Error
+          ? error.message
+          : "Server error. Please check your connection.",
+      );
+    } finally {
+      setManualModalSaving(false);
     }
   };
 
@@ -2531,6 +2544,21 @@ export default function AttendanceView() {
           </h1>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => openAddAttendanceModal()}
+            disabled={!useRealApi}
+            title={
+              !useRealApi
+                ? "Demo mode uses ModuleContext attendance"
+                : "Hand-enter attendance for an employee CCTV missed"
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: T.teal600 }}
+          >
+            <Plus className="w-4 h-4" strokeWidth={2.5} />
+            Add Attendance
+          </button>
           <RefreshButton
             size="md"
             loading={loadingRefresh}
@@ -3006,26 +3034,40 @@ export default function AttendanceView() {
                               </>
                             ) : (
                               <>
-                                <button
-                                  onClick={() =>
-                                    startRowEdit(
-                                      member,
-                                      todayRecord,
-                                      branchTimezone,
-                                    )
-                                  }
-                                  disabled={!useRealApi || !todayRecord?.id}
-                                  title={
-                                    !useRealApi
-                                      ? "Demo mode uses ModuleContext attendance"
-                                      : !todayRecord?.id
-                                        ? "No attendance record for this day yet"
+                                {todayRecord?.id ? (
+                                  <button
+                                    onClick={() =>
+                                      openEditAttendanceModal(
+                                        member,
+                                        todayRecord,
+                                      )
+                                    }
+                                    disabled={!useRealApi}
+                                    title={
+                                      !useRealApi
+                                        ? "Demo mode uses ModuleContext attendance"
                                         : "Edit"
-                                  }
-                                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-sky-100"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
+                                    }
+                                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-sky-100"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      openAddAttendanceModal(member.id)
+                                    }
+                                    disabled={!useRealApi}
+                                    title={
+                                      !useRealApi
+                                        ? "Demo mode uses ModuleContext attendance"
+                                        : "Add attendance for this day — use this when CCTV missed the check-in"
+                                    }
+                                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-teal-100"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                                 <button
                                   onClick={() =>
                                     markAsAbsent(
@@ -3233,6 +3275,20 @@ export default function AttendanceView() {
           </div>
         </>
       )}
+
+      <ManualAttendanceModal
+        open={manualModalOpen}
+        mode={manualModalMode}
+        staffOptions={manualModalStaffOptions}
+        initialStaffId={manualModalStaffId}
+        initialDate={filter.selectedDate}
+        record={manualModalRecord}
+        getBranchTimezoneForStaff={getBranchTimezoneForModalStaff}
+        saving={manualModalSaving}
+        errorMessage={manualModalError}
+        onClose={closeAttendanceModal}
+        onSubmit={submitManualAttendance}
+      />
     </div>
   );
 }

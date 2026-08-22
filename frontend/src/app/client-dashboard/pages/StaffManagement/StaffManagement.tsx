@@ -1085,6 +1085,7 @@ const StaffDirectory: FC = () => {
           );
 
           await refreshStaff?.();
+          window.dispatchEvent(new CustomEvent("payroll-data-invalidated"));
         } else {
           const overlayTitle = "Creating profile";
 
@@ -1710,7 +1711,7 @@ const StaffDirectory: FC = () => {
               data={filtered}
               filename={`${peopleModel.exportFilenamePrefix}_${selectedBranchLabel}_${selectedDepartmentLabel}_${selectedRoleLabel}_${selectedStatusLabel}`}
               organization={exportOrganization}
-                            excel={{
+              excel={{
                 columns: exportColumns,
                 // Explicitly empty, not omitted: ExportButton falls back to
                 // pdf.meta when excel.meta is undefined, which is what put the
