@@ -7,8 +7,13 @@
  */
 
 import { cleanId } from "../../../utils/tenantScope";
+import { friendlyRequestFailureMessage } from "../../../utils/apiErrors";
 
 export type PayrollId = number | string;
+
+export const PAYROLL_VALUE_MIN = 1;
+export const PAYROLL_VALUE_MAX = 100_000_000;
+export const PAYROLL_PERCENT_MAX = 100;
 
 /** Throws if periodEnd is before periodStart. Both are 'YYYY-MM-DD' —
  * zero-padded ISO date strings sort lexicographically the same as they sort
@@ -340,7 +345,7 @@ async function requestJson<T>(
     throw new Error(
       data?.message ||
         data?.error ||
-        `Payroll request failed: ${response.status}`,
+        friendlyRequestFailureMessage(response.status, "payroll"),
     );
   }
   return data as T;

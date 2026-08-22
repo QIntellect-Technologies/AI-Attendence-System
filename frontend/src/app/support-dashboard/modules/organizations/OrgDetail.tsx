@@ -124,6 +124,12 @@ const T = {
   shadow: "0 1px 3px rgba(15,45,74,0.07)",
 } as const;
 
+// UX-only guard; the /v1/support/organizations/<id>/invoices POST route in
+// support_routes.py is the real boundary that stops an oversized paste from
+// being persisted. Setting maxLength here also stops the request from ever
+// being sent in the first place, since the browser truncates on type/paste.
+const INVOICE_NOTES_MAX_LENGTH = 2000;
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   height: 38,
@@ -1189,11 +1195,13 @@ function EditField({
   value,
   onChange,
   type = "text",
+  maxLength,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
+  maxLength?: number;
 }) {
   return (
     <label>
@@ -1203,6 +1211,7 @@ function EditField({
         onChange={(e) => onChange(e.target.value)}
         type={type}
         style={inputStyle}
+        maxLength={maxLength}
       />
     </label>
   );
@@ -1975,6 +1984,12 @@ function BillingTab({
       setError("Amount and due date are required.");
       return;
     }
+    if (draft.notes.length > INVOICE_NOTES_MAX_LENGTH) {
+      setError(
+        `Notes must be ${INVOICE_NOTES_MAX_LENGTH} characters or fewer.`,
+      );
+      return;
+    }
 
     setIsSaving(true);
     setError(null);
@@ -2140,6 +2155,7 @@ function BillingTab({
             label="Notes"
             value={draft.notes}
             onChange={(notes) => setDraft((d) => ({ ...d, notes }))}
+            maxLength={INVOICE_NOTES_MAX_LENGTH}
           />
           <button
             type="button"

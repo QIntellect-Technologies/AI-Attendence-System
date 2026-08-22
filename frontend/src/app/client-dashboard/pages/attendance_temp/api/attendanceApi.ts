@@ -12,6 +12,7 @@ import {
   cleanId,
   type MaybeTenantId,
 } from "../../../utils/tenantScope";
+import { friendlyRequestFailureMessage } from "../../../utils/apiErrors";
 
 type TenantId = number | string;
 
@@ -310,7 +311,7 @@ async function requestJson<T>(
     throw new Error(
       (body as any)?.message ||
         (body as any)?.error ||
-        `Attendance request failed: ${response.status}`,
+        friendlyRequestFailureMessage(response.status, "attendance"),
     );
   }
   return body as T;

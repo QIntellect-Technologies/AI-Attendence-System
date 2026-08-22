@@ -388,6 +388,7 @@ export const ShiftTimingsModal: FC<{
                         placeholder="e.g. Morning, Night, Arts Teacher Shift"
                         onChange={(e) => setRow(row.id, "name", e.target.value)}
                         style={inputStyle}
+                        maxLength={100}
                       />
                     </div>
                     <div>

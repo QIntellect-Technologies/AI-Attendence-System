@@ -64,6 +64,7 @@ import { resolveModulePeopleTypes } from "../../utils/templateRendering";
 import {
   DAY_STATUS_LABELS,
   derivePayrollDecisionBadge,
+  resolvePayrollDecision,
 } from "./utils/dayStatusLabels";
 
 import {
@@ -233,6 +234,13 @@ interface ApiAttendance {
    *  (nothing to decide). See derivePayrollDecisionBadge. */
   check_out_payroll_decision?: string | null;
   checkOutPayrollDecision?: string | null;
+  /** 'include' | 'exclude' | null — same admin decision as above, but for
+   *  a day_status='late' row specifically. set_local_node_payroll_decision
+   *  writes 'late' decisions here instead of check_out_payroll_decision —
+   *  see resolvePayrollDecision (dayStatusLabels.ts), which is the only
+   *  place that should read this alongside check_out_payroll_decision. */
+  check_in_payroll_decision?: string | null;
+  checkInPayrollDecision?: string | null;
   /** Operator-facing context, currently only ever set for a check-in
    *  confirmed after its shift window closed but originally sighted
    *  earlier — see attendanceApi.ts's AttendanceTimingFields. */
@@ -1275,6 +1283,16 @@ const normalizeAttendanceForView = (
     record.check_out_payroll_decision ?? record.checkOutPayrollDecision ?? null,
   checkOutPayrollDecision:
     record.check_out_payroll_decision ?? record.checkOutPayrollDecision ?? null,
+  // Same normalization as check_out_payroll_decision above, for the
+  // check-IN-side decision column ('late' rows only -- see
+  // resolvePayrollDecision in dayStatusLabels.ts). Without this, a record
+  // shape that only carries one casing variant would silently lose the
+  // decision the same way check_out_payroll_decision did before this
+  // pairing existed for it.
+  check_in_payroll_decision:
+    record.check_in_payroll_decision ?? record.checkInPayrollDecision ?? null,
+  checkInPayrollDecision:
+    record.check_in_payroll_decision ?? record.checkInPayrollDecision ?? null,
   arrival_status: deriveArrivalStatus(record),
   branchId:
     resolveUiBranchIdFromBackend(
@@ -1692,23 +1710,52 @@ export default function AttendanceView() {
     return () => window.clearInterval(interval);
   }, [fetchAttendance, useRealApi]);
 
-  const markAsAbsent = async (staffName: string) => {
+  // Shared "YYYY-MM-DD" -> "12 Aug 2026" formatter. Single source of truth
+  // for this so markAsAbsent's confirm/toast copy and formatExportPeriod
+  // (further below) can't drift into two slightly different date formats.
+  const formatDateForDisplay = (date?: string | null): string | null => {
+    if (!date) return null;
+    const parsed = parseLocalDate(date);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  // `targetDate` is the specific day being viewed (e.g. `todayRecord.date`
+  // for the row the button was clicked on), NOT necessarily today. Without
+  // it, markAttendanceAbsent silently falls back to the server's current
+  // UTC date (see _dashboard_day_window_utc's default), so marking a staff
+  // member absent while looking at a previous date would clear/record
+  // *today's* attendance instead of the date on screen -- the row you were
+  // looking at never changes, and a different (often uninvolved) day does.
+  // Always pass the row's own date explicitly so the mutation and the view
+  // agree on which day is being edited.
+  const markAsAbsent = async (staffName: string, targetDate: string) => {
     if (!useRealApi) {
       toastInfo(
         "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
       );
       return;
     }
+    if (!targetDate) {
+      toastError("Could not determine which date to mark absent.");
+      return;
+    }
     const hasRecord = attendance.some(
       (item) =>
-        item.user_name?.toLowerCase().trim() === staffName.toLowerCase().trim(),
+        item.user_name?.toLowerCase().trim() === staffName.toLowerCase().trim() &&
+        item.date === targetDate,
     );
+    const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
     const confirm = await Swal.fire({
       icon: "warning",
-      title: `Mark "${staffName}" as absent?`,
+      title: `Mark "${staffName}" as absent on ${formattedDate}?`,
       text: hasRecord
-        ? "Their existing check-in for today will be cleared and the day recorded as absent."
-        : "Today will be recorded as absent for this person.",
+        ? `Their existing check-in for ${formattedDate} will be cleared and the day recorded as absent.`
+        : `${formattedDate} will be recorded as absent for this person.`,
       showCancelButton: true,
       confirmButtonText: "Mark Absent",
       cancelButtonText: "Cancel",
@@ -1722,7 +1769,7 @@ export default function AttendanceView() {
       const record = attendance.find(
         (item) =>
           item.user_name?.toLowerCase().trim() ===
-          staffName.toLowerCase().trim(),
+            staffName.toLowerCase().trim() && item.date === targetDate,
       );
       const userId =
         record?.user_id ||
@@ -1742,8 +1789,9 @@ export default function AttendanceView() {
             scopedBranchId ?? activeBranchId ?? null,
           ) ?? undefined,
         peopleType,
+        date: targetDate,
       });
-      toastSuccess(`${staffName} has been marked as absent.`);
+      toastSuccess(`${staffName} has been marked as absent on ${formattedDate}.`);
       await fetchAttendance();
     } catch (error) {
       toastError(
@@ -1952,7 +2000,19 @@ export default function AttendanceView() {
               notes: realRecord.notes ?? null,
               captureChannel: realRecord.capture_channel ?? null,
               dayStatus: realRecord.day_status ?? null,
-              payrollDecision: realRecord.check_out_payroll_decision ?? null,
+              // Which column holds the decision depends on BOTH day_status
+              // and capture_channel -- only a mobile-sourced 'late' row is
+              // decided on check_in_payroll_decision; every other case
+              // (including a local_node 'late') uses
+              // check_out_payroll_decision. See resolvePayrollDecision's
+              // doc comment for the full rationale and why checking
+              // day_status alone would misroute local_node 'late' rows.
+              payrollDecision: resolvePayrollDecision({
+                dayStatus: realRecord.day_status,
+                captureChannel: realRecord.capture_channel,
+                checkInPayrollDecision: realRecord.check_in_payroll_decision,
+                checkOutPayrollDecision: realRecord.check_out_payroll_decision,
+              }),
               isPresent,
               isLate,
             };
@@ -2129,14 +2189,8 @@ export default function AttendanceView() {
     [attendanceTemplateColumns, shouldHideTimeColumns],
   );
 
-  const formatExportPeriod = (date?: string | null): string => {
-    if (!date) return "";
-    return parseLocalDate(date).toLocaleDateString(undefined, {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-  };
+  const formatExportPeriod = (date?: string | null): string =>
+    formatDateForDisplay(date) ?? "";
 
   const attendanceExportFilters = useMemo(
     () => ({
@@ -2847,6 +2901,7 @@ export default function AttendanceView() {
                                   disabled={isSavingRow}
                                   value={rowDraft.notes}
                                   placeholder="Add a note..."
+                                  maxLength={300}
                                   onChange={(e) => {
                                     const value = e.target.value;
                                     setRowDraft((draft) =>
@@ -2972,7 +3027,12 @@ export default function AttendanceView() {
                                   <Pencil className="w-3.5 h-3.5" />
                                 </button>
                                 <button
-                                  onClick={() => markAsAbsent(member.name)}
+                                  onClick={() =>
+                                    markAsAbsent(
+                                      member.name,
+                                      todayRecord?.date ?? filter.selectedDate,
+                                    )
+                                  }
                                   disabled={
                                     !useRealApi || loadingAction === member.name
                                   }

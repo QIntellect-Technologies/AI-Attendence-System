@@ -58,6 +58,16 @@ client_staff_overtime_bp = Blueprint(
     "client_staff_overtime", __name__, url_prefix="/api/staff/overtime"
 )
 
+# Real boundary for the self-service "reason" field on the mobile Overtime
+# request form -- this route is the only thing standing between an
+# unauthenticated-for-length payload and the `overtime_requests.reason`
+# column, since there's no server-side cap in
+# support_db_payroll.create_client_overtime_request either. Matches
+# RejectReasonModal.tsx's REASON_MAX_LENGTH on the dashboard side, and
+# NOTES_MAX_LENGTH in support_db_attendance_settings.py, so free-text
+# reason/notes fields share one limit across the app.
+REASON_MAX_LENGTH = 500
+
 
 @client_staff_overtime_bp.route("", methods=["POST"])
 @require_client_staff_auth
@@ -69,7 +79,7 @@ def request_overtime():
       {
         "date": "YYYY-MM-DD",     # also accepts "ot_date"
         "hours": number,
-        "reason": str
+        "reason": str             # capped at REASON_MAX_LENGTH
       }
 
     staff_id/org_id/branch_id are always g.client_staff's -- never read
@@ -88,13 +98,23 @@ def request_overtime():
         if hours <= 0:
             return ok({"success": False, "message": "hours must be greater than 0"}, 400)
 
+        reason_raw = payload.get("reason")
+        if reason_raw and len(str(reason_raw)) > REASON_MAX_LENGTH:
+            return ok(
+                {
+                    "success": False,
+                    "message": f"reason must be {REASON_MAX_LENGTH} characters or fewer",
+                },
+                400,
+            )
+
         create_payload = {
             "staff_id": g.client_staff["id"],
             "branch_id": g.client_staff.get("branch_id"),
             "user_name": g.client_staff.get("name"),
             "ot_date": payload.get("date") or payload.get("ot_date"),
             "hours": hours,
-            "reason": str(payload.get("reason") or "").strip(),
+            "reason": str(reason_raw or "").strip(),
         }
         overtime = support_cp_db.create_client_overtime_request(org_id, create_payload)
         return ok({"id": overtime.get("id"), "overtime": overtime}, 201)

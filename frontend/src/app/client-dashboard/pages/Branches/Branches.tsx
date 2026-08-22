@@ -855,14 +855,25 @@ const BranchesModule: React.FC = () => {
                       alignItems: "center",
                       gap: 6,
                       color:
-                        branch.enrolledStaff >= branch.staffCount &&
-                        branch.staffCount > 0
-                          ? T.teal600
-                          : T.muted,
+                        branch.staffCount > 0 && branch.enrolledStaff === 0
+                          ? "#DC2626"
+                          : branch.enrolledStaff >= branch.staffCount &&
+                              branch.staffCount > 0
+                            ? T.teal600
+                            : T.muted,
                       fontWeight: 800,
                     }}
+                    title={
+                      branch.staffCount > 0 && branch.enrolledStaff === 0
+                        ? "No faces enrolled — recognition will silently fail at this branch until staff are enrolled."
+                        : undefined
+                    }
                   >
-                    <CheckCircle2 size={14} />
+                    {branch.staffCount > 0 && branch.enrolledStaff === 0 ? (
+                      <AlertCircle size={14} />
+                    ) : (
+                      <CheckCircle2 size={14} />
+                    )}
                     {branch.enrolledStaff}/{branch.staffCount}
                   </div>
                 )}

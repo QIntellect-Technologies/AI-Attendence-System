@@ -1,14 +1,32 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $NodeUiDir = Join-Path $Root "local_node\local_node_ui"
 $VenvPython = Join-Path $Root "venv-node\Scripts\python.exe"
+$VenvScripts = Join-Path $Root "venv-node\Scripts"
 
 Write-Host "QIntellect Attendance Node build" -ForegroundColor Cyan
 Write-Host "Repo root: $Root"
 
 if (!(Test-Path $VenvPython)) {
     throw "Node build virtual environment was not found at $VenvPython. Create venv-node first (GPU onnxruntime)."
+}
+
+# Persistent, non-ephemeral cache locations so incremental builds actually
+# reuse unchanged compiled objects instead of recompiling insightface/
+# skimage/etc. from scratch every time. Point these outside dist\ (which
+# build.py's Nuitka step writes into) so a `dist` cleanup never wipes them.
+if (-not $env:NUITKA_CACHE_DIR) { $env:NUITKA_CACHE_DIR = "C:\NuitkaCache\nuitka" }
+if (-not $env:CLCACHE_DIR)      { $env:CLCACHE_DIR      = "C:\NuitkaCache\clcache" }
+
+# clcache lives in venv-node\Scripts alongside python.exe/nuitka - put it on
+# PATH for this session so Nuitka's compiler auto-detection finds it.
+if ($env:PATH -notlike "*$VenvScripts*") {
+  $env:PATH = "$VenvScripts;$env:PATH"
+}
+if (-not (Get-Command clcache.exe -ErrorAction SilentlyContinue)) {
+  Write-Host "clcache not found in venv-node - installing..." -ForegroundColor Yellow
+  & $VenvPython -m pip install clcache --no-deps
 }
 
 if (!(Test-Path $NodeUiDir)) {

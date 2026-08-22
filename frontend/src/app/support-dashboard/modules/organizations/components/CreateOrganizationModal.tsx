@@ -117,6 +117,11 @@ type FormAction =
       availablePeopleTypes: PeopleType[];
     };
 
+// UX-only guard; the /v1/support/organizations/<id>/invoices POST route in
+// support_routes.py is the real boundary that stops an oversized paste from
+// being persisted.
+const INVOICE_NOTES_MAX_LENGTH = 2000;
+
 const T = {
   teal600: "#0d9488",
   teal700: "#0f766e",
@@ -1401,6 +1406,7 @@ export const CreateOrganizationModal: React.FC<
                   }
                   placeholder="Initial setup invoice including selected modules, branches, and capacity limits."
                   style={{ ...inputStyle, minHeight: 76, resize: "vertical" }}
+                  maxLength={INVOICE_NOTES_MAX_LENGTH}
                 />
               </Field>
             </div>

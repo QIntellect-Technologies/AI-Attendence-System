@@ -400,6 +400,7 @@ const Login: React.FC = () => {
                 required
                 placeholder="name@company.com"
                 leftIcon={<Mail size={16} color={A.textMuted} />}
+                maxLength={254}
                 onChange={(e) => {
                   setEmail(e.target.value);
                   setSuccess(false);
@@ -416,6 +417,7 @@ const Login: React.FC = () => {
                 required
                 placeholder="••••••••"
                 leftIcon={<Lock size={16} color={A.textMuted} />}
+                maxLength={128}
                 rightToggle={{
                   show: showPw,
                   onToggle: () => setShowPw((v) => !v),

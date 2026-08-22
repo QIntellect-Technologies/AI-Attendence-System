@@ -616,6 +616,12 @@ def list_manual_instructions(
     return attach_branch_names(org_id, rows) if aggregate else rows
 
 
+NOTES_MAX_LENGTH = 500  # real boundary for the Notes field on
+# StaffAttendanceOverridesPanel.tsx — the frontend maxLength there is UX
+# only. Without this, an admin (or anyone hitting the API directly) could
+# paste 10,000+ characters into notes and have it persisted unbounded.
+
+
 def create_manual_instruction(org_id: str, branch_id: str, payload: dict, created_by: str | None = None) -> dict:
     """Create a manual attendance instruction. Minimal validation only.
     Fields accepted: staff_id, person_code, people_type, attendance_date,
@@ -627,6 +633,10 @@ def create_manual_instruction(org_id: str, branch_id: str, payload: dict, create
     attendance_date_raw = payload.get("attendance_date")
     if not attendance_date_raw:
         raise ValueError("attendance_date is required")
+
+    notes_raw = payload.get("notes")
+    if notes_raw and len(str(notes_raw)) > NOTES_MAX_LENGTH:
+        raise ValueError(f"notes must be {NOTES_MAX_LENGTH} characters or fewer")
 
     # Keep times optional and validated by existing helpers where applicable
     # Keep times optional and validated by existing helpers where applicable

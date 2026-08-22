@@ -128,11 +128,23 @@ function avatarGradient(name: string): [string, string] {
   return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length] as [string, string];
 }
 
+// Mirrors support_db_visits.py's _LAT_MIN/_LAT_MAX/_LNG_MIN/_LNG_MAX/
+// _RADIUS_MIN_METERS/_RADIUS_MAX_METERS exactly -- the backend remains the
+// real boundary, this just stops a bad value from being submitted (and
+// round-tripping to a rejection) in the first place. Keep both in sync.
+const STOP_LAT_MIN = -90;
+const STOP_LAT_MAX = 90;
+const STOP_LNG_MIN = -180;
+const STOP_LNG_MAX = 180;
+const STOP_RADIUS_MIN_METERS = 10;
+const STOP_RADIUS_MAX_METERS = 5000;
+const STOP_DEFAULT_RADIUS_METERS = 150;
+
 const emptyStopForm = {
   locationLabel: "",
   lat: "",
   lng: "",
-  radiusMeters: "150",
+  radiusMeters: String(STOP_DEFAULT_RADIUS_METERS),
   purpose: "",
   windowStart: "",
   windowEnd: "",
@@ -805,12 +817,41 @@ const PlanDetailPanel: React.FC<{
     if (!data?.plan) return;
     const lat = Number(stopForm.lat);
     const lng = Number(stopForm.lng);
+    const radius = stopForm.radiusMeters
+      ? Number(stopForm.radiusMeters)
+      : STOP_DEFAULT_RADIUS_METERS;
     if (!stopForm.locationLabel.trim()) {
       setStopError("Location label is required.");
       return;
     }
     if (Number.isNaN(lat) || Number.isNaN(lng)) {
       setStopError("Latitude and longitude must be valid numbers.");
+      return;
+    }
+    // Same bounds support_db_visits._validate_stop_payload enforces
+    // server-side — checked here too so a bad value is caught before the
+    // round trip instead of surfacing only as a failed save.
+    if (lat < STOP_LAT_MIN || lat > STOP_LAT_MAX) {
+      setStopError(
+        `Latitude must be between ${STOP_LAT_MIN} and ${STOP_LAT_MAX}.`,
+      );
+      return;
+    }
+    if (lng < STOP_LNG_MIN || lng > STOP_LNG_MAX) {
+      setStopError(
+        `Longitude must be between ${STOP_LNG_MIN} and ${STOP_LNG_MAX}.`,
+      );
+      return;
+    }
+    if (
+      stopForm.radiusMeters &&
+      (Number.isNaN(radius) ||
+        radius < STOP_RADIUS_MIN_METERS ||
+        radius > STOP_RADIUS_MAX_METERS)
+    ) {
+      setStopError(
+        `Radius must be between ${STOP_RADIUS_MIN_METERS} and ${STOP_RADIUS_MAX_METERS} meters.`,
+      );
       return;
     }
     setSavingStop(true);
@@ -821,7 +862,8 @@ const PlanDetailPanel: React.FC<{
           locationLabel: stopForm.locationLabel.trim(),
           lat,
           lng,
-          radiusMeters: Number(stopForm.radiusMeters) || 150,
+          radiusMeters:
+            Number(stopForm.radiusMeters) || STOP_DEFAULT_RADIUS_METERS,
           purpose: stopForm.purpose.trim() || undefined,
           windowStart: stopForm.windowStart || null,
           windowEnd: stopForm.windowEnd || null,
@@ -834,7 +876,8 @@ const PlanDetailPanel: React.FC<{
           locationLabel: stopForm.locationLabel.trim(),
           lat,
           lng,
-          radiusMeters: Number(stopForm.radiusMeters) || 150,
+          radiusMeters:
+            Number(stopForm.radiusMeters) || STOP_DEFAULT_RADIUS_METERS,
           purpose: stopForm.purpose.trim() || undefined,
           windowStart: stopForm.windowStart || null,
           windowEnd: stopForm.windowEnd || null,
@@ -1132,6 +1175,7 @@ const PlanDetailPanel: React.FC<{
                         }
                         placeholder="e.g. Sheikh Zaid Hospital"
                         style={inputStyle}
+                        maxLength={150}
                       />
                     </label>
                     <label style={fieldLabelStyle}>
@@ -1146,6 +1190,7 @@ const PlanDetailPanel: React.FC<{
                         }
                         placeholder="e.g. Follow-up delivery"
                         style={inputStyle}
+                        maxLength={150}
                       />
                     </label>
 
@@ -1158,6 +1203,7 @@ const PlanDetailPanel: React.FC<{
                         }
                         placeholder="24.860000"
                         style={inputStyle}
+                        maxLength={20}
                       />
                     </label>
                     <label style={fieldLabelStyle}>
@@ -1169,6 +1215,7 @@ const PlanDetailPanel: React.FC<{
                         }
                         placeholder="67.010000"
                         style={inputStyle}
+                        maxLength={20}
                       />
                     </label>
 
@@ -1183,6 +1230,7 @@ const PlanDetailPanel: React.FC<{
                           }))
                         }
                         style={inputStyle}
+                        maxLength={6}
                       />
                     </label>
                     <div style={{ display: "flex", alignItems: "flex-end" }}>

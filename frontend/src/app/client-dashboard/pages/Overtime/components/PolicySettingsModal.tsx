@@ -207,6 +207,7 @@ export default function PolicySettingsModal({
                 value={draft.currencyLabel}
                 onChange={(e) => updateField("currencyLabel", e.target.value)}
                 style={fieldInputStyle}
+                maxLength={10}
               />
             </div>
 

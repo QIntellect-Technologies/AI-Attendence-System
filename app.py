@@ -160,6 +160,7 @@ from client_dashboard_auth import (
     mint_dashboard_token,
     require_client_dashboard_auth,
     require_client_dashboard_admin,
+    logout_dashboard_user,
     get_team_scope_ids,
     get_effective_scope_ids,
     filter_rows_by_scope,
@@ -1606,11 +1607,29 @@ def api_update_user_profile(user_id):
         refreshed = db.get_user_by_id(int(user_id))
         refresh_embedding_cache()
 
-        return jsonify({
+        response = {
             'success': True,
             'message': 'Profile settings saved successfully.',
             'user': _safe_user(refreshed),
-        }), 200
+        }
+
+        if new_password:
+            # This is the live legacy path ChangePasswordCard.tsx actually
+            # calls for non-UUID (legacy SQLite) accounts -- unlike
+            # /api/change-password below, which api.ts no longer calls.
+            # Same reasoning as api_change_own_dashboard_password: rotate
+            # (not invalidate) so the CALLER's own request doesn't
+            # immediately 401 itself out on its next call, and return the
+            # fresh token so the frontend can persist it before that next
+            # call goes out.
+            response['token'] = mint_dashboard_token(
+                {'id': g.dashboard_user.get('id'), 'org_id': g.dashboard_user.get('org_id')},
+                account_type='legacy',
+                is_admin=g.dashboard_user.get('is_admin', False),
+                session_reason='password_changed',
+            )
+
+        return jsonify(response), 200
 
     except Exception as e:
         logger.exception(f"Dashboard profile update failed for user_id={user_id}")
@@ -2149,6 +2168,24 @@ def api_login():
     })
 
 
+@app.route('/api/client/auth/logout', methods=['POST'])
+@require_client_dashboard_auth
+def api_client_logout():
+    """Server-side session revocation for the Client Dashboard -- makes the
+    current token unusable immediately rather than leaving it valid until
+    natural expiry (up to 12h). Mirrors /v1/support/auth/logout
+    (support_routes.py) and /api/staff/logout (client_staff_auth_routes.py)
+    -- all three now share the same session_registry.py mechanism, so this
+    was the one auth surface still missing a real logout route. See
+    session_registry.py.
+
+    account_type/id come from g.dashboard_user (verified token), never from
+    the request body -- a caller can only ever end their OWN session here.
+    """
+    logout_dashboard_user(g.dashboard_user['account_type'], g.dashboard_user['id'])
+    return jsonify({'success': True})
+
+
 @app.route('/api/change-password', methods=['POST'])
 @require_client_dashboard_auth
 def api_change_password():
@@ -2172,7 +2209,24 @@ def api_change_password():
         return jsonify({'success': False, 'error': 'User not found.'}), 404
 
     db.change_password(int(user_id), new_pass)
-    return jsonify({'success': True})
+
+    # Legacy account_type='legacy' sessions are covered by the same
+    # session_registry mechanism as the two Supabase-backed account types
+    # (see mint_dashboard_token's _VALID_ACCOUNT_TYPES). Currently dead code
+    # from the frontend (no live caller of api.ts's changePassword — see
+    # api_change_own_dashboard_password above for the endpoint actually in
+    # use), kept alive server-side for defense-in-depth and given the same
+    # fresh-token treatment for consistency, not as a workaround. org_id/
+    # is_admin come from g.dashboard_user (already-verified current token),
+    # not target_user, since a legacy SQLite row's shape isn't guaranteed
+    # to carry the same keys mint_dashboard_token expects.
+    fresh_token = mint_dashboard_token(
+        {'id': target_user['id'], 'org_id': g.dashboard_user.get('org_id')},
+        account_type='legacy',
+        is_admin=g.dashboard_user.get('is_admin', False),
+        session_reason='password_changed',
+    )
+    return jsonify({'success': True, 'token': fresh_token})
 
 
 # ============================================
@@ -2451,9 +2505,33 @@ def api_change_own_dashboard_password():
             user_id=g.dashboard_user.get('id'),
             new_password=new_password,
         )
+        # Mint a fresh token carrying a fresh session_id so the CALLER's own
+        # dashboard doesn't immediately 401 itself out -- change_own_dashboard_password
+        # already updated the row; rotate_session (called inside
+        # mint_dashboard_token) supersedes whatever session_id was current,
+        # which would otherwise include the token this very request came in
+        # on. Claims are reused verbatim from g.dashboard_user (the
+        # already-verified current token) rather than re-derived, since a
+        # password change never changes role/org/scope -- only session_reason
+        # differs, so this row's audit trail correctly reads 'password_changed'
+        # rather than 'login'.
+        fresh_token = mint_dashboard_token(
+            {
+                'id': g.dashboard_user.get('id'),
+                'org_id': g.dashboard_user.get('org_id'),
+                'branch_id': g.dashboard_user.get('branch_id'),
+            },
+            account_type=g.dashboard_user.get('account_type'),
+            access_modules=g.dashboard_user.get('access_modules') or [],
+            dashboard_scope=g.dashboard_user.get('dashboard_scope'),
+            manager_id=g.dashboard_user.get('manager_id'),
+            is_admin=g.dashboard_user.get('is_admin', False),
+            session_reason='password_changed',
+        )
         return jsonify({
             'success': True,
             'message': 'Password updated successfully.',
+            'token': fresh_token,
         }), 200
     except ValueError as e:
         return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 400
@@ -4362,6 +4440,7 @@ def api_update_overtime(ot_id):
                 org_id=raw_org_id,
                 status=data.get('status', 'approved'),
                 approved_by=data.get('approved_by', 'Admin'),
+                rejection_note=data.get('rejection_note'),
             )
             return jsonify({'success': True, 'overtime': overtime}), 200
         except ValueError as exc:

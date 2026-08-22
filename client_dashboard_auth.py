@@ -68,6 +68,7 @@ from flask import request, jsonify, g
 
 from logger_config import get_logger
 from role_permissions import capabilities_for
+import session_registry
 
 logger = get_logger(__name__)
 
@@ -114,6 +115,7 @@ def mint_dashboard_token(
     dashboard_scope: Optional[str] = None,
     manager_id: Optional[str] = None,
     is_admin: Optional[bool] = None,
+    session_reason: str = 'login',
 ) -> str:
     """Sign a JWT for an authenticated Client Dashboard user.
 
@@ -171,6 +173,13 @@ def mint_dashboard_token(
     else:
         resolved_access_modules = role_caps['access_modules']
 
+    # account_type doubles as the session_registry key -- 'client_user' and
+    # 'client_staff' are both in VALID_ACCOUNT_TYPES already, so no mapping
+    # needed. This is what makes a new login invalidate any older session
+    # for the same account (see session_registry.py's module docstring).
+    # 'legacy' rows are included too, for the same reason.
+    session_id = session_registry.rotate_session(account_type, str(user['id']), reason=session_reason)
+
     now = datetime.now(timezone.utc)
     payload = {
         'sub':              str(user['id']),
@@ -182,6 +191,7 @@ def mint_dashboard_token(
                                               else user.get('dashboard_scope')),
         'manager_id':       str(manager_id) if manager_id else None,
         'is_admin':         resolved_is_admin,
+        'sid':              session_id,
         'iat':              now,
         'exp':              now + timedelta(hours=_TOKEN_TTL_HOURS),
     }
@@ -269,9 +279,25 @@ def require_client_dashboard_auth(f):
         except jwt.PyJWTError:
             return jsonify({'success': False, 'error': 'Invalid session token.'}), 401
 
+        # A valid, unexpired signature is necessary but no longer sufficient
+        # -- it must also still be the CURRENT session for this account_type
+        # + user_id (see session_registry.py). A token minted before this
+        # rollout has no 'sid' claim and is treated as superseded.
+        account_type = payload.get('account_type')
+        ok, reason = session_registry.validate_session(
+            str(account_type), str(payload['sub']), str(payload.get('sid') or '')
+        )
+        if not ok:
+            message = (
+                "Your password was changed. If this wasn't you, contact support."
+                if reason == session_registry.PASSWORD_CHANGED
+                else 'You were logged in elsewhere. That session has been ended.'
+            )
+            return jsonify({'success': False, 'error': message, 'code': reason}), 401
+
         g.dashboard_user = {
             'id':               payload['sub'],
-            'account_type':     payload.get('account_type'),
+            'account_type':     account_type,
             'org_id':           payload['org_id'],
             'branch_id':        payload.get('branch_id'),
             'access_modules':   payload.get('access_modules') or [],
@@ -287,6 +313,13 @@ def require_client_dashboard_auth(f):
         return f(*args, **kwargs)
 
     return decorated
+
+
+def logout_dashboard_user(account_type: str, user_id: str) -> None:
+    """Explicit server-side revocation for /api/client/auth/logout -- makes
+    the current token unusable immediately rather than leaving it valid
+    until natural expiry (up to 12h)."""
+    session_registry.end_session(str(account_type), str(user_id))
 
 
 def require_client_dashboard_admin(f):

@@ -58,7 +58,11 @@ function dayStatusBadge(dayStatus: string | null | undefined) {
 
 const PayrollDecisionRow: React.FC<{
   row: PayrollPendingRow;
-  onDecide: (attendanceId: string, decision: "include" | "exclude", note: string) => Promise<void>;
+  onDecide: (
+    attendanceId: string,
+    decision: "include" | "exclude",
+    note: string,
+  ) => Promise<void>;
 }> = ({ row, onDecide }) => {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"include" | "exclude" | null>(null);
@@ -100,8 +104,17 @@ const PayrollDecisionRow: React.FC<{
       </div>
 
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <strong style={{ color: T.head, fontSize: 13 }}>{staffLabel(row)}</strong>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <strong style={{ color: T.head, fontSize: 13 }}>
+            {staffLabel(row)}
+          </strong>
           {badge ? (
             <span
               style={{
@@ -129,12 +142,15 @@ const PayrollDecisionRow: React.FC<{
         >
           <Clock size={12} />
           {formatDate(row.timestamp)}
-          {row.notes ? <span style={{ marginLeft: 6 }}>· {row.notes}</span> : null}
+          {row.notes ? (
+            <span style={{ marginLeft: 6 }}>· {row.notes}</span>
+          ) : null}
         </div>
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Optional note for this decision…"
+          maxLength={300}
           style={{
             marginTop: 8,
             width: "100%",
@@ -149,7 +165,14 @@ const PayrollDecisionRow: React.FC<{
         />
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          alignItems: "flex-end",
+        }}
+      >
         <JellyButton
           variant="primary"
           size="sm"
@@ -194,7 +217,11 @@ export default function PayrollDecisions() {
       const pending = await listLocalNodePayrollPending({ organizationId });
       setRows(pending);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load payroll decisions.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load payroll decisions.",
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -207,7 +234,11 @@ export default function PayrollDecisions() {
   }, [isReady, load]);
 
   const handleDecide = useCallback(
-    async (attendanceId: string, decision: "include" | "exclude", note: string) => {
+    async (
+      attendanceId: string,
+      decision: "include" | "exclude",
+      note: string,
+    ) => {
       if (!organizationId) return;
       try {
         await setPayrollDecision({
@@ -219,7 +250,11 @@ export default function PayrollDecisions() {
         });
         await load();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to save payroll decision.");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to save payroll decision.",
+        );
       }
     },
     [organizationId, rawUser?.id, load],
@@ -227,25 +262,58 @@ export default function PayrollDecisions() {
 
   if (!isReady) {
     return (
-      <div style={{ fontFamily: "'DM Sans','Inter',sans-serif", padding: 38, color: T.muted, textAlign: "center" }}>
+      <div
+        style={{
+          fontFamily: "'DM Sans','Inter',sans-serif",
+          padding: 38,
+          color: T.muted,
+          textAlign: "center",
+        }}
+      >
         Initializing dashboard...
       </div>
     );
   }
 
   return (
-    <div style={{ fontFamily: "'DM Sans','Inter',sans-serif", display: "grid", gap: 18 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+    <div
+      style={{
+        fontFamily: "'DM Sans','Inter',sans-serif",
+        display: "grid",
+        gap: 18,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
         <div>
-          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: T.head, letterSpacing: "-.4px" }}>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 22,
+              fontWeight: 900,
+              color: T.head,
+              letterSpacing: "-.4px",
+            }}
+          >
             Payroll Decisions
           </h2>
           <p style={{ margin: "4px 0 0", fontSize: 12, color: T.muted }}>
-            Classified half-day, short leave, and overtime entries awaiting a payroll include/exclude call ·{" "}
-            {rows.length} pending
+            Classified half-day, short leave, and overtime entries awaiting a
+            payroll include/exclude call · {rows.length} pending
           </p>
         </div>
-        <RefreshButton variant="secondary" size="md" loading={refreshing} onClick={() => void load()} />
+        <RefreshButton
+          variant="secondary"
+          size="md"
+          loading={refreshing}
+          onClick={() => void load()}
+        />
       </div>
 
       <div
@@ -257,21 +325,32 @@ export default function PayrollDecisions() {
         }}
       >
         {loading ? (
-          <div style={{ padding: 38, color: T.muted, textAlign: "center" }}>Loading payroll decisions...</div>
+          <div style={{ padding: 38, color: T.muted, textAlign: "center" }}>
+            Loading payroll decisions...
+          </div>
         ) : error ? (
-          <div style={{ padding: 24, color: "#e11d48", fontWeight: 800 }}>{error}</div>
+          <div style={{ padding: 24, color: "#e11d48", fontWeight: 800 }}>
+            {error}
+          </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: 46, color: T.muted, textAlign: "center" }}>
             <DollarSign size={30} color={T.teal600} style={{ opacity: 0.45 }} />
-            <div style={{ marginTop: 10, fontWeight: 800 }}>Nothing pending</div>
+            <div style={{ marginTop: 10, fontWeight: 800 }}>
+              Nothing pending
+            </div>
             <div style={{ marginTop: 4, fontSize: 12 }}>
-              Classified local-node attendance days will show up here once they need a payroll decision.
+              Classified local-node attendance days will show up here once they
+              need a payroll decision.
             </div>
           </div>
         ) : (
           <div style={{ display: "grid" }}>
             {rows.map((row) => (
-              <PayrollDecisionRow key={row.id} row={row} onDecide={handleDecide} />
+              <PayrollDecisionRow
+                key={row.id}
+                row={row}
+                onDecide={handleDecide}
+              />
             ))}
           </div>
         )}

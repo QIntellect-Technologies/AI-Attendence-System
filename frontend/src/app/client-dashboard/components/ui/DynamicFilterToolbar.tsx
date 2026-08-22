@@ -155,6 +155,7 @@ const DynamicFilterToolbar: React.FC<DynamicFilterToolbarProps> = ({
             value={section.value}
             onChange={(event) => section.onChange(event.target.value)}
             placeholder={section.placeholder ?? "Search..."}
+            maxLength={100}
             style={{
               border: "none",
               outline: "none",

@@ -68,7 +68,20 @@ import { toNamedConfigOption } from "../utils/staffMapping";
 import { resolveProfileImageUrl } from "../utils/staffMedia";
 import { staffModules } from "../utils/staffMember";
 import { normalizeStaffShiftId } from "../utils/staffShifts";
-import { validateStaffForm } from "../utils/staffValidation";
+import {
+  NAME_MAX_LENGTH,
+  PHONE_MAX_LENGTH,
+  EMAIL_MAX_LENGTH,
+  CNIC_MAX_LENGTH,
+  PERSON_CODE_MAX_LENGTH,
+  GEOFENCE_LABEL_MAX_LENGTH,
+  WIFI_SSID_MAX_LENGTH,
+  WIFI_BSSID_MAX_LENGTH,
+  BENEFIT_ITEM_MAX_LENGTH,
+  SALARY_MIN,
+  SALARY_MAX,
+  validateStaffForm,
+} from "../utils/staffValidation";
 
 // ─── Add / Edit Modal ─────────────────────────────────────────────────────────
 
@@ -208,13 +221,24 @@ export const StaffModal: FC<{
   const [bssidDraft, setBssidDraft] = useState("");
   const [isLocating, setIsLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
+  const salaryFieldEnabled = templateFormFields.some(
+    (field) => field.key === "salary",
+  );
   // Recomputed from `form` on every render rather than held as separate
   // state — there is exactly one place (validateStaffForm) that decides
   // what's wrong, so the inline messages below and the Save gate can never
   // drift out of sync with each other.
   const formErrors = useMemo(
-    () => validateStaffForm(form, peopleModel.isStudent),
+    () =>
+      validateStaffForm(
+        form,
+        peopleModel.isStudent,
+        peopleCodeModel(peopleModel.peopleType).label,
+        salaryFieldEnabled,
+      ),
     [
+      form.name,
+      form.personCode,
       form.email,
       form.phone,
       form.cnic,
@@ -222,6 +246,8 @@ export const StaffModal: FC<{
       form.fatherPhone,
       form.fatherCnic,
       peopleModel.isStudent,
+      peopleModel.peopleType,
+      salaryFieldEnabled,
     ],
   );
 
@@ -1015,24 +1041,58 @@ export const StaffModal: FC<{
                 {peopleModel.personSingular} Name *
               </label>
               <input
-                style={inputStyle}
+                style={{
+                  ...inputStyle,
+                  ...(formErrors.name ? { borderColor: "#dc2626" } : null),
+                }}
                 value={form.name}
                 onChange={(e) => set("name", e.target.value)}
                 placeholder="Ahmed Khan"
+                maxLength={NAME_MAX_LENGTH}
+                aria-invalid={Boolean(formErrors.name)}
               />
+              {formErrors.name && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 12,
+                    color: "#dc2626",
+                  }}
+                >
+                  {formErrors.name}
+                </div>
+              )}
             </div>
             <div>
               <label style={labelStyle}>
                 {peopleCodeModel(peopleModel.peopleType).label} *
               </label>
               <input
-                style={inputStyle}
+                style={{
+                  ...inputStyle,
+                  ...(formErrors.personCode
+                    ? { borderColor: "#dc2626" }
+                    : null),
+                }}
                 value={form.personCode}
                 onChange={(e) => set("personCode", e.target.value.trim())}
                 placeholder={
                   peopleCodeModel(peopleModel.peopleType).placeholder
                 }
+                maxLength={PERSON_CODE_MAX_LENGTH}
+                aria-invalid={Boolean(formErrors.personCode)}
               />
+              {formErrors.personCode && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 12,
+                    color: "#dc2626",
+                  }}
+                >
+                  {formErrors.personCode}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1054,6 +1114,7 @@ export const StaffModal: FC<{
                 value={form.phone}
                 onChange={(e) => set("phone", e.target.value.trim())}
                 placeholder="0300-1234567"
+                maxLength={PHONE_MAX_LENGTH}
                 aria-invalid={Boolean(formErrors.phone)}
               />
               {formErrors.phone && (
@@ -1086,6 +1147,7 @@ export const StaffModal: FC<{
                   set("email", e.target.value.trim().toLowerCase())
                 }
                 placeholder="ahmed@company.com"
+                maxLength={EMAIL_MAX_LENGTH}
                 aria-invalid={Boolean(formErrors.email)}
               />
               {formErrors.email && (
@@ -1129,6 +1191,7 @@ export const StaffModal: FC<{
                 value={form.cnic}
                 onChange={(e) => set("cnic", e.target.value.trim())}
                 placeholder="42101-1234567-1"
+                maxLength={CNIC_MAX_LENGTH}
                 aria-invalid={Boolean(formErrors.cnic)}
               />
               {formErrors.cnic && (
@@ -1161,6 +1224,7 @@ export const StaffModal: FC<{
                   value={form.fatherName}
                   onChange={(e) => set("fatherName", e.target.value)}
                   placeholder="Muhammad Khan"
+                  maxLength={NAME_MAX_LENGTH}
                   aria-invalid={Boolean(formErrors.fatherName)}
                 />
                 {formErrors.fatherName && (
@@ -1195,6 +1259,7 @@ export const StaffModal: FC<{
                     value={form.fatherPhone}
                     onChange={(e) => set("fatherPhone", e.target.value.trim())}
                     placeholder="0300-1234567"
+                    maxLength={PHONE_MAX_LENGTH}
                     aria-invalid={Boolean(formErrors.fatherPhone)}
                   />
                   {formErrors.fatherPhone && (
@@ -1222,6 +1287,7 @@ export const StaffModal: FC<{
                     value={form.fatherCnic}
                     onChange={(e) => set("fatherCnic", e.target.value.trim())}
                     placeholder="42101-1234567-1"
+                    maxLength={CNIC_MAX_LENGTH}
                     aria-invalid={Boolean(formErrors.fatherCnic)}
                   />
                   {formErrors.fatherCnic && (
@@ -1341,15 +1407,35 @@ export const StaffModal: FC<{
             >
               <label style={labelStyle}>Compensation (PKR)</label>
               <input
-                style={inputStyle}
+                style={{
+                  ...inputStyle,
+                  ...(formErrors.salary ? { borderColor: "#dc2626" } : null),
+                }}
                 value={form.salary}
                 type="number"
-                min={0}
-                step="any"
+                min={SALARY_MIN}
+                max={SALARY_MAX}
+                step="1"
+                onKeyDown={(e) => {
+                  if (["-", "+", "e", "E"].includes(e.key)) e.preventDefault();
+                }}
                 onChange={(e) =>
-                  set("salary", Math.max(0, Number(e.target.value) || 0))
+                  set("salary", Math.min(SALARY_MAX, Number(e.target.value)))
                 }
+                aria-invalid={Boolean(formErrors.salary)}
               />
+              {formErrors.salary && (
+                <p
+                  style={{
+                    margin: "5px 0 0",
+                    fontSize: 11,
+                    color: "#dc2626",
+                    fontWeight: 600,
+                  }}
+                >
+                  {formErrors.salary}
+                </p>
+              )}
             </div>
             <div>
               <label style={labelStyle}>Status</label>
@@ -1397,6 +1483,7 @@ export const StaffModal: FC<{
                     }
                   }}
                   placeholder="Medical insurance, transport, bonus, lunch..."
+                  maxLength={BENEFIT_ITEM_MAX_LENGTH}
                 />
                 <JellyButton
                   type="button"
@@ -1683,6 +1770,7 @@ export const StaffModal: FC<{
                   onChange={(e) => set("geofenceLabel", e.target.value)}
                   placeholder="e.g. Sheikh Zaid Hospital"
                   style={inputStyle}
+                  maxLength={GEOFENCE_LABEL_MAX_LENGTH}
                 />
               </div>
 
@@ -1702,6 +1790,7 @@ export const StaffModal: FC<{
                     onChange={(e) => set("geofenceLat", e.target.value)}
                     placeholder="31.4180"
                     style={inputStyle}
+                    maxLength={20}
                   />
                 </div>
                 <div>
@@ -1713,6 +1802,7 @@ export const StaffModal: FC<{
                     onChange={(e) => set("geofenceLng", e.target.value)}
                     placeholder="73.0791"
                     style={inputStyle}
+                    maxLength={20}
                   />
                 </div>
                 <div>
@@ -1726,6 +1816,7 @@ export const StaffModal: FC<{
                     }
                     placeholder="100"
                     style={inputStyle}
+                    maxLength={6}
                   />
                 </div>
               </div>
@@ -1803,6 +1894,7 @@ export const StaffModal: FC<{
                   onChange={(e) => set("officeSsid", e.target.value)}
                   placeholder="e.g. Qintellect_5G"
                   style={inputStyle}
+                  maxLength={WIFI_SSID_MAX_LENGTH}
                 />
               </div>
 
@@ -1827,6 +1919,7 @@ export const StaffModal: FC<{
                     }}
                     placeholder="e.g. b4:0f:3b:6b:1b:75"
                     style={{ ...inputStyle, flex: 1 }}
+                    maxLength={WIFI_BSSID_MAX_LENGTH}
                   />
                   <button
                     type="button"
@@ -2408,7 +2501,7 @@ export const StaffModal: FC<{
             type="button"
             variant="primary"
             loading={isSaving}
-            disabled={Boolean(mediaError)}
+            disabled={Boolean(mediaError) || Object.keys(formErrors).length > 0}
             onClick={async () => {
               if (isSaving) return;
               if (mediaError) return;

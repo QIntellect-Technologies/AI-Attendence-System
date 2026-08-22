@@ -57,6 +57,104 @@ def _require(value, field: str):
     return value
 
 
+# Bounds for a visit-plan stop -- mirrors the frontend's VisitPlansTab.tsx
+# maxLength={150} on location_label/purpose, so a direct API call can't
+# bypass the same limit. lat/lng are real-world coordinate bounds (there is
+# no legitimate stop outside them); radius_meters has no existing
+# convention elsewhere in the codebase (client_staff.geofence_radius_meters
+# is stored as a bare int() cast with no bounds either), so this picks a
+# practical geofencing range: below 10m a GPS fix can't reliably tell
+# "inside" from "outside" the stop, and above 5000m the radius stops
+# meaning anything as a distinct-location check.
+_LOCATION_LABEL_MAX_LENGTH = 150
+_PURPOSE_MAX_LENGTH = 150
+_LAT_MIN, _LAT_MAX = -90.0, 90.0
+_LNG_MIN, _LNG_MAX = -180.0, 180.0
+_RADIUS_MIN_METERS, _RADIUS_MAX_METERS = 10, 5000
+
+
+def _clean_stop_text(value: object, field: str, max_length: int, *, required: bool) -> Optional[str]:
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        if required:
+            raise ValueError(f"{field} is required")
+        return None
+    if len(text) > max_length:
+        raise ValueError(f"{field} must be {max_length} characters or fewer")
+    return text
+
+
+def _clean_stop_coordinate(value: object, field: str, low: float, high: float) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number")
+    if num != num or num in (float("inf"), float("-inf")):
+        raise ValueError(f"{field} must be a finite number")
+    if not (low <= num <= high):
+        raise ValueError(f"{field} must be between {low} and {high}")
+    return num
+
+
+def _clean_stop_radius(value: object) -> int:
+    if value in (None, ""):
+        return _DEFAULT_RADIUS_METERS
+    try:
+        radius = int(float(value))
+    except (TypeError, ValueError):
+        raise ValueError("radius_meters must be a number")
+    if not (_RADIUS_MIN_METERS <= radius <= _RADIUS_MAX_METERS):
+        raise ValueError(
+            f"radius_meters must be between {_RADIUS_MIN_METERS} and {_RADIUS_MAX_METERS}"
+        )
+    return radius
+
+
+def _validate_stop_payload(payload: dict, *, partial: bool) -> dict:
+    """Clean + validate the stop fields present in `payload`.
+
+    partial=False (add_stop): location_label and lat/lng are required.
+    partial=True (update_stop): only the keys actually present are
+    validated/returned -- a PATCH that doesn't touch lat shouldn't need to
+    resend it, but any lat it DOES send still has to be a real latitude.
+    Previously update_stop wrote every whitelisted key straight through
+    with no validation at all, so a PATCH could set lat=9999,
+    radius_meters=-1, or a multi-kilobyte location_label with no pushback.
+    """
+    cleaned: dict = {}
+
+    if not partial or "location_label" in payload:
+        cleaned["location_label"] = _clean_stop_text(
+            payload.get("location_label"), "location_label",
+            _LOCATION_LABEL_MAX_LENGTH, required=not partial,
+        )
+
+    lat_present = "lat" in payload or "latitude" in payload
+    lng_present = "lng" in payload or "longitude" in payload
+    if not partial or lat_present:
+        lat = payload.get("lat", payload.get("latitude"))
+        if lat is None and not partial:
+            raise ValueError("lat/lng are required")
+        if lat is not None:
+            cleaned["lat"] = _clean_stop_coordinate(lat, "lat", _LAT_MIN, _LAT_MAX)
+    if not partial or lng_present:
+        lng = payload.get("lng", payload.get("longitude"))
+        if lng is None and not partial:
+            raise ValueError("lat/lng are required")
+        if lng is not None:
+            cleaned["lng"] = _clean_stop_coordinate(lng, "lng", _LNG_MIN, _LNG_MAX)
+
+    if not partial or "radius_meters" in payload:
+        cleaned["radius_meters"] = _clean_stop_radius(payload.get("radius_meters"))
+
+    if not partial or "purpose" in payload:
+        cleaned["purpose"] = _clean_stop_text(
+            payload.get("purpose"), "purpose", _PURPOSE_MAX_LENGTH, required=False,
+        )
+
+    return cleaned
+
+
 # ─── Evidence settings (branch + people_type baseline) ─────────────────────
 #
 # Not a separate table -- visit_evidence_mode lives directly on

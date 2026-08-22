@@ -15,6 +15,10 @@ export interface RejectReasonModalProps {
   onClose: () => void;
 }
 
+// UX-only guard; the backend route that persists this reason caps it at the
+// same length, so a direct API call can't bypass the limit.
+const REASON_MAX_LENGTH = 500;
+
 export default function RejectReasonModal({
   request,
   onConfirm,
@@ -64,6 +68,7 @@ export default function RejectReasonModal({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Write rejection reason..."
+            maxLength={REASON_MAX_LENGTH}
             style={{
               width: "100%",
               minHeight: 110,
@@ -77,6 +82,18 @@ export default function RejectReasonModal({
               boxSizing: "border-box",
             }}
           />
+          <div
+            style={{
+              marginTop: 6,
+              textAlign: "right",
+              fontSize: 11,
+              fontWeight: 600,
+              color:
+                reason.length >= REASON_MAX_LENGTH ? "#e11d48" : T.muted,
+            }}
+          >
+            {reason.length}/{REASON_MAX_LENGTH}
+          </div>
         </div>
         <div
           style={{

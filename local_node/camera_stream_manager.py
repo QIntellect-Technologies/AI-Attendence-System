@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -43,7 +44,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import cv2
+import numpy as np
 from local_node.config_store import read_runtime_status, write_runtime_status
+from local_node.logging_config import log_on_change
+from local_node import perf_stats
 from local_node.recognition_engine import detect_and_extract, FaceEngineUnavailableError
 from local_node import local_db
 from local_node import shift_gate
@@ -52,7 +56,6 @@ from local_node.recognition_worker import best_match
 
 logger = logging.getLogger(__name__)
 
-DETECT_EVERY_N_FRAMES = 5
 STREAM_FPS_LIMIT = 12
 DUPLICATE_LOG_SECONDS = 30
 RECONNECT_BACKOFF_SECONDS = 5
@@ -61,6 +64,372 @@ TRACK_MAX_UNSEEN_SECONDS = 2.0
 
 FAILURE_THRESHOLD_BEFORE_FALLBACK = 3     # consecutive open/read failures on the active URL
 PRIMARY_RETRY_INTERVAL_SECONDS = 120       # how often to re-try the local URL while on fallback
+
+# ── streaming/display tuning ────────────────────────────────────────────
+# Frames handed to the detector are always full resolution (accuracy
+# matters there); only the copy encoded for the browser is shrunk.
+STREAM_DISPLAY_MAX_WIDTH = 1280
+STREAM_JPEG_QUALITY = 90
+
+# Interpolation for the browser-preview downscale. INTER_AREA is the
+# textbook choice for shrinking an image and was what this used, but it is
+# an exact area average and therefore reads every source pixel: measured
+# at 5.1ms for 2560x1440 -> 640x360 and 11.6ms for 1440x1620 -> 640x720,
+# against 0.6-1.2ms for INTER_LINEAR. For reference, the JPEG encode that
+# follows it costs under 2ms — the resize was several times more expensive
+# than the thing it was preparing for.
+#
+# INTER_LINEAR aliases slightly more on fine high-contrast detail. This is
+# a preview thumbnail in a browser grid, and NOTHING downstream reads it:
+# the detector is handed the untouched full-resolution frame on a separate
+# path (see _run_processor), so recognition accuracy and range are
+# unaffected by this choice. Set back to cv2.INTER_AREA if the preview
+# quality is ever judged more valuable than the milliseconds.
+STREAM_DISPLAY_INTERPOLATION = cv2.INTER_LINEAR
+
+# How long a browser tab can wait for the next encoded frame before the
+# generator wakes up anyway to re-check whether the camera is still
+# running. Keeps a viewer from hanging forever if the processor stalls.
+MJPEG_WAIT_TIMEOUT_SECONDS = 1.0
+
+# RTSP/FFMPEG-backend frames arrive over a socket that keeps buffering
+# while nothing reads it. cv2's CAP_PROP_BUFFERSIZE is a no-op on the
+# FFMPEG backend, so the only real way to stop the stream drifting behind
+# live is (a) tell ffmpeg itself not to buffer, and (b) drain any frames
+# it queued up before trusting the next one as "now".
+RTSP_LOW_LATENCY_ENV_OPTIONS = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0"
+
+# How many frames the reader grabs per iteration, retrieving only the last.
+#
+# On the FFMPEG backend grab() runs the full H.264 decode (av_read_frame +
+# avcodec_receive_frame); only the YUV->BGR sws_scale is deferred to
+# retrieve(). So this is NOT a free skip — it decodes three frames and
+# converts one.
+#
+# It is nevertheless left at 3, against first instinct, because /perf
+# showed all four cameras here consuming only 10-22 of the 25 fps their
+# streams offer. The loop is already pulling FEWER frames than arrive, so
+# lowering this would make the loop spin faster and decode MORE, while
+# also tripling the sws_scale count. Raising it discards more decoded
+# frames for nothing. Both directions cost CPU.
+#
+# The real lever on decode cost is the number of frames the CAMERA sends
+# (an NVR setting) and whether NVDEC/QuickSync is doing the decoding —
+# not this constant. Env-tunable so it can be tested against /perf on a
+# specific install without a rebuild, but do not change the default
+# without reading reader.frames_not_consumed first.
+try:
+    RTSP_BUFFER_FLUSH_GRABS = max(1, int(os.getenv("QINTELLECT_NODE_FLUSH_GRABS", "3")))
+except ValueError:
+    RTSP_BUFFER_FLUSH_GRABS = 3
+
+# Fallback source frame interval, used only when the camera reports a
+# nonsense FPS. Two of the four cameras here report 90000 — that is the
+# MPEG 90kHz timebase leaking through CAP_PROP_FPS, not a frame rate — so
+# a sanity range is mandatory, not defensive padding.
+RTSP_FPS_SANE_RANGE = (1.0, 120.0)
+RTSP_DEFAULT_SOURCE_FPS = 25.0
+
+# ── motion gating: don't pay for detect_and_extract() on frames that
+# haven't changed ───────────────────────────────────────────────────────
+# Face detection is the single most expensive thing this app does per
+# frame on EITHER resource: on a CPU-only install it's the whole cost;
+# on a GPU install the matrix math itself is cheap, but every call still
+# pays CPU-side pre/post-processing (resize to det_size, anchor decode,
+# NMS, alignment warp) that InsightFace does in numpy, and that work is
+# serialized across every camera by embedding.py's _inference_lock —
+# meaning an idle camera calling detect_and_extract as fast as it's
+# offered frames isn't just wasting its own resources, it's queueing
+# behind (and stealing turns from) every other camera on the box. Most
+# camera views are empty most of the time — an entrance overnight, a
+# side door used twice a shift — so a near-free grayscale-diff check
+# ahead of the real detector lets those frames skip it almost entirely,
+# on both GPU and CPU-only boxes, without any accuracy cost when
+# something is actually happening.
+MOTION_CHECK_SIZE = (64, 64)
+MOTION_DIFF_THRESHOLD = 12.0          # cv2.mean() abs diff (0-255 scale) to count as "motion"
+
+# Longest edge the frame is decimated to BEFORE the area-averaged resize
+# down to MOTION_CHECK_SIZE. This is the whole fix for what /perf measured
+# as the single most expensive line in this file.
+#
+# The old code went straight from the full frame to 64x64 with INTER_AREA.
+# INTER_AREA is an exact area average, so it must READ EVERY SOURCE PIXEL:
+# 3.7 million of them for a 2560x1440 camera, 6-8 times a second, per
+# camera. Measured at 9.2ms per call on that resolution — which made the
+# "near-free" gate cost roughly 1.2 cores across four cameras, about twice
+# what the face model itself was using.
+#
+# Slicing with a stride first costs nothing per skipped pixel (numpy just
+# changes the step), and area-averaging the already-small result is
+# cheap. Measured on the four cameras actually deployed here, this cuts
+# the gate from 9.2ms to 0.42ms — ~22x — while the diff scores it produces
+# stay within ~1% of the old ones for every person size tested, from a
+# 400x900px figure down to 24x54px. The gate reaches the same verdict; it
+# just stops reading 3.7 million pixels to get there.
+MOTION_DECIMATE_TARGET_EDGE = 192
+# Deliberately shorter than TRACK_MAX_UNSEEN_SECONDS (2.0s) — this is the
+# longest a fully idle (zero-motion) camera ever goes without a real
+# detection pass, so a person who has stopped moving in frame still gets
+# re-detected before their track would otherwise go stale and drop.
+IDLE_DETECT_INTERVAL_SECONDS = 1.5
+
+
+def _frames_missed(state: _CameraState, at: float) -> float:
+    """How many frames this camera sent that the reader never asked for,
+    since the previous grab finished. Pure measurement — nothing branches
+    on it.
+
+    This exists because the obvious "fix" for the flush loop is wrong in a
+    way that is invisible without it. Reducing RTSP_BUFFER_FLUSH_GRABS
+    looks like it must cut decode work, since fewer frames are grabbed per
+    iteration. It does the opposite when the reader is already running
+    BEHIND the source: the loop simply iterates more often and pulls the
+    frames it was previously missing, decoding more in total. This number
+    is what distinguishes the two regimes, so the decision can be made
+    from data instead of from intuition.
+
+    Consistently above zero: the reader is behind the camera, and lowering
+    the flush count will increase decode load. Consistently zero: the
+    reader is keeping up, and the flush count is discarding freshly
+    decoded frames that could have been used instead.
+    """
+    if not state.last_grab_finished_at or state.source_frame_interval <= 0:
+        return 0.0
+    offered = (at - state.last_grab_finished_at) / state.source_frame_interval
+    return max(0.0, round(offered - RTSP_BUFFER_FLUSH_GRABS, 2))
+
+
+def _motion_thumbnail(frame):
+    """Frame -> the small grayscale image the motion diff runs on.
+
+    Two stages on purpose. Stride-slicing first is free per skipped pixel
+    (numpy only changes the step, it reads nothing), which is what avoids
+    INTER_AREA's mandatory full-frame read. The second stage still uses
+    INTER_AREA, so the values that come out are area averages just as
+    before — the averaging window is simply built from a decimated sample
+    of the frame rather than every pixel in it.
+
+    Converting to grayscale on the DECIMATED image rather than the full
+    one matters as much as the resize: cvtColor on 3.7M pixels is itself
+    several milliseconds, and nothing downstream needs colour.
+    """
+    height, width = frame.shape[:2]
+    step = max(1, min(height, width) // MOTION_DECIMATE_TARGET_EDGE)
+    if step > 1:
+        # ascontiguousarray because a strided view is not a valid Mat —
+        # cv2 would have to copy it internally anyway, and doing it here
+        # keeps the cost visible instead of hidden inside OpenCV.
+        frame = np.ascontiguousarray(frame[::step, ::step])
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    return cv2.resize(gray, MOTION_CHECK_SIZE, interpolation=cv2.INTER_AREA)
+
+
+def _motion_detected(state: _CameraState, frame) -> bool:
+    """True if this frame differs enough from the previous one to be worth
+    a real detection pass. First frame after (re)connect always returns
+    True — nothing to diff against yet, and a fresh connection is exactly
+    when someone might already be standing in frame.
+
+    The score is published to /perf (measurement 'detector.motion_score')
+    on every call. That is not decoration: MOTION_DIFF_THRESHOLD has never
+    been calibrated against real footage from these cameras, and the
+    perf data strongly suggests it is set far too high to ever fire (see
+    the note on the threshold constant). Recording the actual distribution
+    — noise floor as the minimum, real activity as the maximum — is what
+    makes choosing a correct threshold a measurement rather than another
+    guess. Cost is one float and a dict update per call.
+    """
+    gray = _motion_thumbnail(frame)
+    prev = state.motion_prev_gray
+    state.motion_prev_gray = gray
+    if prev is None:
+        return True
+    score = cv2.mean(cv2.absdiff(gray, prev))[0]
+    perf_stats.observe(state.camera_id, "detector.motion_score", score)
+    return score >= MOTION_DIFF_THRESHOLD
+
+# Hardware-decode candidates, most capable first.
+#
+# OpenCV's FFMPEG backend rejects VIDEO_ACCELERATION_ANY when it's paired
+# with an explicit CAP_PROP_HW_DEVICE index — that is the documented
+# "Invalid usage of CAP_PROP_HW_DEVICE with 'ANY' H/W acceleration.
+# Bailout" error. ANY means "let ffmpeg probe every backend on its own";
+# pinning a device index is a contradiction, not a stricter version of
+# the same request. This was the actual bug: every camera hit that
+# invalid combination, ffmpeg refused to open with any acceleration
+# request at all, and OpenCV silently re-opened in pure software decode
+# — which /perf then correctly showed as the dominant CPU cost
+# (camera-reader-* + camera-processor-* dwarfing detection and matching).
+#
+# D3D11VA is the correct, device-pinnable backend on Windows: opencv-
+# python's bundled ffmpeg has supported it since OpenCV 4.5.4, and it
+# transparently rides whatever GPU driver exposes a D3D11 video-decode
+# device — NVDEC on an NVIDIA GPU, Quick Sync on an Intel iGPU. This
+# module already commits to Windows-only (CAP_DSHOW is the webcam
+# backend below, and DSHOW does not exist on other platforms), so D3D11
+# is listed unconditionally rather than behind a platform check.
+#
+# Each entry is (VIDEO_ACCELERATION_* attribute name, device index or
+# None). None means "omit CAP_PROP_HW_DEVICE entirely" — required for
+# ANY, kept here only as a last-resort hardware attempt before the plain
+# software open in _open_capture.
+_HW_ACCEL_CANDIDATES: tuple[tuple[str, int | None], ...] = (
+    ("VIDEO_ACCELERATION_D3D11", 0),
+    ("VIDEO_ACCELERATION_ANY", None),
+)
+
+
+def _open_capture_with_hw_accel(url: str, backend: int) -> cv2.VideoCapture | None:
+    """Try each candidate in `_HW_ACCEL_CANDIDATES` in order, returning the
+    first capture that both opens AND reports the acceleration actually
+    engaged. Returns None if every candidate fails or silently falls back
+    to software — the caller (`_open_capture`) then does a plain,
+    unaccelerated open, which always succeeds if the stream is reachable.
+
+    isOpened() alone is not sufficient to confirm success: OpenCV can open
+    the stream and decode in software while still returning an opened
+    capture (see `_report_capture_properties`'s docstring — this is the
+    same failure mode that diagnostic exists to catch). Reading back
+    CAP_PROP_HW_ACCELERATION after open is what actually confirms the
+    request was honored, so a candidate that silently downgraded is
+    rejected here instead of being mistaken for a working GPU path.
+    """
+    if not hasattr(cv2, "CAP_PROP_HW_ACCELERATION"):
+        return None
+
+    for accel_attr, device_index in _HW_ACCEL_CANDIDATES:
+        accel_value = getattr(cv2, accel_attr, None)
+        if accel_value is None:
+            continue  # this OpenCV build doesn't expose this backend
+
+        params = [cv2.CAP_PROP_HW_ACCELERATION, accel_value]
+        if device_index is not None:
+            params += [cv2.CAP_PROP_HW_DEVICE, device_index]
+
+        try:
+            cap = cv2.VideoCapture(url, backend, params)
+        except Exception:
+            continue
+
+        if cap is None:
+            continue
+        if not cap.isOpened():
+            cap.release()
+            continue
+
+        try:
+            negotiated = cap.get(cv2.CAP_PROP_HW_ACCELERATION)
+        except Exception:
+            negotiated = None
+
+        if negotiated and int(negotiated) != 0:
+            return cap  # confirmed: hardware decode actually engaged
+
+        cap.release()  # opened, but silently fell back to software — try the next candidate
+
+    return None
+
+
+def _report_capture_properties(state: _CameraState, cap) -> None:
+    """Record what this capture ACTUALLY negotiated, as opposed to what
+    was requested. Three facts, none of which are visible anywhere else:
+
+      * frame width/height — decode cost scales with pixel count, so a
+        single 4MP camera can cost more than four 720p ones. The config
+        does not say what resolution the NVR really serves.
+      * source FPS — the reader decodes every frame the camera sends,
+        regardless of STREAM_FPS_LIMIT, which only throttles the display
+        and detection side. A 30fps source is 2.5x the decode work of a
+        12fps one for identical output.
+      * hardware acceleration — _open_capture asks for
+        VIDEO_ACCELERATION_ANY, but OpenCV silently falls back to software
+        decode and still returns an opened capture, so the request
+        succeeding tells you nothing. This reads back what was actually
+        selected. 0 (VIDEO_ACCELERATION_NONE) means the CPU is doing every
+        frame of H.264 decode for this camera.
+
+    Wrapped in try/except throughout: property support varies by backend
+    and OpenCV build, and a diagnostic must never be able to stop a camera
+    from starting.
+    """
+    def _get(prop_name: str):
+        prop = getattr(cv2, prop_name, None)
+        if prop is None:
+            return None
+        try:
+            value = cap.get(prop)
+        except Exception:
+            return None
+        return value if value else None
+
+    width = _get("CAP_PROP_FRAME_WIDTH")
+    height = _get("CAP_PROP_FRAME_HEIGHT")
+    fps = _get("CAP_PROP_FPS")
+    hw = _get("CAP_PROP_HW_ACCELERATION")
+
+    megapixels = round((width * height) / 1e6, 2) if width and height else None
+
+    # Two of the four cameras on this deployment report 90000 fps. That is
+    # the MPEG 90kHz timebase surfacing through CAP_PROP_FPS, not a frame
+    # rate, and feeding it into the catch-up arithmetic would compute a
+    # frame interval of 11 microseconds and make the reader believe it is
+    # permanently thousands of frames behind. Range-check before trusting.
+    low, high = RTSP_FPS_SANE_RANGE
+    if fps is not None and low <= fps <= high:
+        sane_fps = float(fps)
+        fps_source = "reported"
+    else:
+        sane_fps = RTSP_DEFAULT_SOURCE_FPS
+        fps_source = f"assumed (camera reported {fps!r})" if fps else "assumed (not reported)"
+    state.source_frame_interval = 1.0 / sane_fps
+    state.last_grab_finished_at = 0.0
+
+    # cv2.VideoAccelerationType: NONE=0, ANY=1, D3D11=2, VAAPI=3, MFX=4.
+    # Resolved from the cv2 module where possible rather than hardcoded,
+    # so a future OpenCV that adds or renumbers a backend reports the
+    # right name instead of a confidently wrong one.
+    hw_names = {}
+    for attr in ("VIDEO_ACCELERATION_NONE", "VIDEO_ACCELERATION_ANY",
+                 "VIDEO_ACCELERATION_D3D11", "VIDEO_ACCELERATION_VAAPI",
+                 "VIDEO_ACCELERATION_MFX"):
+        value = getattr(cv2, attr, None)
+        if value is not None:
+            hw_names[int(value)] = attr.replace("VIDEO_ACCELERATION_", "").lower()
+    hw_names.setdefault(0, "none")
+
+    if hw is None:
+        # _get() collapses a 0 return to None, and 0 IS the meaningful
+        # "software decode" value here — but it is indistinguishable from
+        # "this build cannot report the property". Either way the safe
+        # reading is the pessimistic one: assume the CPU is decoding until
+        # proven otherwise by the GPU's Video Decode graph.
+        hw_label = "none/unreported (software)"
+    else:
+        resolved = hw_names.get(int(hw), f"code {int(hw)}")
+        hw_label = f"{resolved} (software)" if int(hw) == 0 else resolved
+
+    perf_stats.set_camera_info(
+        state.camera_id,
+        name=state.camera_name,
+        source="webcam" if state.camera_type == "webcam" else ("fallback/public" if state.using_fallback else "primary/local"),
+        width=int(width) if width else None,
+        height=int(height) if height else None,
+        megapixels=megapixels,
+        source_fps=f"{sane_fps:g} ({fps_source})",
+        hw_acceleration=hw_label,
+    )
+
+    # WARNING level so this lands in node.log at the default log level —
+    # it prints once per (re)connect, not per frame, and it is the single
+    # most useful line for diagnosing a decode-bound node.
+    logger.warning(
+        "Camera %s (%s): capture opened %sx%s @ %g fps [%s], hw_decode=%s",
+        state.camera_id, state.camera_name,
+        int(width) if width else "?", int(height) if height else "?",
+        sane_fps, fps_source, hw_label,
+    )
+
 
 def _select_url(state: _CameraState) -> str:
     """Automatic local→public failover — no manual toggle. Starts on the
@@ -130,8 +499,23 @@ class _CameraState:
     using_fallback: bool = False       
     consecutive_failures: int = 0      
     raw_frame: Any = None
+    raw_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    # latest_jpeg has two very different readers/writers: the processor
+    # thread (one writer, ~12x/sec) and every browser tab watching this
+    # camera (N readers, each blocking until a new frame lands). Giving
+    # this its own lock — instead of sharing state.raw_lock the way a
+    # single "lock" field used to — means a viewer's HTTP thread never
+    # contends with the RTSP reader thread for the same lock. The
+    # Condition lets viewers block-until-new-frame instead of polling on
+    # a fixed timer, so nobody sleeps past a frame that's already ready
+    # and nobody re-sends a frame that hasn't changed.
     latest_jpeg: bytes | None = None
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    jpeg_version: int = 0
+    jpeg_lock: threading.Lock = field(default_factory=threading.Lock)
+    jpeg_ready: threading.Condition = field(init=False)
+    viewer_count: int = 0
+
     last_seen_by_person: dict[str, float] = field(default_factory=dict)
     tracked_faces: dict[int, dict[str, Any]] = field(default_factory=dict)
     next_track_id: int = 0
@@ -141,6 +525,21 @@ class _CameraState:
     detector_thread: threading.Thread | None = None
     pending_detect_frame: Any = None
     detect_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    # Motion gate state (see _motion_detected / _run_detector below) —
+    # per-camera so one busy entrance and one quiet back door don't share
+    # a "last seen motion" clock.
+    motion_prev_gray: Any = None
+    last_full_detect_at: float = 0.0
+
+    # Live-catch-up state (see _run_reader). source_frame_interval is what
+    # one frame from THIS camera is worth in seconds, used to work out how
+    # many frames piled up while the reader was busy elsewhere.
+    source_frame_interval: float = 1.0 / RTSP_DEFAULT_SOURCE_FPS
+    last_grab_finished_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.jpeg_ready = threading.Condition(self.jpeg_lock)
 
 
 class CameraStreamManager:
@@ -259,6 +658,7 @@ class CameraStreamManager:
         state = self._cameras.pop(camera_id, None)
         if state:
             state.stop_event.set()
+            perf_stats.clear_camera_info(camera_id)
 
     # ── read side (UI) ──────────────────────────────────────────────────
 
@@ -295,18 +695,65 @@ class CameraStreamManager:
             ]
 
     def mjpeg_frames(self, camera_id: str):
-        """Generator yielding a multipart/x-mixed-replace stream for one camera."""
-        min_interval = 1.0 / STREAM_FPS_LIMIT
-        while True:
-            with self._lock:
-                state = self._cameras.get(camera_id)
-            if state is None:
-                break
-            with state.lock:
-                frame = state.latest_jpeg
-            if frame is not None:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-            time.sleep(min_interval)
+        """Generator yielding a multipart/x-mixed-replace stream for one camera.
+
+        Registers itself as a viewer on the camera's current _CameraState
+        (see _register_viewer/_release_viewer below) — this is what lets the
+        processor thread skip encoding entirely while no browser tab is open
+        on this camera. Blocks on that state's jpeg_ready condition instead
+        of polling on a timer, so a frame is sent the moment it's encoded
+        rather than up to one poll-interval late, and the same frame is
+        never re-sent twice.
+
+        Re-fetches the camera's state every iteration (matching the previous
+        behaviour) rather than capturing it once, so a viewer already
+        watching this camera keeps streaming transparently across a
+        sync_cameras()-triggered restart (e.g. an updated RTSP URL swaps in
+        a brand new _CameraState under the same camera_id) instead of the
+        connection dying and forcing the browser to reconnect.
+        """
+        registered_state: _CameraState | None = None
+        last_sent_version = -1
+        try:
+            while True:
+                with self._lock:
+                    state = self._cameras.get(camera_id)
+
+                if state is not registered_state:
+                    self._release_viewer(registered_state)
+                    registered_state = state
+                    self._register_viewer(registered_state)
+                    last_sent_version = -1  # new state's frames start unsent
+
+                if state is None:
+                    break
+
+                with state.jpeg_ready:
+                    state.jpeg_ready.wait_for(
+                        lambda: state.jpeg_version != last_sent_version,
+                        timeout=MJPEG_WAIT_TIMEOUT_SECONDS,
+                    )
+                    frame = state.latest_jpeg
+                    last_sent_version = state.jpeg_version
+
+                if frame is not None:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        finally:
+            self._release_viewer(registered_state)
+
+    @staticmethod
+    def _register_viewer(state: _CameraState | None) -> None:
+        if state is None:
+            return
+        with state.jpeg_ready:
+            state.viewer_count += 1
+
+    @staticmethod
+    def _release_viewer(state: _CameraState | None) -> None:
+        if state is None:
+            return
+        with state.jpeg_ready:
+            state.viewer_count = max(0, state.viewer_count - 1)
 
     # ── reader thread: keeps draining the RTSP source, never blocks ─────
     @staticmethod
@@ -327,7 +774,42 @@ class CameraStreamManager:
             # index at all.
             cap = cv2.VideoCapture(state.device_index, cv2.CAP_DSHOW)
         else:
-            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG if hasattr(cv2, "CAP_FFMPEG") else 0)
+            # Must be set before VideoCapture opens the stream — ffmpeg reads
+            # these at open time, not per-frame. This is what actually stops
+            # ffmpeg's own socket buffer from accumulating a backlog;
+            # CAP_PROP_BUFFERSIZE below does nothing on this backend.
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = RTSP_LOW_LATENCY_ENV_OPTIONS
+            backend = cv2.CAP_FFMPEG if hasattr(cv2, "CAP_FFMPEG") else 0
+
+            # Software H.264/H.265 decode of every RTSP stream is the
+            # single biggest CPU cost left on a multi-camera box — bigger
+            # than face detection, which is already on CUDA (see
+            # model_loader.py). It runs continuously at the camera's
+            # native frame rate in THIS thread's grab()/retrieve() loop,
+            # completely independent of STREAM_FPS_LIMIT or whether
+            # anyone's watching — decode has to happen before any frame
+            # can be dropped. Meanwhile Task Manager's GPU "Video Decode"
+            # engine sits at 0%: real hardware decode capacity going
+            # unused on the exact box paying for software decode on the
+            # CPU instead. Windows' opencv-python wheels bundle an ffmpeg
+            # build with D3D11VA hw-accel support (since OpenCV 4.5.4),
+            # which transparently rides whatever GPU driver exposes a
+            # D3D11 video decode device — NVDEC on the RTX 2060 here, or
+            # Quick Sync on the Intel iGPU for a camera opened against
+            # that adapter. Passed as open-time params (not a later
+            # .set() call) because the FFmpeg backend wires hw-accel into
+            # the demuxer/decoder at construction, same as
+            # CAP_PROP_BUFFERSIZE already has to be set before open
+            # elsewhere in this function.
+            #
+            # Not guaranteed to engage for every stream (codec/driver
+            # combination dependent) — _open_capture_with_hw_accel tries
+            # each candidate in turn and confirms via readback (not just
+            # isOpened()) that acceleration actually engaged, falling
+            # through to a plain software open if none of them do.
+            cap = _open_capture_with_hw_accel(url, backend)
+            if cap is None:
+                cap = cv2.VideoCapture(url, backend)
             # Bound the connect/read timeout explicitly. Without this, an
             # unreachable NVR/DVR doesn't fail — cap.read() just blocks for
             # however long the underlying ffmpeg/TCP stack is willing to wait
@@ -355,6 +837,8 @@ class CameraStreamManager:
         if not cap.isOpened():
             cap.release()
             return None
+
+        _report_capture_properties(state, cap)
         return cap
 
 
@@ -386,7 +870,54 @@ class CameraStreamManager:
                         continue
                     state.consecutive_failures = 0
 
-                ok, frame = cap.read()
+                if state.camera_type == "webcam":
+                    read_started = perf_stats.now()
+                    ok, frame = cap.read()
+                    perf_stats.record(state.camera_id, "reader.read", read_started)
+                else:
+                    # Drain to the newest available frame, then convert it.
+                    #
+                    # The original comment here said grab() "decodes nothing
+                    # (it's cheap)". That is true of the V4L2/DShow backends
+                    # but NOT of FFMPEG, where grabFrame() runs av_read_frame
+                    # + avcodec_receive_frame — the full H.264 decode — and
+                    # retrieveFrame() only does the YUV->BGR sws_scale. So
+                    # this loop decodes RTSP_BUFFER_FLUSH_GRABS frames and
+                    # colour-converts one.
+                    #
+                    # That reads like obvious waste, and the obvious fix is
+                    # to grab fewer. /perf says otherwise: every camera here
+                    # is consuming FEWER frames than its stream offers
+                    # (reader.frames_not_consumed > 0), so grabbing fewer per
+                    # iteration just makes this loop spin faster and decode
+                    # more in total, while tripling the sws_scale count.
+                    # Left as-is deliberately. See RTSP_BUFFER_FLUSH_GRABS.
+                    grab_started = perf_stats.now()
+                    ok = True
+                    for _ in range(RTSP_BUFFER_FLUSH_GRABS):
+                        if not cap.grab():
+                            ok = False
+                            break
+                    state.last_grab_finished_at = perf_stats.now()
+                    perf_stats.record(state.camera_id, "reader.grab", grab_started)
+
+                    # Frames this camera's stream offered but this loop never
+                    # asked for. Derived from elapsed time against the source
+                    # frame interval, so it shows whether the reader is
+                    # keeping up with the camera or silently running behind
+                    # it — the number that decides whether RTSP_BUFFER_FLUSH_GRABS
+                    # is helping or hurting. See the constant's comment.
+                    missed = _frames_missed(state, grab_started)
+                    if missed > 0:
+                        perf_stats.observe(state.camera_id, "reader.frames_not_consumed", missed)
+
+                    if ok:
+                        retrieve_started = perf_stats.now()
+                        ok, frame = cap.retrieve()
+                        perf_stats.record(state.camera_id, "reader.retrieve", retrieve_started)
+                    else:
+                        frame = None
+
                 if not ok:
                     logger.warning(
                         "Camera %s: %s stream opened but frame read failed — reconnecting",
@@ -399,7 +930,7 @@ class CameraStreamManager:
                     state.stop_event.wait(RECONNECT_BACKOFF_SECONDS)
                     continue
 
-                with state.lock:
+                with state.raw_lock:
                     state.raw_frame = frame
         finally:
             if cap is not None:
@@ -408,18 +939,19 @@ class CameraStreamManager:
     # ── processor thread: detection + encode, off the freshest frame ──
     
     def _run_processor(self, state: _CameraState, branch_id: str) -> None:
-        frame_index = 0
         frame_interval = 1.0 / STREAM_FPS_LIMIT
         while not state.stop_event.is_set():
             loop_started = time.time()
-            with state.lock:
+            copy_started = perf_stats.now()
+            with state.raw_lock:
                 frame = state.raw_frame.copy() if state.raw_frame is not None else None
+            if frame is not None:
+                perf_stats.record(state.camera_id, "processor.frame_copy", copy_started)
 
             if frame is None:
                 state.stop_event.wait(frame_interval)
                 continue
 
-            frame_index += 1
             # Offer the freshest frame to the detector on EVERY tick, not
             # just every Nth one. The detector already self-throttles —
             # it holds at most one pending frame and overwrites it if
@@ -429,17 +961,50 @@ class CameraStreamManager:
             # running person be caught by whichever frame the detector is
             # actually free to pick up next, instead of waiting on an
             # arbitrary Nth tick that may land after they've already left.
+            # Always runs, regardless of viewers — attendance marking does
+            # not depend on anyone watching the live grid.
             with state.detect_lock:
                 state.pending_detect_frame = frame
 
-            display_frame = frame
-            ok, encoded = cv2.imencode(".jpg", display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ok:
-                with state.lock:
-                    state.latest_jpeg = encoded.tobytes()
+            # Encoding for display is the one part of this loop that exists
+            # purely to serve browser tabs — skip it entirely when nobody's
+            # looking at this camera. Cheap check, real CPU savings on a
+            # multi-camera grid where most tiles aren't visible at once.
+            with state.jpeg_lock:
+                has_viewers = state.viewer_count > 0
+            if has_viewers:
+                encode_started = perf_stats.now()
+                self._encode_and_publish(state, frame)
+                perf_stats.record(state.camera_id, "processor.encode", encode_started)
+            else:
+                perf_stats.count(state.camera_id, "processor.encode_skipped_no_viewer")
 
             elapsed = time.time() - loop_started
             state.stop_event.wait(max(0.0, frame_interval - elapsed))
+
+    @staticmethod
+    def _encode_and_publish(state: _CameraState, frame) -> None:
+        """Downscale to display size and encode, then wake any browser tabs
+        blocked waiting for the next frame. The detector always gets the
+        full-resolution frame (handed off separately, above) — only this
+        display copy is shrunk, so recognition range/accuracy is unaffected."""
+        display_frame = frame
+        h, w = display_frame.shape[:2]
+        if w > STREAM_DISPLAY_MAX_WIDTH:
+            scale = STREAM_DISPLAY_MAX_WIDTH / w
+            display_frame = cv2.resize(
+                display_frame, (STREAM_DISPLAY_MAX_WIDTH, max(1, int(h * scale))),
+                interpolation=STREAM_DISPLAY_INTERPOLATION,
+            )
+
+        ok, encoded = cv2.imencode(".jpg", display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
+        if not ok:
+            return
+
+        with state.jpeg_ready:
+            state.latest_jpeg = encoded.tobytes()
+            state.jpeg_version += 1
+            state.jpeg_ready.notify_all()
 
     # ── detector thread: the CPU-heavy work, off the display path ───────
 
@@ -452,8 +1017,33 @@ class CameraStreamManager:
             if frame is None:
                 state.stop_event.wait(0.05)
                 continue
+
+            now = time.time()
+            motion_started = perf_stats.now()
+            motion = _motion_detected(state, frame)
+            perf_stats.record(state.camera_id, "detector.motion_gate", motion_started)
+            idle_recheck_due = (now - state.last_full_detect_at) >= IDLE_DETECT_INTERVAL_SECONDS
+            if not motion and not idle_recheck_due:
+                # Nothing changed in this frame and we already ran a real
+                # pass recently enough to catch anyone standing still —
+                # skip the model entirely. Cheaper than a detection pass
+                # by roughly two orders of magnitude, and frees this
+                # camera's turn on _inference_lock for whichever OTHER
+                # camera actually has something happening.
+                #
+                # Counted so the perf report shows the gate's real hit
+                # rate. A gate that almost never fires on a busy camera is
+                # not saving anything, and one that fires constantly on a
+                # camera that should be seeing people is a sign the
+                # threshold is too high.
+                perf_stats.count(state.camera_id, "detector.skipped_no_motion")
+                continue
+            state.last_full_detect_at = now
+
             try:
+                pass_started = perf_stats.now()
                 self._detect_and_record(state, frame, branch_id)
+                perf_stats.record(state.camera_id, "detector.full_pass", pass_started)
             except Exception as exc:
                 # A single bad detection must never permanently kill this
                 # thread's loop — an uncaught exception here previously ended
@@ -475,7 +1065,14 @@ class CameraStreamManager:
 
     def _detect_and_record(self, state: _CameraState, frame, branch_id: str) -> None:
         try:
+            # Wall time here includes waiting for embedding.py's
+            # _inference_lock, which every camera shares. Compare against
+            # detector.full_pass across cameras: if this dominates and
+            # scales with camera count rather than with faces seen, the
+            # cost is lock contention, not the model itself.
+            model_started = perf_stats.now()
             faces = detect_and_extract(frame)
+            perf_stats.record(state.camera_id, "detect.model", model_started)
         except FaceEngineUnavailableError as exc:
             # Surface real engine failures to /api/status -> runtime.last_error,
             # which App.tsx already renders as a warning bar — this plumbing
@@ -494,10 +1091,31 @@ class CameraStreamManager:
             })
             return
 
-        embeddings_on_node = len(local_db.get_all_embeddings(branch_id))
-        logger.info(
-            "Camera %s: detection pass -> %d face(s) found (embeddings on node for this branch: %d)",
-            state.camera_id, len(faces), embeddings_on_node,
+        # This used to also call local_db.get_all_embeddings(branch_id) just
+        # to report a count in the log line below — a full SQLite query of
+        # every enrolled embedding, on every detection pass, for every
+        # camera, purely for a diagnostic number nothing else used. Deleted:
+        # recognition_worker's own cache (_cached_candidates) already tracks
+        # this count and logs it once when the cache is (re)built, not on
+        # every frame.
+        #
+        # log_on_change instead of a plain logger.info: this line used to
+        # print every detection pass (several times a second per camera),
+        # repeating the same face count over and over — that repetition,
+        # not the line itself, is what flooded node.log. log_on_change
+        # collapses exact repeats, but with several cameras actively
+        # detecting, the face count genuinely changes almost every pass
+        # (0 -> 1 -> 2 -> 0 as people move) — that's real change, not
+        # repetition, so log_on_change can't and shouldn't hide it. This
+        # is a per-frame diagnostic, not an operational event, so it goes
+        # to DEBUG (default root level is WARNING; set
+        # QINTELLECT_NODE_LOG_LEVEL=DEBUG to see it while troubleshooting
+        # one camera — see logging_config.py).
+        log_on_change(
+            logger, f"detect_pass:{state.camera_id}",
+            "Camera %s: detection pass -> %d face(s) found",
+            state.camera_id, len(faces),
+            level=logging.DEBUG,
         )
 
         now = time.time()
@@ -511,7 +1129,15 @@ class CameraStreamManager:
         for face in faces:
             embedding = face.get("embedding")
             if embedding is None:
-                logger.info("Camera %s: face detected but no embedding extracted (bad crop/landmarks?)", state.camera_id)
+                # This message has no varying content (just the camera id),
+                # so log_on_change logs it once per camera and then stays
+                # silent for good — exactly "show it once, then stop"
+                # rather than "once every embedding" cycle after cycle.
+                log_on_change(
+                    logger, f"no_embedding:{state.camera_id}",
+                    "Camera %s: face detected but no embedding extracted (bad crop/landmarks?)",
+                    state.camera_id,
+                )
                 continue
 
             bbox = face.get("bbox")
@@ -527,8 +1153,12 @@ class CameraStreamManager:
             # match cheap; this stops it from running dozens of times per
             # second for the same person.
             if track.get("match") is None:
+                match_started = perf_stats.now()
                 match = best_match(embedding)
+                perf_stats.record(state.camera_id, "detect.best_match", match_started)
                 track["match"] = match if match is not None else False   # False = "tried, no match"
+            else:
+                perf_stats.count(state.camera_id, "detect.match_served_from_track")
             match = track["match"] or None
             if not match:
                 continue
@@ -538,6 +1168,7 @@ class CameraStreamManager:
                 continue
             state.last_seen_by_person[person_key] = now
 
+            record_started = perf_stats.now()
             row = local_db.record_attendance_local(
                 branch_id=branch_id,
                 people_type=match["people_type"],
@@ -549,6 +1180,7 @@ class CameraStreamManager:
                 metadata={"camera_name": state.camera_name},
                 event_dt_utc=datetime.now(timezone.utc),
             )
+            perf_stats.record(state.camera_id, "detect.db_write", record_started)
             # Diagnostic for the "wrong window" class of bug (personal
             # shift override not reaching the node vs. a stale config poll
             # vs. a person_code mismatch between the embeddings package and

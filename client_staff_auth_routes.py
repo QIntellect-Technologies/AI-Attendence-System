@@ -16,7 +16,7 @@ from __future__ import annotations
 from flask import Blueprint, request, g
 
 import support_db as support_cp_db
-from client_staff_auth import login_client_staff, require_client_staff_auth
+from client_staff_auth import login_client_staff, require_client_staff_auth, logout_client_staff
 from client_routes_helpers import ok, err, handle
 import login_throttle
 
@@ -82,6 +82,21 @@ def staff_login():
         # /api/login (client_users/client_staff dashboard login) — one
         # parsing path on the client regardless of which endpoint it hit.
         return ok({"user": staff, "token": token})
+
+    return handle(_run)
+
+
+@client_staff_auth_bp.route("/logout", methods=["POST"])
+@require_client_staff_auth
+def staff_logout():
+    """Server-side session revocation -- makes the current token unusable
+    immediately, not just cleared from the app's local storage. Matters
+    more here than anywhere else in the system: mobile tokens live 30 days,
+    so without this a lost/stolen phone's session would otherwise stay
+    valid for up to a month. See session_registry.py."""
+    def _run():
+        logout_client_staff(g.client_staff["id"])
+        return ok({})
 
     return handle(_run)
 

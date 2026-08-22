@@ -1767,6 +1767,7 @@ import hashlib
 import uuid
 import os
 import re
+from urllib.parse import urlparse
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
@@ -2329,6 +2330,18 @@ def create_client_invite(org_id: str, payload: dict, invited_by: str) -> dict:
             .execute()
         )
         row = result.data[0] if result.data else None
+
+        # This is the actual recovery step for a hijacked client_users admin
+        # account (Support resets the password after verifying identity
+        # out-of-band). Without this, the reset changes the password but an
+        # already-authenticated attacker's token stays valid until natural
+        # expiry (up to 12h) -- the exact gap that made recovery impossible
+        # for a hacked admin. Only reached on the existing-row branch: a
+        # brand-new invite (else branch below) has no prior session to kill.
+        import session_registry
+        session_registry.invalidate_session(
+            'client_user', str(current['id']), reason='password_changed'
+        )
     else:
         result = sb.table('client_users').insert({
             'org_id': org_id,
@@ -2951,12 +2964,74 @@ def _branch_backend_id(raw_key: object, branches: list[dict]) -> Optional[str]:
     backend_id = branches[ui_id - 1].get('id')
     return str(backend_id) if backend_id else None
 
+_GROUP_NAME_MAX_LENGTH = 300  # generous ceiling above the 100-char per-field
+# frontend limit (class + " - " + section can combine into one `name`); this
+# is the real boundary — the frontend maxLength is UX only. Blocks the
+# unbounded-paste case (10,000+ chars) reaching Supabase via departments/
+# roles onboarding config.
+
+
+def _validate_group_item_name(item: dict, bucket_name: str) -> None:
+    """Reject department/designation/class-section names over the length
+    ceiling. Mirrors _validate_camera_rtsp_url: client-side maxLength on
+    Settings.tsx/OnboardingWizard.tsx inputs is UX only, this is what
+    actually stops an oversized payload from being persisted."""
+    for key in ('name', 'className', 'sectionName'):
+        value = item.get(key)
+        if value and len(str(value)) > _GROUP_NAME_MAX_LENGTH:
+            raise ValueError(
+                f'{bucket_name}[].{key} must be {_GROUP_NAME_MAX_LENGTH} characters or fewer'
+            )
+
+
+_ALLOWED_RTSP_SCHEMES = {'rtsp', 'rtsps'}
+
+
+def _validate_camera_rtsp_url(item: dict) -> None:
+    """Reject any custom camera URL whose scheme isn't rtsp/rtsps.
+
+    See _normalize_branch_keyed_config's docstring for why this matters:
+    the stored value is later opened directly by an ffmpeg-backed
+    cv2.VideoCapture on the backend (app.py's /api/stream/<camera_id>) and by
+    the local node client, both of which happily follow http(s):// (and other
+    schemes) — an unvalidated URL here is a straight path to SSRF against
+    internal infrastructure. A webcam entry has no rtsp_url and is exempt.
+    """
+    camera_type = str(item.get('camera_type') or item.get('cameraType') or item.get('type') or '').strip().lower()
+    if camera_type == 'webcam':
+        return
+
+    raw_url = item.get('rtsp_url')
+    if raw_url in (None, ''):
+        raw_url = item.get('rtspUrl')
+    if raw_url in (None, ''):
+        return
+
+    raw_url = str(raw_url).strip()
+    scheme = urlparse(raw_url).scheme.lower()
+    if scheme not in _ALLOWED_RTSP_SCHEMES:
+        raise ValueError(
+            "cameras[].rtsp_url must use the rtsp:// (or rtsps://) protocol"
+        )
+
+
 def _normalize_branch_keyed_config(value: object, branches: list[dict], bucket_name: str) -> dict[str, list[dict]]:
     """Normalize branch-keyed onboarding buckets to real branch UUID keys.
 
     Accepts incoming config keyed by either real Supabase branch UUIDs or current
     dashboard numeric route ids. Empty/missing branches are returned as empty
     arrays so saved config remains predictable.
+
+    For bucket_name == 'cameras', each item's rtsp_url/rtspUrl is validated
+    (see _validate_camera_rtsp_url) — this is the actual persistence point for
+    onboarding/Settings camera config, and both /api/stream/<camera_id>
+    (app.py) and the local node client ultimately hand this value straight to
+    an ffmpeg-backed cv2.VideoCapture, which understands http(s)://, file://,
+    and other schemes beyond rtsp. Without this check, a client could set
+    rtsp_url to an internal http(s) URL and get the backend server (or the
+    local node) to fetch it and stream the response back as "camera video" —
+    classic SSRF. Rejecting anything but rtsp/rtsps here is the actual
+    security boundary; any client-side check is UX only.
     """
     result: dict[str, list[dict]] = {
         str(branch.get('id')): []
@@ -2982,7 +3057,14 @@ def _normalize_branch_keyed_config(value: object, branches: list[dict], bucket_n
         if not isinstance(raw_items, list):
             raise ValueError(f'{bucket_name}[{raw_key}] must be an array')
 
-        result[backend_id] = [item for item in raw_items if isinstance(item, dict)]
+        items = [item for item in raw_items if isinstance(item, dict)]
+        if bucket_name == 'cameras':
+            for item in items:
+                _validate_camera_rtsp_url(item)
+        if bucket_name in ('departments', 'roles'):
+            for item in items:
+                _validate_group_item_name(item, bucket_name)
+        result[backend_id] = items
 
     return result
 
@@ -3322,6 +3404,15 @@ def save_client_onboarding_config(user_id: str, org_id: str, config: dict) -> di
     }
 
 def _person_code_from_payload(payload: dict, people_type: str, fallback: str = '') -> str:
+    # Single choke point for both create_client_staff and update_client_staff
+    # (support_db_staff.py) — validating here means every write path gets
+    # the same length cap and character allow-list for free, with no risk of
+    # the two call sites drifting apart the way name validation once did
+    # between create and update (see the comment above the update loop in
+    # support_db_staff.py). Raises ValueError on empty, oversized, or
+    # markup/SQL-shaped input; surfaced as a 400 by the route the same way
+    # _validate_person_name's ValueError already is.
+    from support_db_staff import _validate_person_code
     value = (
         payload.get('person_code')
         or payload.get('personCode')
@@ -3336,10 +3427,7 @@ def _person_code_from_payload(payload: dict, people_type: str, fallback: str = '
         or payload.get('employee_id')
         or fallback
     )
-    text = str(value or '').strip()
-    if not text:
-        raise ValueError('Person code is required.')
-    return text
+    return _validate_person_code(value, _person_code_label(people_type))
 
 def _person_code_label(people_type: object) -> str:
     from support_db_staff import _normalize_people_type

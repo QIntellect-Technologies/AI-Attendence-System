@@ -23,8 +23,11 @@ from functools import wraps
 from flask import request, jsonify, g
 from supabase_client import get_supabase
 from logger_config import get_logger
+import session_registry
 
 logger = get_logger(__name__)
+
+_ACCOUNT_TYPE = 'internal_user'
 
 _JWT_SECRET = None
 _JWT_ALGORITHM = 'HS256'
@@ -46,13 +49,21 @@ def _get_jwt_secret() -> str:
 
 # ─── Token helpers ────────────────────────────────────────────────────────────
 
-def _mint_token(user: dict) -> str:
-    """Sign a JWT for an authenticated internal user."""
+def _mint_token(user: dict, *, session_reason: str = 'login') -> str:
+    """Sign a JWT for an authenticated internal user.
+
+    Calls session_registry.rotate_session first so the embedded 'sid' claim
+    is always the CURRENT valid session for this user -- this is what makes
+    a new login invalidate any older session for the same account. See
+    session_registry.py's module docstring for the full mechanism.
+    """
+    session_id = session_registry.rotate_session(_ACCOUNT_TYPE, str(user['id']), reason=session_reason)
     now = datetime.now(timezone.utc)
     payload = {
         'sub':   str(user['id']),
         'email': user['email'],
         'role':  user['role'],
+        'sid':   session_id,
         'iat':   now,
         'exp':   now + timedelta(hours=_TOKEN_TTL_HOURS),
     }
@@ -135,6 +146,21 @@ def require_support_auth(f):
         except jwt.PyJWTError:
             return jsonify({'success': False, 'error': 'Invalid session token.'}), 401
 
+        # A valid, unexpired signature is necessary but no longer sufficient
+        # -- it must also still be the CURRENT session for this user (see
+        # session_registry.py). A token missing 'sid' predates this rollout
+        # and is treated as superseded, not silently trusted.
+        ok, reason = session_registry.validate_session(
+            _ACCOUNT_TYPE, str(payload['sub']), str(payload.get('sid') or '')
+        )
+        if not ok:
+            message = (
+                'Your password was changed. If this wasn\'t you, contact your administrator.'
+                if reason == session_registry.PASSWORD_CHANGED
+                else 'You were logged in elsewhere. That session has been ended.'
+            )
+            return jsonify({'success': False, 'error': message, 'code': reason}), 401
+
         g.support_user = {
             'id':    payload['sub'],
             'email': payload['email'],
@@ -143,6 +169,13 @@ def require_support_auth(f):
         return f(*args, **kwargs)
 
     return decorated
+
+
+def logout_internal_user(user_id: str) -> None:
+    """Explicit server-side revocation for /v1/support/auth/logout -- unlike
+    a client-side-only logout, this makes the token unusable immediately
+    rather than leaving it valid until natural expiry (up to 8h)."""
+    session_registry.end_session(_ACCOUNT_TYPE, str(user_id))
 
 
 def require_super_admin(f):

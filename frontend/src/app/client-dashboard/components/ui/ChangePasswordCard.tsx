@@ -9,7 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../../contexts/useAuth";
-import { changeOwnPassword } from "../../api/api";
+import { changeOwnPassword, setDashboardAuthToken } from "../../api/api";
 import { toastError, toastSuccess } from "../../utils/notifications";
 import { C, ConfigCard, inputStyle } from "../../pages/Settings/Settings";
 
@@ -198,6 +198,7 @@ function PasswordField({
           onBlur={onBlur}
           style={errorInputStyle(showError)}
           aria-invalid={showError || undefined}
+          maxLength={128}
         />
         <button
           type="button"
@@ -315,7 +316,20 @@ export function ChangePasswordCard() {
 
       setSubmitting(true);
       try {
-        await changeOwnPassword(user.id, form.newPassword);
+        const result = await changeOwnPassword(user.id, form.newPassword);
+        // The backend rotates this session as part of the password change
+        // (session_registry.rotate_session) -- the token this very request
+        // was authenticated with is already superseded by the time the
+        // response arrives. Persist the fresh one BEFORE the refreshUser
+        // call below, or that call (and every request after it) 401s with
+        // SESSION_SUPERSEDED instead of "logged in elsewhere elsewhere",
+        // which is exactly the self-inflicted-logout bug this was meant to
+        // close. Legacy accounts also return `token` now (see
+        // api_update_user_profile) -- Supabase-backed accounts return it
+        // via ChangePasswordResponse, so this covers both response shapes.
+        if (result && typeof result === "object" && "token" in result) {
+          setDashboardAuthToken((result as { token?: string }).token ?? null);
+        }
         // Re-pull the session from the backend rather than trusting the
         // response shape — refreshUser is the one existing, already-tested
         // path every other profile mutation on this page uses to keep

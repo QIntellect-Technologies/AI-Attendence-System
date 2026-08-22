@@ -131,10 +131,24 @@ export const SupportAuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   /**
-   * logout() — clears token and user, then hard-redirects to /support/login.
-   * Hard redirect (not React Router navigate) to fully reset component tree.
+   * logout() — revokes the session server-side, then clears the token and
+   * user, then hard-redirects to /support/login.
+   *
+   * Previously client-side only (cleared localStorage, never told the
+   * backend) -- a token copied off a shared/public machine stayed valid
+   * for up to 8h regardless of clicking logout. POST /v1/support/auth/logout
+   * (support_routes.py) now revokes it immediately via session_registry.
+   * Fire-and-forget: logout must not block on the network, and the token
+   * is cleared client-side below unconditionally either way. Uses
+   * supportApiClient directly rather than awaiting so a slow/failed
+   * network call never delays the redirect.
    */
   const logout = useCallback(() => {
+    void supportApiClient.post("/v1/support/auth/logout").catch(() => {
+      // Network/server failure is not actionable here -- the token is
+      // cleared client-side below regardless, and it will simply expire
+      // naturally (up to 8h) if this call didn't land.
+    });
     clearSupportToken();
     setUser(null);
     window.location.replace("/support/login");

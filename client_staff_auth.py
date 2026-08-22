@@ -31,8 +31,11 @@ from flask import request, jsonify, g
 
 from support_db import authenticate_client_staff
 from logger_config import get_logger
+import session_registry
 
 logger = get_logger(__name__)
+
+_ACCOUNT_TYPE = 'client_staff_mobile'
 
 _JWT_SECRET = None
 _JWT_ALGORITHM = 'HS256'
@@ -72,6 +75,12 @@ def _mint_token(staff: dict) -> str:
     doctor/worker — vertical-aware labeling), staff_type (office/field —
     decides whether the app shows WiFi or geofence check-in).
     """
+    # A separate account_type ('client_staff_mobile') from the desktop
+    # dashboard's 'client_staff' rows on purpose -- see session_registry.py's
+    # module docstring for why a normal re-login on one surface must not
+    # silently kill the other.
+    session_id = session_registry.rotate_session(_ACCOUNT_TYPE, str(staff['id']))
+
     now = datetime.now(timezone.utc)
     payload = {
         'sub':          str(staff['id']),
@@ -80,6 +89,7 @@ def _mint_token(staff: dict) -> str:
         'people_type':  staff.get('people_type'),
         'staff_type':   staff.get('staff_type') or 'office',
         'role':         staff.get('role') or 'staff',
+        'sid':          session_id,
         'iat':          now,
         'exp':          now + timedelta(days=_TOKEN_TTL_DAYS),
     }
@@ -170,6 +180,22 @@ def require_client_staff_auth(f):
         except jwt.PyJWTError:
             return jsonify({'success': False, 'error': 'Invalid session token.'}), 401
 
+        # See session_registry.py -- signature+expiry alone is no longer
+        # enough; the token must also still be the CURRENT session. This
+        # matters especially here: mobile tokens live 30 days, so without
+        # this check a stolen/forgotten mobile session would stay valid a
+        # full month even after the owner changed their password elsewhere.
+        ok, reason = session_registry.validate_session(
+            _ACCOUNT_TYPE, str(payload['sub']), str(payload.get('sid') or '')
+        )
+        if not ok:
+            message = (
+                "Your password was changed. If this wasn't you, contact your administrator."
+                if reason == session_registry.PASSWORD_CHANGED
+                else 'You were logged in elsewhere. That session has been ended.'
+            )
+            return jsonify({'success': False, 'error': message, 'code': reason}), 401
+
         g.client_staff = {
             'id':          payload['sub'],
             'org_id':      payload['org_id'],
@@ -186,3 +212,10 @@ def require_client_staff_auth(f):
         return f(*args, **kwargs)
 
     return decorated
+
+
+def logout_client_staff(staff_id: str) -> None:
+    """Explicit server-side revocation for /api/staff/logout -- makes the
+    current token unusable immediately rather than leaving it valid until
+    natural expiry (up to 30 days)."""
+    session_registry.end_session(_ACCOUNT_TYPE, str(staff_id))

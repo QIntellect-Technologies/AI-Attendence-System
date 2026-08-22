@@ -8,7 +8,7 @@ in support_db.py.
 """
 
 from flask import Blueprint, request, jsonify, g, send_file
-from support_auth import require_support_auth, require_capability, login_internal_user
+from support_auth import require_support_auth, require_capability, login_internal_user, logout_internal_user
 import support_db as db
 import login_throttle
 from logger_config import get_logger
@@ -87,6 +87,18 @@ def support_login():
             raise
         login_throttle.register_success(email)
         return _ok({"user": user, "token": token})
+
+    return _handle(_run)
+
+
+@support_bp.route("/auth/logout", methods=["POST"])
+@require_support_auth
+def support_logout():
+    """Server-side session revocation -- makes the current token unusable
+    immediately, not just cleared from the browser. See session_registry.py."""
+    def _run():
+        logout_internal_user(g.support_user["id"])
+        return _ok({})
 
     return _handle(_run)
 
@@ -622,6 +634,12 @@ def create_invoice(org_id):
         if not payload.get("amount") or not payload.get("due_date"):
             return _err("amount and due_date are required", 400)
 
+        notes = payload.get("notes")
+        if notes and len(str(notes)) > 2000:
+            # Real boundary for CreateOrganizationModal.tsx's Invoice Notes
+            # textarea — frontend maxLength there is UX only.
+            return _err("notes must be 2000 characters or fewer", 400)
+
         invoice = db.create_invoice(
             org_id=org_id,
             amount=float(payload["amount"]),
@@ -853,6 +871,12 @@ def reset_internal_user_password_page(user_id):
             raise ValueError("Super admin access required")
         payload = request.get_json(silent=True) or {}
         user = db.reset_internal_user_password(user_id, payload.get("password"))
+        # Kill whatever session that user currently holds -- this is the
+        # actual recovery step for a hijacked internal account: without it,
+        # a reset changes the password but leaves an already-authenticated
+        # attacker's token valid for up to 8 more hours.
+        import session_registry
+        session_registry.invalidate_session("internal_user", str(user_id), reason="password_changed")
         return _ok({"internal_user": user})
 
     return _handle(_run)

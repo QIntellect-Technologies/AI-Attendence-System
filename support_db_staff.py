@@ -12,7 +12,9 @@ from datetime import date, timedelta, datetime, timezone
 import json
 from math import radians, sin, cos, atan2, sqrt
 from typing import Optional, Any, Callable
+import re
 import time
+import unicodedata
 import bcrypt
 import secrets
 import string
@@ -137,6 +139,138 @@ def _normalize_people_type(value: object, fallback: str = "staff") -> str:
     }
     return aliases.get(text, text or fallback)
 
+# ── Person-name validation ───────────────────────────────────────────────────
+#
+# Names arrive from the client dashboard and the Local Node enroll screen and
+# were previously written to the database as-is: create_client_staff() only
+# checked the value wasn't empty, and update_client_staff() didn't even do
+# that — it copied payload['name'] straight into the update. So markup
+# (<script>alert("HACKED")</script>) and SQL-shaped payloads (' OR '1'='1)
+# were stored verbatim.
+#
+# On the SQL side this was never exploitable — Supabase parameterises every
+# query — and the React dashboard escapes text nodes, so it isn't a live XSS
+# either. What it IS, concretely:
+#   * permanently polluted person records that no one can clean up from the UI
+#   * a payload waiting for the first consumer that DOESN'T escape — the Local
+#     Node UI, a future email/report template, a webhook
+#   * spreadsheet formula injection: a name beginning =, +, - or @ is executed
+#     by Excel on open, and ExportExcelButton.tsx writes cell values raw
+#
+# So the fix is an allow-list at the write boundary, where every client shares
+# it, rather than an escape at each read site (which only helps the read sites
+# that remember).
+_NAME_MAX_LENGTH = 100
+_NAME_MIN_LENGTH = 2
+
+# Unicode-aware on purpose: \w with re.UNICODE would also admit digits and
+# underscore, and this has to accept Urdu/Arabic/Chinese names, not just
+# Latin ones. Allowed besides letters and marks: space, hyphen, apostrophe
+# (both ASCII and typographic), period and comma — enough for "Muhammad
+# Ali", "O'Brien", "Jean-Luc", "Smith, Jr." and "محمد علی".
+_NAME_ALLOWED_PATTERN = re.compile(
+    r"^[^\W\d_][\w\s\-'\u2019.,]*$",
+    re.UNICODE,
+)
+_NAME_HAS_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
+_NAME_DIGIT = re.compile(r"\d")
+# Leading =, +, - or @ makes Excel/Sheets treat the cell as a formula.
+_SPREADSHEET_FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _validate_person_name(value: object, field_label: str = "Name") -> str:
+    """Normalise and validate a human name, or raise ValueError.
+
+    Returns the cleaned name. Callers should store the RETURN VALUE, not the
+    original — whitespace is collapsed and Unicode is NFC-normalised so that
+    two visually identical names can't be stored as different byte strings.
+    """
+    raw = str(value or "")
+
+    # NFC first: composed and decomposed forms of the same accented name
+    # would otherwise compare unequal and defeat duplicate checks.
+    text = unicodedata.normalize("NFC", raw)
+
+    # Strip control characters (including the zero-width and bidi marks that
+    # get used to disguise payloads) before any other check.
+    text = "".join(ch for ch in text if unicodedata.category(ch)[0] != "C")
+
+    # Collapse internal whitespace runs to single spaces.
+    text = " ".join(text.split())
+
+    if not text:
+        raise ValueError(f"{field_label} is required")
+
+    if len(text) < _NAME_MIN_LENGTH:
+        raise ValueError(f"{field_label} must be at least {_NAME_MIN_LENGTH} characters")
+
+    if len(text) > _NAME_MAX_LENGTH:
+        raise ValueError(f"{field_label} must be {_NAME_MAX_LENGTH} characters or fewer")
+
+    if text.startswith(_SPREADSHEET_FORMULA_PREFIX):
+        raise ValueError(f"{field_label} cannot start with =, +, - or @")
+
+    if _NAME_DIGIT.search(text):
+        raise ValueError(f"{field_label} cannot contain numbers")
+
+    if not _NAME_HAS_LETTER.search(text):
+        raise ValueError(f"{field_label} must contain letters")
+
+    if not _NAME_ALLOWED_PATTERN.match(text):
+        raise ValueError(
+            f"{field_label} can only contain letters, spaces, hyphens, "
+            "apostrophes, periods and commas"
+        )
+
+    return text
+
+
+# Person code (Employee ID / Registration Number / Teacher Code / Worker ID —
+# see _person_code_label in support_db_client_users.py for the per-people_type
+# display name). Was previously accepted as any non-empty string of any
+# length straight from the request body via _person_code_from_payload — no
+# cap, no character allow-list, so oversized strings and markup/SQL-shaped
+# payloads went straight into client_staff.person_code / .employee_id.
+#
+# Deliberately stricter than the name allow-list: real-world codes in this
+# product are always machine-generated or short manual entries in the
+# EMP-001 / TCH-001 / REG-001 shape (see peopleCodeModel's placeholders in
+# the frontend's types.ts) — letters, digits, hyphen and underscore only, no
+# spaces, no Unicode needed. That also means no XSS/SQL pattern list is
+# needed the way _validate_person_name has one: the allow-list itself
+# already excludes every character an HTML tag or SQL clause requires
+# (<, >, ", ', ;, /, whitespace, ( )).
+_PERSON_CODE_MAX_LENGTH = 30
+_PERSON_CODE_ALLOWED_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,%d})?$" % (_PERSON_CODE_MAX_LENGTH - 1))
+
+
+def _validate_person_code(value: object, field_label: str = "Employee ID") -> str:
+    """Normalise and validate a person code, or raise ValueError.
+
+    Returns the cleaned code. Callers should store the RETURN VALUE, not the
+    original — mirrors _validate_person_name's contract above.
+    """
+    raw = str(value or "")
+
+    # Strip control characters (including zero-width/bidi marks) before any
+    # other check, same reasoning as _validate_person_name.
+    text = "".join(ch for ch in raw if unicodedata.category(ch)[0] != "C").strip()
+
+    if not text:
+        raise ValueError(f"{field_label} is required")
+
+    if len(text) > _PERSON_CODE_MAX_LENGTH:
+        raise ValueError(f"{field_label} must be {_PERSON_CODE_MAX_LENGTH} characters or fewer")
+
+    if not _PERSON_CODE_ALLOWED_PATTERN.match(text):
+        raise ValueError(
+            f"{field_label} can only contain letters, digits, hyphens and underscores, "
+            "and must start with a letter or digit"
+        )
+
+    return text
+
+
 def _normalize_account_role(value: object, fallback: str = "staff") -> str:
     role = str(value or fallback).strip().lower()
     return role if role in CLIENT_STAFF_ACCOUNT_ROLES else fallback
@@ -170,8 +304,9 @@ def _require_cnic_fields(people_type: str, payload: dict) -> dict:
             payload.get('father_phone') or payload.get('fatherPhone')
             or payload.get('father_number') or payload.get('fatherNumber') or ''
         ).strip()
-        if not father_name:
-            raise ValueError('Father name is required')
+        # Same allow-list as the person's own name — a guardian name is
+        # rendered and exported through exactly the same paths.
+        father_name = _validate_person_name(father_name, 'Father name')
         if not father_phone:
             raise ValueError('Father number is required')
         if not father_cnic:
@@ -610,8 +745,12 @@ def _count_active_staff_for_branch(org_id: str, branch_id: str) -> int:
     return int(result.count or 0)
 
 
+_SALARY_MIN = 1.0
+_SALARY_MAX = 100_000_000.0
+
+
 def _coerce_staff_salary(raw) -> float:
-    """Coerce a per-employee salary, rejecting negatives.
+    """Coerce a per-employee salary within the supported PKR bounds.
 
     Base salary feeds payroll_engine as a positive figure that deductions
     subtract from. A negative inverts the whole period calculation, and
@@ -629,8 +768,10 @@ def _coerce_staff_salary(raw) -> float:
         raise ValueError('salary must be a number')
     if salary != salary or salary in (float('inf'), float('-inf')):
         raise ValueError('salary must be a finite number')
-    if salary < 0:
-        raise ValueError('salary cannot be negative')
+    if salary < _SALARY_MIN:
+        raise ValueError(f'salary must be at least {int(_SALARY_MIN)}')
+    if salary > _SALARY_MAX:
+        raise ValueError(f'salary cannot exceed {int(_SALARY_MAX)}')
     return salary
 
 
@@ -665,9 +806,9 @@ def create_client_staff(
     if capacity > 0 and _count_active_staff_for_branch(org_key, branch_id) >= capacity:
         raise ValueError('Branch capacity limit reached. Please contact QIntellect to upgrade your plan.')
 
-    name = str(payload.get('name') or '').strip()
-    if not name:
-        raise ValueError('Name is required')
+    # Raises ValueError (surfaced as a 400 by the route) on markup, SQL-shaped
+    # payloads, digits, spreadsheet-formula prefixes and empty/oversized input.
+    name = _validate_person_name(payload.get('name'), 'Name')
 
     incoming_role = payload.get('account_role') or payload.get('accountRole') or payload.get('role') or 'staff'
     account_role = _normalize_account_role(incoming_role, 'staff')
@@ -904,6 +1045,22 @@ def update_client_staff(
         if incoming in payload:
             update_data[column] = payload.get(incoming)
 
+    # The loop above copies payload values straight through, so before this
+    # the update path was strictly weaker than create: create at least
+    # rejected an empty name, update accepted anything at all — including the
+    # markup and SQL-shaped strings create was meant to keep out. Anyone who
+    # could edit a person could put back whatever create refused.
+    #
+    # Only validate keys the caller actually sent; a partial update that
+    # doesn't touch a name must not fail because of a bad value already in
+    # the row.
+    for column, label in (
+        ('name', 'Name'),
+        ('father_name', "Father's name"),
+    ):
+        if column in update_data:
+            update_data[column] = _validate_person_name(update_data[column], label)
+
     if 'role' in payload or 'account_role' in payload or 'accountRole' in payload:
         next_account_role = _normalize_account_role(
             payload.get('account_role')
@@ -1094,6 +1251,7 @@ def update_client_staff(
         update_data['father_cnic'] = father_cnic
 
     new_password = str(payload.get('password') or '').strip()
+    password_reset = bool(new_password)
     if new_password:
         update_data['password_hash'] = _hash_password(new_password)
 
@@ -1104,6 +1262,18 @@ def update_client_staff(
     result = sb.table('client_staff').update(update_data).eq('id', str(staff_id)).execute()
     if not result.data:
         raise RuntimeError('Failed to update person')
+
+    if password_reset:
+        # An admin resetting someone else's password is the actual recovery
+        # step for a hijacked/offboarded account -- without this, the reset
+        # changes the password but leaves an already-authenticated
+        # attacker's token valid for up to 12h (desktop) / 30d (mobile).
+        # Kills BOTH surfaces this staff_id can hold a session on -- see
+        # session_registry.end_all_client_staff_sessions's docstring for
+        # why one hook isn't enough.
+        import session_registry
+        session_registry.end_all_client_staff_sessions(str(staff_id))
+
     return _client_staff_safe(result.data[0], org_id)
 
 def archive_client_staff(staff_id: str, reason: str = 'Archived from Staff Management', archived_by: str | None = None) -> dict:

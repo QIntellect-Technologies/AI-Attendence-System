@@ -516,6 +516,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const logout = useCallback((): void => {
+    // Best-effort server-side revocation (session_registry.end_session)
+    // BEFORE clearing local storage below -- makes the token unusable
+    // immediately rather than leaving it valid until natural expiry (up to
+    // 12h). Previously this function was 100% client-side: it cleared
+    // localStorage but never told the backend, so a stolen/leaked token
+    // stayed live regardless of the user clicking "logout". Deliberately
+    // fire-and-forget: logout must never block on the network, and the
+    // user is taken out of the UI below regardless of whether this call
+    // succeeds -- a failed revocation is a rarer follow-up problem (the
+    // token still expires naturally), not a reason to trap the user in a
+    // "logging out..." state.
+    try {
+      const token = localStorage.getItem(DASHBOARD_AUTH_TOKEN_KEY);
+      if (token) {
+        void fetch("/api/client/auth/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {
+          // Network/server failure is not actionable here -- client-side
+          // storage is cleared unconditionally below either way.
+        });
+      }
+    } catch {
+      // Ignore storage access errors (private browsing, quota, etc.).
+    }
+
     setUser(null);
     setIsAuth(false);
     clearStorage();

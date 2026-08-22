@@ -1,5 +1,6 @@
 import { BASE_URL } from "../../../api/api";
 import { cleanId, type MaybeTenantId } from "../../../utils/tenantScope";
+import { friendlyRequestFailureMessage } from "../../../utils/apiErrors";
 
 // Same storage key as apiClient.ts/staffApi.ts/clintApi.ts/OrgConfigContext.tsx's
 // dashboardAuthToken. Every route in this file is wrapped in
@@ -75,7 +76,7 @@ async function notificationJson<T>(
     throw new Error(
       data?.message ||
         data?.error ||
-        `Notification request failed: ${response.status}`,
+        friendlyRequestFailureMessage(response.status, "notification"),
     );
   }
   return data as T;

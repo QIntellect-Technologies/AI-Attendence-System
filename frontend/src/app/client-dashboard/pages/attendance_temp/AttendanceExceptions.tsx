@@ -208,6 +208,7 @@ const LegRow: React.FC<{
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Optional note for this decision…"
+          maxLength={300}
           style={{
             marginTop: 8,
             width: "100%",

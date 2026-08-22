@@ -17,6 +17,7 @@ import {
 import { useAuth } from "../../contexts/useAuth";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
 import { AttendanceSettingsScreens } from "../attendance_temp/settings/AttendanceSettingsScreens";
+import { validateRtspUrl, findInvalidCameraRtspUrl } from "../../utils/rtspValidation";
 // ─── Access gate helpers ────────────────────────────────────────────────────
 // Mirrors AdminLayout.tsx's isStaffUser/getUserAllowedModules exactly (kept
 // as small local copies rather than a shared import, since AdminLayout.tsx
@@ -222,6 +223,24 @@ export const C = {
   tealPale: "#f0f8fc",
   tealLight: "#e6f3f9",
 } as const;
+
+// UX-only guard; support_db_client_users.py's _validate_group_item_name is
+// the real boundary that stops an oversized paste from being persisted.
+const GROUP_NAME_MAX_LENGTH = 100;
+
+// UX-only guards for the network/camera/company-profile fields below — the
+// real boundary is the length caps applied server-side in
+// support_db_settings.py so a direct API call can't bypass these.
+const IP_MAX_LENGTH = 45; // fits IPv4, IPv6 and hostnames
+const PORT_MAX_LENGTH = 6;
+const CREDENTIAL_MAX_LENGTH = 128;
+const CAMERA_NAME_MAX_LENGTH = 100;
+const CAMERA_LOCATION_MAX_LENGTH = 150;
+const CAMERA_CHANNEL_MAX_LENGTH = 20;
+const RTSP_URL_MAX_LENGTH = 500;
+const ADDRESS_MAX_LENGTH = 255;
+const CITY_MAX_LENGTH = 100;
+const PHONE_MAX_LENGTH = 20;
 
 const WORKFORCE_TYPES = new Set([
   "staff",
@@ -977,6 +996,7 @@ function StudentStructureEditor({
           onChange={(event) => setClassName(event.target.value)}
           onKeyDown={(event) => event.key === "Enter" && add()}
           style={inputStyle()}
+          maxLength={GROUP_NAME_MAX_LENGTH}
           placeholder={`${terminology.studentGroupLabel} name`}
         />
         <input
@@ -984,6 +1004,7 @@ function StudentStructureEditor({
           onChange={(event) => setSectionName(event.target.value)}
           onKeyDown={(event) => event.key === "Enter" && add()}
           style={inputStyle()}
+          maxLength={GROUP_NAME_MAX_LENGTH}
           placeholder={`${terminology.studentSubgroupLabel} name`}
         />
         <button type="button" onClick={add} style={buttonStyle("primary")}>
@@ -1086,6 +1107,7 @@ function WorkforceStructureEditor({
               onChange={(event) => setGroupName(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && addGroup()}
               style={inputStyle()}
+              maxLength={GROUP_NAME_MAX_LENGTH}
               placeholder={`Add ${terminology.workforceGroupLabel.toLowerCase()}`}
             />
             <button
@@ -1117,6 +1139,7 @@ function WorkforceStructureEditor({
               onChange={(event) => setDesignationName(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && addDesignation()}
               style={inputStyle()}
+              maxLength={GROUP_NAME_MAX_LENGTH}
               placeholder={`Add ${terminology.designationLabel.toLowerCase()}`}
             />
             <button
@@ -1284,6 +1307,7 @@ function CameraSettingsEditor({
               setNetwork((prev) => ({ ...prev, publicIp: event.target.value }))
             }
             style={inputStyle()}
+            maxLength={IP_MAX_LENGTH}
           />
         </Field>
         <Field label="NVR / DVR Local IP">
@@ -1293,6 +1317,7 @@ function CameraSettingsEditor({
               setNetwork((prev) => ({ ...prev, nvrDvrIp: event.target.value }))
             }
             style={inputStyle()}
+            maxLength={IP_MAX_LENGTH}
           />
         </Field>
         <Field label="RTSP Port">
@@ -1302,6 +1327,7 @@ function CameraSettingsEditor({
               setNetwork((prev) => ({ ...prev, rtspPort: event.target.value }))
             }
             style={inputStyle()}
+            maxLength={PORT_MAX_LENGTH}
           />
         </Field>
         <Field label="RTSP Username">
@@ -1314,6 +1340,7 @@ function CameraSettingsEditor({
               }))
             }
             style={inputStyle()}
+            maxLength={CREDENTIAL_MAX_LENGTH}
           />
         </Field>
         <Field label="RTSP Password">
@@ -1326,6 +1353,7 @@ function CameraSettingsEditor({
                 rtspPassword: event.target.value,
               }))
             }
+            maxLength={CREDENTIAL_MAX_LENGTH}
             style={inputStyle()}
           />
         </Field>
@@ -1382,6 +1410,7 @@ function CameraSettingsEditor({
                 }
                 style={inputStyle()}
                 placeholder={`${terminology.cameraLabel} name`}
+                maxLength={CAMERA_NAME_MAX_LENGTH}
               />
               <input
                 value={camera.location}
@@ -1390,6 +1419,7 @@ function CameraSettingsEditor({
                 }
                 style={inputStyle()}
                 placeholder="Location / zone"
+                maxLength={CAMERA_LOCATION_MAX_LENGTH}
               />
               <input
                 value={camera.channel}
@@ -1398,6 +1428,7 @@ function CameraSettingsEditor({
                 }
                 style={inputStyle()}
                 placeholder={camera.type === "webcam" ? "Device index" : "Ch."}
+                maxLength={CAMERA_CHANNEL_MAX_LENGTH}
               />
               <select
                 value={camera.type}
@@ -1432,15 +1463,36 @@ function CameraSettingsEditor({
               </button>
             </div>
             {camera.type !== "webcam" && (
-              <input
-                value={camera.rtspUrl}
-                onChange={(event) =>
-                  patchCamera(camera.id, { rtspUrl: event.target.value })
-                }
-                style={inputStyle({ fontFamily: "monospace", fontSize: 12 })}
-                placeholder="Optional full RTSP URL. Leave empty when network + channel is enough."
-                spellCheck={false}
-              />
+              <>
+                <input
+                  value={camera.rtspUrl}
+                  onChange={(event) =>
+                    patchCamera(camera.id, { rtspUrl: event.target.value })
+                  }
+                  style={inputStyle({
+                    fontFamily: "monospace",
+                    fontSize: 12,
+                    ...(validateRtspUrl(camera.rtspUrl)
+                      ? { borderColor: C.danger }
+                      : null),
+                  })}
+                  placeholder="Optional full RTSP URL. Leave empty when network + channel is enough."
+                  spellCheck={false}
+                  maxLength={RTSP_URL_MAX_LENGTH}
+                  aria-invalid={Boolean(validateRtspUrl(camera.rtspUrl))}
+                />
+                {validateRtspUrl(camera.rtspUrl) && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 12,
+                      color: C.danger,
+                    }}
+                  >
+                    {validateRtspUrl(camera.rtspUrl)}
+                  </div>
+                )}
+              </>
             )}
           </div>
         ))}
@@ -1507,6 +1559,7 @@ function ProfileSettingsEditor({
               }))
             }
             style={inputStyle()}
+            maxLength={ADDRESS_MAX_LENGTH}
           />
         </Field>
         <Field label="City">
@@ -1522,6 +1575,7 @@ function ProfileSettingsEditor({
               }))
             }
             style={inputStyle()}
+            maxLength={CITY_MAX_LENGTH}
           />
         </Field>
         <Field label="Public Contact Phone">
@@ -1537,6 +1591,7 @@ function ProfileSettingsEditor({
               }))
             }
             style={inputStyle()}
+            maxLength={PHONE_MAX_LENGTH}
           />
         </Field>
         <Field label="Timezone">
@@ -1738,6 +1793,11 @@ export default function Settings() {
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
 
+  const hasInvalidCameraRtspUrl = useMemo(
+    () => findInvalidCameraRtspUrl(config.cameras) !== null,
+    [config.cameras],
+  );
+
   // Keep the selected branch valid as soon as branches load or change,
   // preferring whichever branch is named in the URL over always falling
   // back to branches[0]. This component remounts from scratch every time
@@ -1837,6 +1897,12 @@ export default function Settings() {
       return;
     }
 
+    const rtspError = findInvalidCameraRtspUrl(config.cameras);
+    if (rtspError) {
+      setError(rtspError);
+      return;
+    }
+
     try {
       setIsSaving(true);
       setError(null);
@@ -1927,11 +1993,11 @@ export default function Settings() {
           <button
             type="button"
             onClick={save}
-            disabled={isSaving}
+            disabled={isSaving || hasInvalidCameraRtspUrl}
             style={{
               ...buttonStyle("primary"),
               minWidth: 150,
-              opacity: isSaving ? 0.7 : 1,
+              opacity: isSaving || hasInvalidCameraRtspUrl ? 0.7 : 1,
             }}
           >
             {isSaving ? (

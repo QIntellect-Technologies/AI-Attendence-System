@@ -549,6 +549,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
       const patch: Partial<OvertimeRequest> = {
         status,
         updatedAt: now,
+        ...(status === "Rejected" ? { rejectionNote: note ?? null } : {}),
       };
 
       overtime.update(id, patch);
@@ -566,8 +567,9 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
           await updateOvertimeStatus(
             apiId,
             API_STATUS_MAP[status],
-            note,
+            "Admin",
             organizationId,
+            status === "Rejected" ? note : null,
           );
           toastSuccess(
             `${staffName} ${status === "Approved" ? "approved" : "rejected"}`,
@@ -994,6 +996,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Employee, department, task..."
             style={inputStyle}
+            maxLength={100}
           />
         </div>
 

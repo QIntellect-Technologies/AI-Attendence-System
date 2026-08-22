@@ -39,6 +39,11 @@ import { type StaffMember } from "../types/staffTypes";
 // per-person create/manage surface, not a replacement for that, and both
 // read from/write to the same manual_attendance_instructions table via the
 // same API, so nothing here is a second source of truth.
+// UX-only guard; support_db_attendance_settings.py's NOTES_MAX_LENGTH check
+// in create_manual_instruction is the real boundary that stops an oversized
+// paste from being persisted.
+const NOTES_MAX_LENGTH = 500;
+
 export const OVERRIDE_REASON_OPTIONS: Array<{ value: string; label: string }> =
   [
     { value: "manual", label: "Manual" },
@@ -324,6 +329,7 @@ export const StaffAttendanceOverridesPanel: FC<{ member: StaffMember }> = ({
               style={inputStyle}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
+              maxLength={NOTES_MAX_LENGTH}
             />
           </div>
           {error && (

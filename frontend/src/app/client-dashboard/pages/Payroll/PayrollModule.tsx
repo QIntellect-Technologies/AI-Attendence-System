@@ -56,7 +56,14 @@ import {
   type AllowanceMode,
   type AllowanceType,
   type AppliedAllowance,
+  PAYROLL_VALUE_MIN,
+  PAYROLL_VALUE_MAX,
+  PAYROLL_PERCENT_MAX,
 } from "./api/payrollApi";
+import {
+  SALARY_MIN,
+  SALARY_MAX,
+} from "../StaffManagement/utils/staffValidation";
 const T = {
   teal600: "#0d9488",
   teal200: "#99f6e4",
@@ -770,6 +777,72 @@ export default function PayrollModule() {
   );
   const [newLeaveTypeKey, setNewLeaveTypeKey] = useState("");
   const [newAllowanceTypeKey, setNewAllowanceTypeKey] = useState("");
+  const allowanceNameError = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const [key, type] of Object.entries(draftPolicy.allowanceTypes)) {
+      const normalized = type.label.trim().toLocaleLowerCase();
+      if (!normalized) continue;
+      const previousKey = seen.get(normalized);
+      if (previousKey) {
+        return `Allowance names must be unique. "${type.label}" is used more than once.`;
+      }
+      seen.set(normalized, key);
+    }
+    return null;
+  }, [draftPolicy.allowanceTypes]);
+  const newAllowanceName = newAllowanceTypeKey.trim().toLowerCase();
+  const newAllowanceNameConflict = useMemo(() => {
+    if (!newAllowanceName) return false;
+    return Object.entries(draftPolicy.allowanceTypes).some(
+      ([key, type]) =>
+        key.trim().toLowerCase() === newAllowanceName ||
+        type.label.trim().toLowerCase() === newAllowanceName,
+    );
+  }, [draftPolicy.allowanceTypes, newAllowanceName]);
+  const salaryConfigError = useMemo(() => {
+    if (!Number.isFinite(draftSalary))
+      return "Base salary must be a valid number.";
+    if (draftSalary < SALARY_MIN)
+      return `Base salary must be at least PKR ${SALARY_MIN.toLocaleString("en-PK")}.`;
+    if (draftSalary > SALARY_MAX)
+      return `Base salary cannot exceed PKR ${SALARY_MAX.toLocaleString("en-PK")}.`;
+    return null;
+  }, [draftSalary]);
+  const otRateConfigError = useMemo(() => {
+    if (draftOtRateOverride.trim() === "") return null;
+    const value = Number(draftOtRateOverride);
+    if (!Number.isFinite(value) || value < PAYROLL_VALUE_MIN)
+      return "OT rate must be at least PKR 1.";
+    if (value > PAYROLL_VALUE_MAX)
+      return "OT rate cannot exceed PKR 100,000,000.";
+    return null;
+  }, [draftOtRateOverride]);
+  const blockInvalidNumberKeys = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (["-", "+", "e", "E"].includes(event.key)) event.preventDefault();
+  };
+  const payrollRulesError = useMemo(() => {
+    if (draftPolicy.defaultSalary < PAYROLL_VALUE_MIN)
+      return "Default salary must be at least PKR 1.";
+    if (draftPolicy.defaultSalary > PAYROLL_VALUE_MAX)
+      return "Default salary cannot exceed PKR 100,000,000.";
+    if (draftPolicy.otRatePerHour < PAYROLL_VALUE_MIN)
+      return "OT rate must be at least PKR 1.";
+    if (draftPolicy.otRatePerHour > PAYROLL_VALUE_MAX)
+      return "OT rate cannot exceed PKR 100,000,000.";
+    for (const type of Object.values(draftPolicy.allowanceTypes)) {
+      const maximum =
+        type.mode === "percent" ? PAYROLL_PERCENT_MAX : PAYROLL_VALUE_MAX;
+      if (type.mode !== "none" && type.value < PAYROLL_VALUE_MIN)
+        return "Allowance values must be at least PKR 1.";
+      if (type.value > maximum)
+        return type.mode === "percent"
+          ? "Allowance percentages cannot exceed 100%."
+          : "Allowance values cannot exceed PKR 100,000,000.";
+    }
+    return allowanceNameError;
+  }, [allowanceNameError, draftPolicy]);
 
   const selectedMonth = useMemo(
     () => monthFromDate(payrollDateFilter.range.startDate),
@@ -1318,7 +1391,7 @@ export default function PayrollModule() {
   const [saveEditError, setSaveEditError] = useState<string | null>(null);
 
   const handleSaveEdit = useCallback(async () => {
-    if (!editingRow) return;
+    if (!editingRow || salaryConfigError || otRateConfigError) return;
     setSavingEdit(true);
     setSaveEditError(null);
     try {
@@ -1353,6 +1426,8 @@ export default function PayrollModule() {
     draftAppliedAllowances,
     draftOtRateOverride,
     draftSalary,
+    salaryConfigError,
+    otRateConfigError,
     editingRow,
     updateBaseSalary,
   ]);
@@ -1408,6 +1483,7 @@ export default function PayrollModule() {
 
   const handleSaveRules = useCallback(async () => {
     try {
+      if (payrollRulesError) return;
       await savePolicy(draftPolicy);
       if (isGlobal) {
         // usePayrollPolicy's own `policy` state is now fresh, but that
@@ -1441,7 +1517,15 @@ export default function PayrollModule() {
       // modal deliberately stays open so the person doesn't lose their
       // edited policy and can retry without re-entering everything.
     }
-  }, [draftPolicy, savePolicy, isGlobal, updateCfg, refresh, rulesBranch]);
+  }, [
+    draftPolicy,
+    payrollRulesError,
+    savePolicy,
+    isGlobal,
+    updateCfg,
+    refresh,
+    rulesBranch,
+  ]);
 
   const rulesScopeSummary = useMemo(() => {
     if (isGlobal) {
@@ -1968,12 +2052,17 @@ export default function PayrollModule() {
               <input
                 type="number"
                 min={0}
+                max={PAYROLL_VALUE_MAX}
                 step="any"
+                onKeyDown={blockInvalidNumberKeys}
                 value={draftPolicy.defaultSalary}
                 onChange={(event) =>
                   setDraftPolicy((p) => ({
                     ...p,
-                    defaultSalary: Math.max(0, Number(event.target.value) || 0),
+                    defaultSalary: Math.min(
+                      PAYROLL_VALUE_MAX,
+                      Number(event.target.value),
+                    ),
                   }))
                 }
                 style={inputStyle}
@@ -1983,20 +2072,39 @@ export default function PayrollModule() {
               <input
                 type="number"
                 min={0}
+                max={PAYROLL_VALUE_MAX}
                 step="any"
+                onKeyDown={blockInvalidNumberKeys}
                 value={draftPolicy.otRatePerHour}
                 onChange={(event) =>
                   setDraftPolicy((p) => ({
                     ...p,
-                    otRatePerHour: Math.max(0, Number(event.target.value) || 0),
+                    otRatePerHour: Math.min(
+                      PAYROLL_VALUE_MAX,
+                      Number(event.target.value),
+                    ),
                   }))
                 }
                 style={{
                   ...inputStyle,
                   background: T.teal50,
-                  borderColor: T.teal200,
+                  borderColor: otRateConfigError ? T.red600 : T.teal200,
                 }}
+                aria-invalid={Boolean(otRateConfigError)}
               />
+              {otRateConfigError && (
+                <p
+                  role="alert"
+                  style={{
+                    margin: "5px 0 0",
+                    fontSize: 11,
+                    color: T.red600,
+                    fontWeight: 600,
+                  }}
+                >
+                  {otRateConfigError}
+                </p>
+              )}
             </Field>
           </div>
 
@@ -2222,6 +2330,7 @@ export default function PayrollModule() {
                 value={newLeaveTypeKey}
                 onChange={(event) => setNewLeaveTypeKey(event.target.value)}
                 style={inputStyle}
+                maxLength={40}
               />
               <button
                 onClick={() => {
@@ -2239,6 +2348,23 @@ export default function PayrollModule() {
                 Add
               </button>
             </div>
+            {allowanceNameError && (
+              <div
+                role="alert"
+                style={{
+                  background: "#fef2f2",
+                  border: `1px solid #fecaca`,
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginTop: 10,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: T.red600,
+                }}
+              >
+                {allowanceNameError}
+              </div>
+            )}
           </div>
 
           <div style={{ marginTop: 20, marginBottom: 24 }}>
@@ -2283,6 +2409,7 @@ export default function PayrollModule() {
                     }))
                   }
                   style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                  maxLength={40}
                 />
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <ModernSelect
@@ -2304,8 +2431,14 @@ export default function PayrollModule() {
                   {type.mode !== "none" && (
                     <input
                       type="number"
-                      min={0}
+                      min={PAYROLL_VALUE_MIN}
+                      max={
+                        type.mode === "percent"
+                          ? PAYROLL_PERCENT_MAX
+                          : PAYROLL_VALUE_MAX
+                      }
                       step={type.mode === "percent" ? 0.5 : 1}
+                      onKeyDown={blockInvalidNumberKeys}
                       title={
                         type.mode === "percent"
                           ? "% of basic salary"
@@ -2321,7 +2454,7 @@ export default function PayrollModule() {
                             [key]: {
                               ...type,
                               value: Math.max(
-                                0,
+                                PAYROLL_VALUE_MIN,
                                 Number(event.target.value) || 0,
                               ),
                             },
@@ -2358,6 +2491,7 @@ export default function PayrollModule() {
                 value={newAllowanceTypeKey}
                 onChange={(event) => setNewAllowanceTypeKey(event.target.value)}
                 style={inputStyle}
+                maxLength={40}
               />
               <button
                 onClick={() => {
@@ -2376,11 +2510,34 @@ export default function PayrollModule() {
                   }));
                   setNewAllowanceTypeKey("");
                 }}
-                style={secondaryButtonStyle}
+                disabled={!newAllowanceName || newAllowanceNameConflict}
+                style={{
+                  ...secondaryButtonStyle,
+                  cursor:
+                    !newAllowanceName || newAllowanceNameConflict
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !newAllowanceName || newAllowanceNameConflict ? 0.55 : 1,
+                }}
               >
                 Add
               </button>
             </div>
+            {newAllowanceNameConflict && (
+              <div
+                role="alert"
+                style={{
+                  color: T.red600,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  marginTop: 6,
+                }}
+              >
+                {newAllowanceTypeKey.trim()} is already added. Choose another
+                allowance.
+              </div>
+            )}
           </div>
 
           {policyError && (
@@ -2399,10 +2556,28 @@ export default function PayrollModule() {
               {policyError}
             </div>
           )}
+          {payrollRulesError && !policyError && (
+            <div
+              role="alert"
+              style={{
+                color: T.red600,
+                fontSize: 12,
+                fontWeight: 600,
+                marginBottom: 16,
+              }}
+            >
+              {payrollRulesError}
+            </div>
+          )}
 
           <button
             onClick={handleSaveRules}
-            disabled={policySaving || policyLoading || rulesBranchUnavailable}
+            disabled={
+              policySaving ||
+              policyLoading ||
+              rulesBranchUnavailable ||
+              Boolean(payrollRulesError)
+            }
             style={{
               ...primaryButtonStyle,
               display: "flex",
@@ -2410,11 +2585,17 @@ export default function PayrollModule() {
               justifyContent: "center",
               gap: 8,
               cursor:
-                policySaving || policyLoading || rulesBranchUnavailable
+                policySaving ||
+                policyLoading ||
+                rulesBranchUnavailable ||
+                Boolean(payrollRulesError)
                   ? "not-allowed"
                   : "pointer",
               opacity:
-                policySaving || policyLoading || rulesBranchUnavailable
+                policySaving ||
+                policyLoading ||
+                rulesBranchUnavailable ||
+                Boolean(payrollRulesError)
                   ? 0.7
                   : 1,
             }}
@@ -2450,20 +2631,43 @@ export default function PayrollModule() {
             <Field label="Base Salary (PKR)">
               <input
                 type="number"
-                min={0}
-                step="any"
+                min={SALARY_MIN}
+                max={SALARY_MAX}
+                step="1"
+                onKeyDown={blockInvalidNumberKeys}
                 value={draftSalary}
                 onChange={(event) =>
-                  setDraftSalary(Math.max(0, Number(event.target.value) || 0))
+                  setDraftSalary(
+                    Math.min(SALARY_MAX, Number(event.target.value)),
+                  )
                 }
-                style={inputStyle}
+                aria-invalid={Boolean(salaryConfigError)}
+                style={{
+                  ...inputStyle,
+                  ...(salaryConfigError ? { borderColor: T.red600 } : null),
+                }}
               />
+              {salaryConfigError && (
+                <p
+                  role="alert"
+                  style={{
+                    margin: "5px 0 0",
+                    fontSize: 11,
+                    color: T.red600,
+                    fontWeight: 600,
+                  }}
+                >
+                  {salaryConfigError}
+                </p>
+              )}
             </Field>
             <Field label="OT Rate Override (Rs/hr)">
               <input
                 type="number"
                 min={0}
+                max={PAYROLL_VALUE_MAX}
                 step="any"
+                onKeyDown={blockInvalidNumberKeys}
                 value={draftOtRateOverride}
                 onChange={(event) => {
                   const raw = event.target.value;
@@ -2471,7 +2675,9 @@ export default function PayrollModule() {
                   // override, fall back to the org default" — so don't
                   // coerce it to 0.
                   if (raw === "") return setDraftOtRateOverride("");
-                  setDraftOtRateOverride(String(Math.max(0, Number(raw) || 0)));
+                  setDraftOtRateOverride(
+                    String(Math.min(PAYROLL_VALUE_MAX, Number(raw))),
+                  );
                 }}
                 placeholder={`Org default: ${otRatePerHour}`}
                 style={{
@@ -2581,7 +2787,13 @@ export default function PayrollModule() {
                       {enabled && type.mode !== "none" && (
                         <input
                           type="number"
-                          min={0}
+                          min={PAYROLL_VALUE_MIN}
+                          max={
+                            type.mode === "percent"
+                              ? PAYROLL_PERCENT_MAX
+                              : PAYROLL_VALUE_MAX
+                          }
+                          onKeyDown={blockInvalidNumberKeys}
                           title="Override this staff member's value — leave blank to use the default above"
                           placeholder={String(type.value)}
                           aria-label={`${key} override value`}
@@ -2593,7 +2805,14 @@ export default function PayrollModule() {
                               [key]: {
                                 enabled: true,
                                 overrideValue:
-                                  raw.trim() === "" ? undefined : Number(raw),
+                                  raw.trim() === ""
+                                    ? undefined
+                                    : Math.min(
+                                        type.mode === "percent"
+                                          ? PAYROLL_PERCENT_MAX
+                                          : PAYROLL_VALUE_MAX,
+                                        Number(raw),
+                                      ),
                               },
                             }));
                           }}
@@ -2671,11 +2890,18 @@ export default function PayrollModule() {
             </button>
             <button
               onClick={handleSaveEdit}
-              disabled={savingEdit}
+              disabled={
+                savingEdit ||
+                Boolean(salaryConfigError) ||
+                Boolean(otRateConfigError)
+              }
               style={{
                 ...primaryButtonStyle,
                 flex: 2,
-                opacity: savingEdit ? 0.7 : 1,
+                opacity:
+                  savingEdit || salaryConfigError || otRateConfigError
+                    ? 0.7
+                    : 1,
               }}
             >
               {savingEdit ? "Saving…" : "Save Changes"}

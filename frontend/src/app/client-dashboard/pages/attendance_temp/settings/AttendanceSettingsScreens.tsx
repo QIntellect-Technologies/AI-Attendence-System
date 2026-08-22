@@ -750,6 +750,7 @@ const ManualInstructionsPanel: React.FC<{
             <input
               style={S.input}
               value={personCode}
+              maxLength={30}
               onChange={(e) => {
                 setPersonCode(e.target.value);
                 setResolvedPerson(null);
@@ -846,6 +847,7 @@ const ManualInstructionsPanel: React.FC<{
             style={S.input}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
+            maxLength={300}
           />
         </div>
 

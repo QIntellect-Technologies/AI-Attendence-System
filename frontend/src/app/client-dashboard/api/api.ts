@@ -47,6 +47,24 @@ export function dashboardAuthHeaders(): HeadersInit {
   }
 }
 
+/** Persist a freshly-minted dashboard token — e.g. the one returned by
+ * changeOwnPassword when the backend rotates the caller's own session
+ * (session_registry.rotate_session) as part of a password change. Must be
+ * called BEFORE any subsequent request, or that request will 401 with
+ * SESSION_SUPERSEDED using the now-superseded token still in storage. */
+export function setDashboardAuthToken(token: string | null | undefined): void {
+  try {
+    const text = typeof token === "string" ? token.trim() : "";
+    if (text) {
+      localStorage.setItem(DASHBOARD_AUTH_TOKEN_KEY, text);
+    } else {
+      localStorage.removeItem(DASHBOARD_AUTH_TOKEN_KEY);
+    }
+  } catch {
+    // Ignore storage access errors (private browsing, quota, etc.).
+  }
+}
+
 // ─── Generic fetch wrapper ────────────────────────────────────────────────────
 
 async function http<T>(path: string, options?: RequestInit): Promise<T> {
@@ -530,6 +548,14 @@ export interface DashboardProfileResponse {
   message?: string;
   error?: string;
   user: User;
+  // Only present when this call also changed the password (legacy
+  // /api/users/<id>/profile path — see api_update_user_profile). A fresh
+  // session_id is minted server-side on password change (session_registry
+  // rotate_session), which supersedes the token this very request was
+  // authenticated with -- callers MUST persist this token immediately or
+  // their next request will 401 with SESSION_SUPERSEDED. changeOwnPassword
+  // below is the one call site that needs to check for it.
+  token?: string;
 }
 
 /**
@@ -564,6 +590,11 @@ export interface ChangePasswordResponse {
   success: boolean;
   message?: string;
   error?: string;
+  // Session rotation on password change means the token this request was
+  // authenticated with is superseded the moment it succeeds -- the caller
+  // (ChangePasswordCard.tsx) MUST persist this before making any further
+  // request, or it will 401 with SESSION_SUPERSEDED on its own next call.
+  token?: string;
 }
 
 /**
@@ -914,6 +945,7 @@ export const updateOvertimeStatus = (
   status: "approved" | "rejected",
   approved_by = "Admin",
   organization_id?: TenantId | null,
+  rejection_note?: string | null,
 ) =>
   http<{ success: boolean }>(`/api/overtime/${ot_id}`, {
     method: "PUT",
@@ -921,6 +953,7 @@ export const updateOvertimeStatus = (
       status,
       approved_by,
       organization_id: (organization_id ?? getStoredOrganizationId()) || null,
+      rejection_note: rejection_note || null,
     }),
   });
 
