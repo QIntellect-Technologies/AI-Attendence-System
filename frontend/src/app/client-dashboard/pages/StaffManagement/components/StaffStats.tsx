@@ -52,10 +52,13 @@ export const StaffStats: FC<{
 
   return (
     <div
+      className="staff-management-stats"
       style={{
         display: "grid",
-        gridTemplateColumns: `repeat(${cards.length},1fr)`,
+        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
         gap: 12,
+        minWidth: 0,
+        width: "100%",
       }}
     >
       {cards.map((card) => (
@@ -66,6 +69,7 @@ export const StaffStats: FC<{
             border: `1px solid ${T.border}`,
             borderRadius: 10,
             padding: "12px 16px",
+            minWidth: 0,
           }}
         >
           <div
@@ -76,6 +80,7 @@ export const StaffStats: FC<{
               textTransform: "uppercase",
               letterSpacing: ".07em",
               marginBottom: 6,
+              overflowWrap: "anywhere",
             }}
           >
             {card.label}

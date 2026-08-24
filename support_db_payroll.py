@@ -24,7 +24,7 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _execute_supabase
+from support_db_core import _execute_supabase, build_or_ilike_filter
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -2090,10 +2090,15 @@ def get_client_payroll_page(
         if backend_branch_id:
             q = q.eq('branch_id', backend_branch_id)
         if include_search and search_text:
-            like = f'%{search_text}%'
             # Only stable text columns are searched server-side. Do not search
             # department because client_staff.department does not exist here.
-            q = q.or_(f'name.ilike.{like},employee_id.ilike.{like},email.ilike.{like}')
+            # build_or_ilike_filter properly quotes/escapes the value (see
+            # support_db_core) instead of interpolating it raw -- the same
+            # unescaped pattern here previously let a search term redefine
+            # the filter's structure and/or reach Supabase's edge verbatim.
+            clause = build_or_ilike_filter(search_text, ['name', 'employee_id', 'email'])
+            if clause:
+                q = q.or_(clause)
         return q.order(db_sort_column, desc=descending).range(start, end)
 
     staff_result = None

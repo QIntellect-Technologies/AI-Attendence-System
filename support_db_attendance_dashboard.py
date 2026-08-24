@@ -940,9 +940,22 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
         # same "add attendance" form could be submitted twice (or clash
         # with a row a camera later writes for the same day) and silently
         # fork a person's day into two attendance rows.
-        _, day_start_iso, day_end_iso = _dashboard_day_window_utc(
-            check_in_dt.date().isoformat(),
+        branch_zone = _get_branch_timezone(sb, org_key, branch_id) if branch_id else ZoneInfo('UTC')
+        local_check_in = (
+            check_in_dt.replace(tzinfo=branch_zone)
+            if check_in_dt.tzinfo is None
+            else check_in_dt.astimezone(branch_zone)
         )
+        local_date = local_check_in.date()
+        local_start = datetime(
+            local_date.year,
+            local_date.month,
+            local_date.day,
+            tzinfo=branch_zone,
+        )
+        local_end = local_start + timedelta(days=1)
+        day_start_iso = local_start.astimezone(timezone.utc).isoformat()
+        day_end_iso = local_end.astimezone(timezone.utc).isoformat()
         dup = (
             sb.table('attendance')
             .select('id')

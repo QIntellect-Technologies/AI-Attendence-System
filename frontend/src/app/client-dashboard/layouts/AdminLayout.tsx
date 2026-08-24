@@ -320,7 +320,7 @@ function buildSidebarGroups({
 interface UserChipProps {
   name: string;
   email: string;
-  image: string;
+  image: string | null;
   role: string;
 }
 
@@ -729,6 +729,7 @@ export default function AdminLayout() {
       >
         {/* Sticky header */}
         <header
+          className="admin-dashboard-header"
           style={{
             height: HEADER_HEIGHT,
             minHeight: HEADER_HEIGHT,
@@ -744,8 +745,23 @@ export default function AdminLayout() {
             zIndex: 30,
           }}
         >
+          <div className="admin-dashboard-header__mobile-top">
+            <div className="mobile-hamburger">
+              <SidebarHamburger onClick={() => setMobileSidebarOpen(true)} />
+            </div>
+            <div className="admin-dashboard-header__mobile-account">
+              <UserChip
+                name={displayName}
+                email={displayEmail}
+                image={brandLogo}
+                role={user?.role ?? ""}
+              />
+            </div>
+          </div>
+
           {/* Left: hamburger (mobile only) + title */}
           <div
+            className="admin-dashboard-header__desktop-title"
             style={{
               display: "flex",
               alignItems: "center",
@@ -754,13 +770,7 @@ export default function AdminLayout() {
             }}
           >
             {/* Hamburger — visible only on mobile via CSS */}
-            <div
-              style={{
-                display: "none",
-                // Shown via media query — we use inline style hack below
-              }}
-              className="mobile-hamburger"
-            >
+            <div className="mobile-hamburger">
               <SidebarHamburger onClick={() => setMobileSidebarOpen(true)} />
             </div>
 
@@ -787,7 +797,14 @@ export default function AdminLayout() {
           </div>
 
           {/* Right: notification bell, settings, user chip */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            className="admin-dashboard-header__actions"
+            style={{ display: "flex", alignItems: "center", gap: 10 }}
+          >
+            <div className="admin-dashboard-header__mobile-context">
+              <MapPin size={14} color={T.teal600} />
+              <span title={currentLabel}>{currentLabel}</span>
+            </div>
             <NotificationBell
               count={unreadCount}
               onClick={() => navigate("/admin/notifications")}
@@ -842,17 +859,28 @@ export default function AdminLayout() {
               <UserCircle2 size={18} color={T.muted} />
             </button>
 
-            <UserChip
-              name={displayName}
-              email={displayEmail}
-              image={displayImage}
-              role={user?.role ?? ""}
-            />
+            <div className="admin-dashboard-header__desktop-account">
+              <UserChip
+                name={displayName}
+                email={displayEmail}
+                image={displayImage}
+                role={user?.role ?? ""}
+              />
+            </div>
           </div>
         </header>
 
         {/* Page content — only this area scrolls */}
-        <main style={{ minWidth: 0, flex: 1, overflow: "auto", padding: 22 }}>
+        <main
+          style={{
+            minWidth: 0,
+            flex: "1 1 auto",
+            boxSizing: "border-box",
+            overflowX: "hidden",
+            overflowY: "auto",
+            padding: 22,
+          }}
+        >
           <DashboardTabBar />
           <Outlet />
         </main>

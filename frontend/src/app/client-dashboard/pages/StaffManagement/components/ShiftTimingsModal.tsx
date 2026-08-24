@@ -7,7 +7,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { type FC, useEffect, useState } from "react";
+import React, { type FC, useEffect, useMemo, useState } from "react";
 import { toastError, toastSuccess } from "../../../utils/notifications";
 import { Plus, Save, Trash2, X } from "lucide-react";
 import { ActionButton } from "../../engine/ModuleShell";
@@ -16,9 +16,16 @@ import {
   createShift,
   deleteShift,
   listBranchShifts,
+  ShiftConflictApiError,
   type ShiftRecord,
   updateShift,
 } from "../api/attendanceSettingsApi";
+import {
+  describeShiftConflict,
+  findConflictsWithinDraftSet,
+  hasBlockingConflict,
+  type ShiftConflict,
+} from "../utils/shiftOverlap";
 
 // ─── Shift Settings + Allocation ─────────────────────────────────────────────
 
@@ -68,10 +75,18 @@ export const shiftRecordToDraftRow = (
 // row. Night is modeled as an overnight shift (22:00 → 06:00); the shifts
 // table stores plain time-of-day values and the attendance gate compares
 // against local clock time, so no cross-midnight date math is needed here.
+//
+// The three presets tile the day back-to-back and MUST NOT overlap. Evening
+// previously started at 14:00 while Morning ran to 17:00, so any branch that
+// accepted the starter set began life with a three-hour ambiguity: a punch at
+// 15:00 belonged to two shifts at once and attendance for anyone assigned to
+// either was undefined (Ticket #20). findConflictsWithinDraftSet now rejects
+// that arrangement at save time, which would have made these presets
+// un-saveable — the real fix is for the defaults to be a valid roster.
 export const DEFAULT_SHIFT_PRESETS: ReadonlyArray<
   Pick<ShiftTimingsDraftRow, "name" | "check_in_time" | "check_out_time">
 > = [
-  { name: "Morning", check_in_time: "09:00", check_out_time: "17:00" },
+  { name: "Morning", check_in_time: "06:00", check_out_time: "14:00" },
   { name: "Evening", check_in_time: "14:00", check_out_time: "22:00" },
   { name: "Night", check_in_time: "22:00", check_out_time: "06:00" },
 ];
@@ -85,7 +100,14 @@ export const buildDefaultShiftDraftRows = (): ShiftTimingsDraftRow[] =>
     grace_minutes: 15,
     capture_check_out: true,
     check_out_time: preset.check_out_time,
-    checkout_grace_minutes: 15,
+    // Zero, unlike the 15 a standalone "Add Shift" row gets. In a roster
+    // that tiles the full day, one shift's check-out instant IS the next
+    // shift's check-in instant, so ANY checkout grace here necessarily runs
+    // into the following shift and the admin would meet a handover warning
+    // on three rows they haven't even edited yet. A branch that wants a
+    // checkout grace can raise it per row; a branch that keeps the defaults
+    // gets a clean roster.
+    checkout_grace_minutes: 0,
     sync_delay_minutes: 0,
   }));
 
@@ -110,6 +132,15 @@ export const ShiftTimingsModal: FC<{
   const [isSaving, setIsSaving] = useState(false);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Every row checked against every other, recomputed as the admin types.
+  // Live rather than save-time because a conflict is a property of the SET,
+  // not of the row being edited — moving Evening's start earlier makes
+  // Morning the offender too, and both rows need to say so.
+  const conflictsByRow = useMemo(
+    () => findConflictsWithinDraftSet(rows),
+    [rows],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -198,6 +229,7 @@ export const ShiftTimingsModal: FC<{
     setIsSaving(true);
     setRowErrors({});
     const nextErrors: Record<string, string> = {};
+    const nextNotes: ShiftConflict[] = [];
     let anySucceeded = false;
 
     for (const row of rows) {
@@ -220,19 +252,40 @@ export const ShiftTimingsModal: FC<{
       };
       try {
         if (row.isDraft) {
-          const created = await createShift(branchId, organizationId, payload);
+          const { shift, notes } = await createShift(
+            branchId,
+            organizationId,
+            payload,
+          );
+          nextNotes.push(...notes);
           setRows((items) =>
             items.map((item) =>
-              item.id === row.id ? shiftRecordToDraftRow(created) : item,
+              item.id === row.id ? shiftRecordToDraftRow(shift) : item,
             ),
           );
         } else {
-          await updateShift(branchId, row.id, organizationId, payload);
+          const { notes } = await updateShift(
+            branchId,
+            row.id,
+            organizationId,
+            payload,
+          );
+          nextNotes.push(...notes);
         }
         anySucceeded = true;
       } catch (error) {
+        // A 409 carries the specific shift it collided with, so the row can
+        // say "Overlaps Morning (09:00–17:00) by 180 min" instead of the
+        // generic failure every other error falls back to. This catches the
+        // case the pre-flight above can't: a colliding shift that exists on
+        // the server but isn't loaded in this modal — another admin added it
+        // while this one had the dialog open.
         nextErrors[row.id] =
-          error instanceof Error ? error.message : "Failed to save this shift.";
+          error instanceof ShiftConflictApiError
+            ? error.conflicts.map(describeShiftConflict).join(" ")
+            : error instanceof Error
+              ? error.message
+              : "Failed to save this shift.";
       }
     }
 
@@ -242,6 +295,10 @@ export const ShiftTimingsModal: FC<{
       toastSuccess("Shift timings saved.");
       onSaved();
     }
+    // nextNotes is deliberately not toasted. The per-row bands already name
+    // which shifts share hours, and a roster that overlaps ON PURPOSE would
+    // otherwise raise the same toast on every save, forever.
+    void nextNotes;
     if (Object.keys(nextErrors).length > 0) {
       toastError("Some shifts failed to save. Check the highlighted rows.");
     }

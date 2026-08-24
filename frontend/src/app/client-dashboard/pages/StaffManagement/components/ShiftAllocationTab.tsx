@@ -30,6 +30,7 @@ import {
 } from "../api/attendanceSettingsApi";
 import { type StaffMember } from "../types/staffTypes";
 import { shiftText } from "../utils/staffShifts";
+import { formatShiftWindow } from "../utils/shiftOverlap";
 import { ShiftTimingsModal } from "./ShiftTimingsModal";
 import { StaffAttendanceOverridesPanel } from "./StaffAttendanceOverridesPanel";
 
@@ -277,8 +278,57 @@ export const ShiftAllocationTab: FC<{
       (scope === "department" && selectedDepartment !== "all") ||
       (scope === "individual" && selectedStaffId));
 
+  // Who among the targets already holds a DIFFERENT shift. A person holds
+  // exactly one shift (client_staff.shift_id_ref), so applying a second one
+  // replaces the first — it does not add to it. That replacement used to be
+  // silent: both applies reported success and nothing said which shift the
+  // person ended up on, which is how one employee appeared to hold both a
+  // Morning and an Evening shift at once (Ticket #20).
+  const replacements = useMemo(() => {
+    const targets =
+      scope === "individual"
+        ? branchStaff.filter((member) => member.id === selectedStaffId)
+        : scope === "department"
+          ? branchStaff.filter(
+              (member) =>
+                selectedDepartment !== "all" &&
+                member.department === selectedDepartment,
+            )
+          : branchStaff;
+
+    return targets.filter((member) => {
+      const current = String((member as any).shiftIdRef ?? "");
+      return current && current !== selectedShiftId;
+    });
+  }, [
+    branchStaff,
+    scope,
+    selectedDepartment,
+    selectedStaffId,
+    selectedShiftId,
+  ]);
+
   const handleApply = async () => {
     if (!canApply) return;
+
+    // One confirm for the whole apply, not one per person — a branch-wide
+    // apply can target hundreds.
+    if (replacements.length > 0 && selectedShift) {
+      const incoming = `${selectedShift.name} (${formatShiftWindow(selectedShift)})`;
+      const summary =
+        replacements.length === 1
+          ? `${replacements[0].name} is currently on ${shiftText(replacements[0])}.`
+          : `${replacements.length} people are currently on a different shift.`;
+
+      if (
+        !window.confirm(
+          `${summary}\n\nApplying ${incoming} REPLACES their current shift — nobody holds two shifts at once. Continue?`,
+        )
+      ) {
+        return;
+      }
+    }
+
     setIsApplying(true);
     setApplyError(null);
     try {
@@ -290,7 +340,15 @@ export const ShiftAllocationTab: FC<{
         staffId: selectedStaffId || undefined,
         shiftId: selectedShiftId,
       });
-      toastSuccess("Shift applied successfully.");
+      toastSuccess(
+        selectedShift
+          ? `${selectedShift.name} (${formatShiftWindow(selectedShift)}) applied to ${targetCount} ${
+              targetCount === 1
+                ? peopleModel.personSingular.toLowerCase()
+                : peopleModel.personPlural.toLowerCase()
+            }.`
+          : "Shift applied successfully.",
+      );
       setApplyError(null);
     } catch (error) {
       setApplyError(

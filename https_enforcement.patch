@@ -1,0 +1,103 @@
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -10,6 +10,14 @@
+ from dotenv import load_dotenv
+ 
+ load_dotenv()
++
++# Suppress the "Server: Werkzeug/3.0.1 Python/3.10.0" banner (audit #10).
++# Imported here, above Flask, because the patch has to land before the WSGI
++# server handles its first request -- and under gunicorn this module IS the
++# entry point (`gunicorn app:app`), so importing it at the top of app.py is
++# what gets it into the worker process. See server_identity.py.
++import server_identity
++
+ from flask import Flask, request, jsonify, render_template, send_from_directory, Response, send_file, g
+ from flask_cors import CORS
+ from werkzeug.utils import secure_filename
+@@ -51,6 +59,7 @@
+ from shared_face_engine.package_format import parse_embedding_package, PackageImportError
+ 
+ logger = get_logger(__name__)
++logger.info('Server banner suppression: %s', server_identity.status())
+ 
+ from werkzeug.middleware.proxy_fix import ProxyFix
+ 
+@@ -64,6 +73,16 @@
+ # requests downgrades POST to GET on the redirect: heartbeat and
+ # push-attendance silently die while GET config polls keep working.
+ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
++
++# ─── HTTPS enforcement + HSTS (audit #11) ──────────────────────
++# Must come after ProxyFix: the scheme check reads request.is_secure, which
++# is only truthful once X-Forwarded-Proto has been applied above. Without
++# this the API answers 200 on http:// as happily as on https://, so a login
++# POST in the clear looks like a success to the client and to the logs.
++# Off by default outside Railway so LAN nodes keep working -- see the module
++# docstring for FORCE_HTTPS.
++import https_enforcement
++https_enforcement.init_app(app, logger=logger)
+ 
+ # ─── CORS ──────────────────────────────────────────────────────
+ # Was a bare CORS(app), i.e. Access-Control-Allow-Origin: * on every route.
+@@ -2390,11 +2409,14 @@
+             ttl_days=ttl_days,
+             node_label=data.get('node_label'),
+         )
+-        api_base_url = str(
+-            data.get('api_base_url')
+-            or data.get('railway_api_base_url')
+-            or request.host_url.rstrip('/')
+-        ).strip().rstrip('/')
++        api_base_url = https_enforcement.require_https_base_url(
++            str(
++                data.get('api_base_url')
++                or data.get('railway_api_base_url')
++                or request.host_url.rstrip('/')
++            ).strip().rstrip('/'),
++            logger=logger,
++        )
+         use_public_ip = bool(data.get('use_public_ip', False))
+ 
+         # token carries branch_name (set in create_branch_install_token);
+@@ -5940,7 +5962,9 @@
+         activated = support_cp_db.activate_node_with_install_token(
+             install_token=str(install_token),
+             node_label=str(node_label).strip() if node_label else None,
+-            railway_api_base_url=request.host_url.rstrip('/'),
++            railway_api_base_url=https_enforcement.require_https_base_url(
++                request.host_url.rstrip('/'), logger=logger,
++            ),
+         )
+         return jsonify({'success': True, **activated}), 200
+     except ValueError as e:
+--- a/backend/support_routes.py
++++ b/backend/support_routes.py
+@@ -12,6 +12,7 @@
+ import support_db as db
+ import login_throttle
+ from logger_config import get_logger
++import https_enforcement  # audit #11: never bake an http:// base URL into a node config
+ from pathlib import Path
+ from supabase_client import get_supabase
+ from installer_packager import (
+@@ -488,11 +489,14 @@
+         ttl_days = payload.get("ttl_days", 7)
+         node_label = str(payload.get("node_label") or "").strip() or None
+         use_public_ip = bool(payload.get("use_public_ip", False))
+-        api_base_url = str(
+-            payload.get("api_base_url")
+-            or payload.get("railway_api_base_url")
+-            or request.host_url.rstrip("/")
+-        ).strip().rstrip("/")
++        api_base_url = https_enforcement.require_https_base_url(
++            str(
++                payload.get("api_base_url")
++                or payload.get("railway_api_base_url")
++                or request.host_url.rstrip("/")
++            ).strip().rstrip("/"),
++            logger=logger,
++        )
+ 
+         token = db.create_branch_install_token(
+             org_id=org_id,

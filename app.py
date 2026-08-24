@@ -10,6 +10,13 @@ register_cuda_dll_dirs()
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Suppress the "Server: Werkzeug/3.0.1 Python/3.10.0" banner (audit #10).
+# Imported here, above Flask, because the patch has to land before the WSGI
+# server handles its first request -- and under gunicorn this module IS the
+# entry point (`gunicorn app:app`), so importing it at the top of app.py is
+# what gets it into the worker process. See server_identity.py.
+import server_identity
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response, send_file, g
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -51,6 +58,7 @@ import tempfile
 from shared_face_engine.package_format import parse_embedding_package, PackageImportError
 
 logger = get_logger(__name__)
+logger.info('Server banner suppression: %s', server_identity.status())
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 

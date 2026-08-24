@@ -12,8 +12,9 @@ the backward-compatible facade that re-exports everything below.
 
 from datetime import date, timedelta, datetime, timezone
 import json
+import re
 from math import radians, sin, cos, atan2, sqrt
-from typing import Optional, Any, Callable
+from typing import Optional, Any, Callable, Sequence
 import time
 import bcrypt
 import secrets
@@ -24,6 +25,18 @@ import os
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 from support_invite_message import build_client_invite_message
+
+try:
+    # postgrest-py's own exception type. Checking `isinstance(exc, APIError)`
+    # plus its structured `.code` (which postgrest sets to the raw HTTP
+    # status whenever the response body couldn't be parsed as JSON -- see
+    # generate_default_error_message in postgrest/exceptions.py) is a far
+    # more reliable signal than pattern-matching the exception's stringified
+    # text, which varies across postgrest-py versions and across whatever
+    # an upstream proxy happened to put in the response body.
+    from postgrest.exceptions import APIError as _PostgrestAPIError
+except Exception:  # pragma: no cover - defensive; supabase always pulls postgrest
+    _PostgrestAPIError = None
 from zoneinfo import ZoneInfo, available_timezones
 from core.vertical_templates import (
     list_vertical_templates as _list_vertical_templates,
@@ -106,29 +119,85 @@ def _validate_branch_timezone(value: object) -> str:
         raise ValueError(f'Invalid timezone: {text}')
     return text
 
+# HTTP status codes that mean "the origin/edge is having a bad time" —
+# genuinely transient infrastructure failures worth retrying.
+_ORIGIN_UNREACHABLE_STATUS_CODES = frozenset({502, 503, 504, 520, 521, 522, 523, 524})
+
+def _postgrest_status_code(exc: Exception) -> int | None:
+    """Best-effort extraction of the upstream HTTP status code from a
+    postgrest APIError.
+
+    `APIError.code` is documented as the Postgres/PostgREST error code, but
+    postgrest's own generate_default_error_message() (used whenever the
+    response body isn't valid JSON at all — e.g. Cloudflare's HTML WAF
+    block page) sets it to the raw HTTP status code instead. That makes it
+    a reliable, structured way to tell "the edge rejected/blocked this
+    request" (4xx) apart from "the origin is unreachable" (5xx/52x),
+    without depending on what text happens to be embedded in the body.
+    """
+    if _PostgrestAPIError is not None and isinstance(exc, _PostgrestAPIError):
+        try:
+            return int(getattr(exc, 'code', None))
+        except (TypeError, ValueError):
+            return None
+    return None
+
 def _is_retryable_supabase_error(exc: Exception) -> bool:
+    status = _postgrest_status_code(exc)
+    if status is not None:
+        return status in _ORIGIN_UNREACHABLE_STATUS_CODES
     text = f'{type(exc).__name__}: {exc}'.lower()
     return any(marker in text for marker in _SUPABASE_RETRYABLE_MARKERS)
 
 def _readable_supabase_error(exc: Exception, label: str) -> Exception:
-    """Translate an upstream-infrastructure failure into a human message.
+    """Normalize any Supabase/postgrest failure into a clean ValueError
+    (bad/rejected request -> 400) or RuntimeError (infra outage -> 500).
 
-    postgrest wraps any non-JSON response — typically a Cloudflare HTML
-    error page when the edge can't reach the Supabase origin — as
-    'JSON could not be generated', code 400. That reaches the operator as
-    a blob of escaped markup that reads like an application bug, when the
-    actual condition is 'the database was briefly unreachable'.
+    This is the single place that decides what an operator-facing error
+    message says, and it MUST NOT ever let a raw postgrest/pydantic/JSON
+    exception escape unclassified — that gap is exactly what turned a
+    Cloudflare WAF block of a SQL-injection probe into an unhandled 500
+    (see bug: "SQL Injection Payload Causes Unhandled WAF Crash"). A
+    request that the edge blocked or that PostgREST rejected is a bad
+    *request*, not a database outage, so it is surfaced as a ValueError
+    (400) rather than the old blanket "temporarily unreachable" message,
+    which was both misleading and told a client to retry a query that will
+    never succeed.
 
     Returns the exception to raise, so the caller keeps control of the
     raise site and the original stays chained for the logs.
     """
+    status = _postgrest_status_code(exc)
+    if status in _ORIGIN_UNREACHABLE_STATUS_CODES:
+        logger.error('Supabase unreachable during %s (status %s): %s', label, status, exc)
+        return RuntimeError(
+            'The database is temporarily unreachable. Please retry in a moment.'
+        )
+    if status is not None:
+        # Any other non-2xx from postgrest that didn't parse as a normal
+        # JSON error body (403 WAF block, 400 malformed filter, etc).
+        logger.warning('Supabase rejected request during %s (status %s): %s', label, status, exc)
+        return ValueError('Your request could not be processed. Please adjust it and try again.')
+
     text = f'{type(exc).__name__}: {exc}'.lower()
     if 'cloudflare' in text or '<html>' in text or 'json could not be generated' in text:
         logger.error('Supabase unreachable during %s: %s', label, exc)
         return RuntimeError(
             'The database is temporarily unreachable. Please retry in a moment.'
         )
-    return exc
+    # json.JSONDecodeError subclasses ValueError, so it must be excluded
+    # here explicitly -- otherwise it would look like an intentional
+    # application-level ValueError (e.g. 'branch_id is required') and pass
+    # through unwrapped, which is exactly the original crash: a raw
+    # "Expecting value: line 1 column 1" from trying to json-decode an
+    # HTML WAF page, reaching the route layer unclassified.
+    if isinstance(exc, (ValueError, RuntimeError)) and not isinstance(exc, json.JSONDecodeError):
+        return exc
+    # Last-resort net: whatever this is (JSONDecodeError, pydantic
+    # ValidationError, a future postgrest-py internal type we haven't seen
+    # yet), never let it leave this function as an unclassified exception.
+    logger.exception('Unclassified Supabase failure during %s', label)
+    return RuntimeError('The database is temporarily unreachable. Please retry in a moment.')
 
 
 def _execute_supabase(label: str, factory: Callable[[], Any], attempts: int = 2):
@@ -156,6 +225,63 @@ def _execute_supabase(label: str, factory: Callable[[], Any], attempts: int = 2)
             time.sleep(0.12 * (attempt + 1))
 
     raise _readable_supabase_error(last_exc, label)  # type: ignore[arg-type]
+
+def _quote_postgrest_filter_value(value: str) -> str:
+    """Quote a value for safe embedding in a hand-built PostgREST filter
+    string (`.or_()`, `.filter()`), per PostgREST's own escaping rule:
+    https://postgrest.org/en/stable/references/api/tables_views.html
+    ("If the filter value has a reserved character, wrap it in double
+    quotes"). Backslash and embedded double-quotes are backslash-escaped
+    first, matching PostgREST's `in.()` escaping convention.
+
+    This is the actual fix for the class of bug in the old
+    support_db_fast._or_search / support_db_payroll staff query /
+    support_db_client_users login lookup: each hand-built its own `.or_()`
+    string and only *stripped* a couple of characters (or nothing at all),
+    which silently changes user intent (a real name/email can legitimately
+    contain those characters) without reliably preventing the value's
+    commas/parens from redefining the filter's structure. Quoting, per the
+    protocol's own escape mechanism, is correct for arbitrary input instead
+    of a best-effort blacklist.
+    """
+    escaped = str(value).replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{escaped}"'
+
+def build_or_ilike_filter(search: Optional[str], columns: Sequence[str], max_length: int = 100) -> Optional[str]:
+    """Build a safe PostgREST `.or_()` clause: `search` matched against
+    every column in `columns` via case-insensitive substring match.
+
+    Single, shared choke point for every "search box" query in the app
+    (Staff, Payroll, Leaves, ...) so they all get identical, correct
+    escaping instead of each reimplementing (and under-implementing) it.
+    Returns None when there's nothing to search for, so callers can do
+    `if clause: query = query.or_(clause)` uniformly.
+    """
+    text = str(search or '').strip()[:max_length]
+    if not text:
+        return None
+    # Escape ILIKE's own wildcard characters (independent of, and applied
+    # before, the PostgREST-level quoting above) so a literal '%' or '_'
+    # typed into a search box matches itself instead of expanding into a
+    # SQL wildcard the user never intended to use.
+    like_safe = text.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    quoted = _quote_postgrest_filter_value(f'%{like_safe}%')
+    return ",".join(f'{col}.ilike.{quoted}' for col in columns)
+
+def build_or_eq_filter(value: Optional[str], columns: Sequence[str], max_length: int = 320) -> Optional[str]:
+    """Build a safe PostgREST `.or_()` clause: `value` matched exactly
+    against every column in `columns`. Used for identifier lookups (e.g.
+    login-by-email-or-phone) where the same raw value is checked against
+    more than one column with `.eq.`. Deliberately does NOT trim/alter the
+    value beyond length-capping — exact-match lookups must compare what
+    was actually stored, so safety comes entirely from quoting, never from
+    stripping characters.
+    """
+    text = str(value or '')[:max_length]
+    if not text.strip():
+        return None
+    quoted = _quote_postgrest_filter_value(text)
+    return ",".join(f'{col}.eq.{quoted}' for col in columns)
 
 def _cache_get(cache: dict, key: str):
     item = cache.get(key)

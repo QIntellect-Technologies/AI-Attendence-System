@@ -18,6 +18,17 @@ Kept in its own module rather than folded into support_db.py, matching the
 existing split (support_db_fast.py, support_db_training_pipeline.py) so one
 file doesn't keep growing without bound.
 
+OVERLAPPING SHIFTS ARE ALLOWED. A branch may legitimately run Morning
+09:00-17:00 alongside Evening 14:00-22:00 so two people cover the busy
+middle together. Nothing resolves a shift by matching a punch time against
+shift windows — every lookup is by id (shift_id_ref, default_shift_id, or an
+.in_('id', ...) batch read) — so an overlap is never ambiguous to resolve.
+create_shift/update_shift therefore REPORT overlaps (overlap_notes on the
+response) rather than refusing them, via the shared comparison in
+support_db_shift_overlap.py. What this module does enforce is that a person
+holds exactly one shift, and that swapping it is never silent — see
+assign_staff_shift.
+
 list_branch_shifts is the one function here that reads across branches: pass
 branch_id="all" (or None) to get every shift in the org, each row enriched
 with branch_name. Every write function (create/update/delete/assign) still
@@ -40,6 +51,11 @@ from support_db_time_utils import (
     require_specific_branch as _require_specific_branch,
     attach_branch_names as _attach_branch_names,
     is_missing_table_or_column as _is_missing_table_or_column,
+)
+from support_db_shift_overlap import (
+    ShiftConflictError,
+    format_window as _format_window,
+    check_overlaps as _check_overlaps,
 )
 
 
@@ -93,6 +109,57 @@ def _get_shift_owned_by_org(org_id: str, shift_id: str) -> dict:
     return result.data[0]
 
 
+# ─── Overlap guard ─────────────────────────────────────────────────────────
+
+def _sibling_shifts(org_id: str, branch_id: str, people_type: str) -> list[dict]:
+    """Every other shift competing for the same punches — same org, branch,
+    and people_type. Deliberately not filtered on is_active in SQL: the
+    guard decides what counts, so the "inactive shifts don't conflict" rule
+    lives in exactly one place instead of being half-expressed as a query
+    filter here and half as a flag there."""
+    sb = get_supabase()
+    try:
+        result = (
+            sb.table("shifts")
+            .select("id, name, branch_id, people_type, check_in_time, "
+                    "grace_minutes, check_out_time, checkout_grace_minutes, is_active")
+            .eq("org_id", str(org_id))
+            .eq("branch_id", str(branch_id))
+            .eq("people_type", people_type)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_table_or_column(exc, "shifts"):
+            return []
+        raise
+    return result.data or []
+
+
+def _describe_overlaps(
+    org_id: str,
+    branch_id: str,
+    candidate: dict,
+    *,
+    exclude_id: str | None = None,
+) -> list[dict]:
+    """How this shift relates to the ones already beside it, as plain dicts
+    ready to ride back in the response.
+
+    Does NOT block. Overlapping shifts are a normal roster — two people
+    covering a lunch rush together — and every shift lookup in this codebase
+    is by id, so an overlap is never ambiguous to resolve. See
+    check_overlaps' own docstring for the full reasoning. The admin is told;
+    the admin decides.
+
+    Both create_shift and update_shift call exactly this, so the sibling
+    read and the comparison are defined once. Adding a third write path
+    later means one more call here, not another copy of the rule.
+    """
+    siblings = _sibling_shifts(org_id, branch_id, candidate["people_type"])
+    overlaps = _check_overlaps(candidate, siblings, exclude_id=exclude_id)
+    return [o.to_dict() for o in overlaps]
+
+
 def create_shift(org_id: str, branch_id: str, payload: dict) -> dict:
     branch_key = _require_specific_branch(branch_id, "Creating a shift")
     _get_branch_owned_by_org(org_id, branch_key)
@@ -120,26 +187,30 @@ def create_shift(org_id: str, branch_id: str, payload: dict) -> dict:
         if capture_check_out else None
     )
 
+    row = {
+        "org_id": str(org_id),
+        "branch_id": branch_key,
+        "people_type": people_type,
+        "name": name,
+        "check_in_time": check_in_time,
+        "grace_minutes": grace_minutes,
+        "check_out_time": check_out_time,
+        "checkout_grace_minutes": checkout_grace_minutes,
+        "sync_delay_minutes": sync_delay_minutes,
+        "is_active": True,
+    }
+
+    overlaps = _describe_overlaps(org_id, branch_key, row)
+
     sb = get_supabase()
-    result = (
-        sb.table("shifts")
-        .insert({
-            "org_id": str(org_id),
-            "branch_id": branch_key,
-            "people_type": people_type,
-            "name": name,
-            "check_in_time": check_in_time,
-            "grace_minutes": grace_minutes,
-            "check_out_time": check_out_time,
-            "checkout_grace_minutes": checkout_grace_minutes,
-            "sync_delay_minutes": sync_delay_minutes,
-            "is_active": True,
-        })
-        .execute()
-    )
+    result = sb.table("shifts").insert(row).execute()
     if not result.data:
         raise RuntimeError("Failed to create shift")
-    return result.data[0]
+
+    created = result.data[0]
+    if overlaps:
+        created["overlap_notes"] = overlaps
+    return created
 
 
 def update_shift(org_id: str, branch_id: str, shift_id: str, payload: dict) -> dict:
@@ -194,6 +265,29 @@ def update_shift(org_id: str, branch_id: str, shift_id: str, payload: dict) -> d
     if not update_data:
         raise ValueError("No valid shift fields to update")
 
+    # An update is a PATCH, so the candidate window is the STORED row with
+    # this payload merged over it — checking update_data alone would read a
+    # grace-only edit as a shift with no times at all and wave it through.
+    # Fetching first also turns "no such shift" into a clean 404-ish error
+    # before any write is attempted, instead of inferring it from an empty
+    # update result afterwards.
+    existing = (
+        sb.table("shifts")
+        .select("*")
+        .eq("id", str(shift_id))
+        .eq("org_id", str(org_id))
+        .eq("branch_id", branch_key)
+        .limit(1)
+        .execute()
+    )
+    if not existing.data:
+        raise ValueError("Shift not found for this branch")
+
+    candidate = {**existing.data[0], **update_data}
+    overlaps = _describe_overlaps(
+        org_id, branch_key, candidate, exclude_id=str(shift_id)
+    )
+
     update_data["updated_at"] = _now_iso()
     result = (
         sb.table("shifts")
@@ -205,7 +299,11 @@ def update_shift(org_id: str, branch_id: str, shift_id: str, payload: dict) -> d
     )
     if not result.data:
         raise ValueError("Shift not found for this branch")
-    return result.data[0]
+
+    updated = result.data[0]
+    if overlaps:
+        updated["overlap_notes"] = overlaps
+    return updated
 
 
 def delete_shift(org_id: str, branch_id: str, shift_id: str) -> bool:
@@ -260,16 +358,57 @@ def assign_staff_shift(
 
     Not branch-scoped in its own URL — the shift itself carries a
     branch_id, and this only needs to confirm the shift belongs to the same
-    org as the staff."""
+    org as the staff.
+
+    A person holds exactly one shift (client_staff.shift_id_ref), so a second
+    assignment REPLACES the first rather than adding to it. That replacement
+    was previously silent: the UI reported "Shift applied successfully" for
+    both, and nothing said which one had actually won. The returned row now
+    carries `previous_shift` and `assigned_shift` so the caller can name the
+    swap instead of leaving the admin to guess (Ticket #20)."""
     sb = get_supabase()
+
+    # Read the staff row first: needed for the branch check below, and for
+    # the before/after the response reports.
+    staff_before = (
+        sb.table("client_staff")
+        .select("id, org_id, branch_id, shift_id_ref")
+        .eq("id", str(staff_id))
+        .eq("org_id", str(org_id))
+        .limit(1)
+        .execute()
+    )
+    if not staff_before.data:
+        raise ValueError("Staff member not found in this organization")
+    previous_shift_id = staff_before.data[0].get("shift_id_ref")
 
     update: dict[str, Any] = {
         "shift_id_ref": str(shift_id) if shift_id else None,
         "updated_at": _now_iso(),
     }
 
+    assigned_shift: dict | None = None
     if shift_id:
-        _get_shift_owned_by_org(org_id, shift_id)
+        assigned_shift = _get_shift_owned_by_org(org_id, shift_id)
+
+        # Org ownership alone was letting a person in Branch A be put on a
+        # shift belonging to Branch B, whose times are keyed to a different
+        # timezone and whose branch default never applies to them.
+        staff_branch = str(staff_before.data[0].get("branch_id") or "")
+        shift_branch = str(assigned_shift.get("branch_id") or "")
+        if staff_branch and shift_branch and staff_branch != shift_branch:
+            raise ValueError(
+                f'"{assigned_shift.get("name")}" belongs to a different branch '
+                "than this staff member. Assign a shift from their own branch, "
+                "or move them to that branch first."
+            )
+
+        if assigned_shift.get("is_active") is False:
+            raise ValueError(
+                f'"{assigned_shift.get("name")}" is deactivated and can\'t be '
+                "assigned. Reactivate it under Shift Timings first."
+            )
+
         update["check_in_grace_override"] = (
             _validate_grace_minutes(check_in_grace_override)
             if check_in_grace_override is not None else None
@@ -291,4 +430,35 @@ def assign_staff_shift(
     )
     if not result.data:
         raise ValueError("Staff member not found in this organization")
-    return result.data[0]
+
+    staff = result.data[0]
+    staff["assigned_shift"] = _shift_summary(assigned_shift)
+    staff["previous_shift"] = (
+        _shift_summary(_load_shift_quietly(org_id, previous_shift_id))
+        if previous_shift_id and str(previous_shift_id) != str(shift_id or "")
+        else None
+    )
+    return staff
+
+
+def _load_shift_quietly(org_id: str, shift_id: str) -> dict | None:
+    """The shift a person is being moved OFF. Best-effort by design: it may
+    have been deleted since it was assigned, and a stale reference must not
+    turn a valid reassignment into an error."""
+    try:
+        return _get_shift_owned_by_org(org_id, shift_id)
+    except ValueError:
+        return None
+
+
+def _shift_summary(shift: dict | None) -> dict | None:
+    """The minimum a UI needs to name a shift: what it's called and when it
+    runs. Built through the shared formatter so the window in a toast reads
+    identically to the window in an overlap error."""
+    if not shift:
+        return None
+    return {
+        "id": str(shift.get("id")),
+        "name": shift.get("name"),
+        "window": _format_window(shift),
+    }

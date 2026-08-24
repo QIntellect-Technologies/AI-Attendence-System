@@ -670,11 +670,17 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
 
   /**
    * Assigns a staff member to a real `shifts` row via
-   * PATCH /api/client/staff/<id>/shift. Additive: only writes the new
-   * `shiftIdRef`/`shift_id_ref` fields onto the local StaffMember record.
-   * The legacy `shiftId`/`shift`/`shiftLabel` fields (driven by the
-   * hardcoded ShiftDefinition list and still read elsewhere) are left
-   * untouched so nothing that reads them silently breaks.
+   * PATCH /api/client/staff/<id>/shift. The backend now returns the
+   * fully-resolved staff row (shiftLabel/shiftStart/shiftEnd already
+   * folded in from the `shifts` row via shift_id_ref — see
+   * support_db_shifts.assign_staff_shift), so the local record is rebuilt
+   * from that response the same way updateStaff/createStaff do, instead of
+   * hand-patching only shiftIdRef/shift_id_ref. That partial patch used to
+   * leave shiftLabel/shiftStart/shiftEnd — the fields the Shift Allocation
+   * tab's "Current Shift Summary" and shiftText() actually read — pointing
+   * at the previous shift until a full staff-list reload, most visibly
+   * when applying a newly-created overnight shift (e.g. 23:00–01:00) whose
+   * name/timing had no other reason to already be on the local record.
    */
   const assignShift = useCallback(
     async (userId: number | string, shiftId: string | null) => {
@@ -684,7 +690,11 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         );
       }
 
-      await assignStaffShiftApi(userId, shiftId, organizationId);
+      const updatedUser = await assignStaffShiftApi(
+        userId,
+        shiftId,
+        organizationId,
+      );
 
       const store = staffStoreRef.current;
       const existing = store.allItems.find(
@@ -692,11 +702,11 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       );
 
       if (existing) {
-        replaceStaffRecord({
-          ...existing,
-          shiftIdRef: shiftId,
-          shift_id_ref: shiftId,
-        } as StaffMember);
+        const resolved = withBackendBenefits(
+          apiUserToStaffMember(updatedUser),
+          updatedUser,
+        );
+        replaceStaffRecord({ ...existing, ...resolved });
       }
 
       return shiftId;

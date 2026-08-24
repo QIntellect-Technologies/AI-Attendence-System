@@ -185,8 +185,6 @@ export const StaffRow: FC<{
           width: "100%",
           paddingLeft: isCentered ? 8 : 4,
           paddingRight: isCentered ? 8 : 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
           whiteSpace: "nowrap",
         }}
         title={value}
@@ -198,12 +196,16 @@ export const StaffRow: FC<{
 
   return (
     <div
+      className="staff-directory-table-grid"
       id={domId}
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
         display: "grid",
         gridTemplateColumns,
+        minWidth: 1120,
+        width: "100%",
+        boxSizing: "border-box",
         gap: 12,
         padding: "11px 16px",
         alignItems: "center",

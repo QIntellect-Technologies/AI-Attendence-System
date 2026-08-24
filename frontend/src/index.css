@@ -1,3 +1,47 @@
 @tailwind utilities;
 
 /* Your existing styles below — keep whatever was already here */
+
+.manual-attendance-modal,
+.manual-attendance-modal *,
+.manual-attendance-modal *::before,
+.manual-attendance-modal *::after {
+  box-sizing: border-box;
+}
+
+.manual-attendance-modal input,
+.manual-attendance-modal select,
+  }
+
+  .mobile-hamburger {
+    display: block !important;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .manual-attendance-modal {
+    max-height: calc(100dvh - 24px) !important;
+    border-radius: 12px !important;
+  }
+
+  .manual-attendance-modal__header,
+  .manual-attendance-modal__body,
+  .manual-attendance-modal__footer {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  .manual-attendance-modal__time-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .manual-attendance-modal__footer {
+    flex-wrap: wrap;
+  }
+
+  .manual-attendance-modal__footer button {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+}

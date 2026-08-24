@@ -1669,7 +1669,12 @@ function BranchesTab({
     setSavingBranchId(branchId);
     setBranchError(null);
     try {
-      const updated = await branchesApi.update(org.id, branchId, {
+      const branch = state.data.find((item) => item.id === branchId);
+      if (!branch) {
+        throw new Error("Branch no longer exists in this organization.");
+      }
+
+      const updated = await branchesApi.update(org.id, branch, {
         name: branchDraft.name.trim(),
         location: branchDraft.location.trim() || null,
         max_staff_capacity: nextCapacity,

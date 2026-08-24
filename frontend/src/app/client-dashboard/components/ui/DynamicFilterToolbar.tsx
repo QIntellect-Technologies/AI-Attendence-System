@@ -1,5 +1,5 @@
-import React from "react";
-import { Filter, RotateCcw, Search } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Filter, RotateCcw, Search, X } from "lucide-react";
 import { T } from "./theme";
 import ModernSelect from "./ModernSelect";
 
@@ -72,6 +72,8 @@ export interface DynamicFilterToolbarProps {
   bordered?: boolean;
   className?: string;
   style?: React.CSSProperties;
+  mobileOnly?: boolean;
+  desktopOnly?: boolean;
 }
 
 const controlBase: React.CSSProperties = {
@@ -130,8 +132,20 @@ const DynamicFilterToolbar: React.FC<DynamicFilterToolbarProps> = ({
   bordered = true,
   className,
   style,
+  mobileOnly = false,
+  desktopOnly = false,
 }) => {
+  const [mobileOpen, setMobileOpen] = useState(false);
   const visibleSections = sections.filter((section) => !section.hidden);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileOpen]);
 
   const renderSection = (section: DynamicFilterSection) => {
     if (section.type === "custom") return section.render;
@@ -267,64 +281,142 @@ const DynamicFilterToolbar: React.FC<DynamicFilterToolbarProps> = ({
   };
 
   return (
-    <div
-      className={className}
-      style={{
-        background: bordered ? T.card : "transparent",
-        border: bordered ? `1px solid ${T.border}` : "none",
-        borderRadius: bordered ? 16 : 0,
-        boxShadow: bordered
-          ? "0 1px 3px rgba(15,45,74,0.07),0 1px 2px rgba(15,45,74,0.04)"
-          : "none",
-        padding: bordered ? 16 : 0,
-        marginBottom: 16,
-        fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
-        ...style,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          flexWrap: "wrap",
-          width: "100%",
-        }}
-      >
-        {visibleSections
-          .filter((section) => section.type !== "chipGroup")
-          .map((section) => (
-            <React.Fragment key={section.id}>
-              {renderSection(section)}
-            </React.Fragment>
-          ))}
+    <>
+      {!mobileOnly && (
+        <div className="dynamic-filter-toolbar__desktop">
+          <div
+            className={className}
+            style={{
+              background: bordered ? T.card : "transparent",
+              border: bordered ? `1px solid ${T.border}` : "none",
+              borderRadius: bordered ? 16 : 0,
+              boxShadow: bordered
+                ? "0 1px 3px rgba(15,45,74,0.07),0 1px 2px rgba(15,45,74,0.04)"
+                : "none",
+              padding: bordered ? 16 : 0,
+              marginBottom: 16,
+              fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
+              ...style,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                flexWrap: "wrap",
+                width: "100%",
+              }}
+            >
+              {visibleSections
+                .filter((section) => section.type !== "chipGroup")
+                .map((section) => (
+                  <React.Fragment key={section.id}>
+                    {renderSection(section)}
+                  </React.Fragment>
+                ))}
 
-        {actions && (
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            {actions}
+              {actions && (
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  {actions}
+                </div>
+              )}
+            </div>
+
+            {visibleSections.some(
+              (section) => section.type === "chipGroup",
+            ) && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                  marginTop: 12,
+                }}
+              >
+                {visibleSections
+                  .filter((section) => section.type === "chipGroup")
+                  .map((section) => (
+                    <React.Fragment key={section.id}>
+                      {renderSection(section)}
+                    </React.Fragment>
+                  ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      {visibleSections.some((section) => section.type === "chipGroup") && (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            marginTop: 12,
-          }}
-        >
-          {visibleSections
-            .filter((section) => section.type === "chipGroup")
-            .map((section) => (
-              <React.Fragment key={section.id}>
-                {renderSection(section)}
-              </React.Fragment>
-            ))}
         </div>
       )}
-    </div>
+
+      {!desktopOnly && (
+        <div className={`dynamic-filter-toolbar__mobile ${className ?? ""}`}>
+          <button
+            type="button"
+            className="dynamic-filter-trigger"
+            onClick={() => setMobileOpen(true)}
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-filter-drawer"
+            aria-label="Open filters"
+            title="Filters"
+          >
+            <Filter size={15} />
+            {!mobileOnly && "Filters"}
+          </button>
+
+          {mobileOpen && (
+            <div
+              className="dynamic-filter-drawer-overlay"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) setMobileOpen(false);
+              }}
+            >
+              <aside
+                id="mobile-filter-drawer"
+                className="dynamic-filter-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Filters"
+              >
+                <div className="dynamic-filter-drawer__header">
+                  <div>
+                    <strong>Filters</strong>
+                    <span>Refine results</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileOpen(false)}
+                    aria-label="Close filters"
+                    className="dynamic-filter-drawer__close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="dynamic-filter-drawer__body">
+                  {visibleSections
+                    .filter((section) => section.type !== "chipGroup")
+                    .map((section) => (
+                      <React.Fragment key={section.id}>
+                        {renderSection(section)}
+                      </React.Fragment>
+                    ))}
+                  {visibleSections
+                    .filter((section) => section.type === "chipGroup")
+                    .map((section) => (
+                      <React.Fragment key={section.id}>
+                        {renderSection(section)}
+                      </React.Fragment>
+                    ))}
+                  {actions && (
+                    <div className="dynamic-filter-drawer__actions">
+                      {actions}
+                    </div>
+                  )}
+                </div>
+              </aside>
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 };
 

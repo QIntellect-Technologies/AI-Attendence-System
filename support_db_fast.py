@@ -24,6 +24,8 @@ try:
 except Exception:  # pragma: no cover
     create_client = None  # type: ignore
 
+from support_db_core import _execute_supabase, build_or_ilike_filter
+
 JsonDict = Dict[str, Any]
 
 
@@ -233,7 +235,11 @@ def _resolve_branch_id(sb: Any, org_id: Optional[str], branch_id: Optional[str])
 def _safe_count(query: Any) -> int:
     try:
         # PostgREST still calculates the exact count but returns at most one row.
-        result = query.limit(1).execute()
+        # Routed through _execute_supabase so a blocked/rejected request is
+        # classified (and, for transient infra blips, retried) the same way
+        # every other Supabase call in the app is, instead of this being the
+        # one path that silently swallows every exception shape.
+        result = _execute_supabase("fast.safe_count", lambda: query.limit(1))
         return int(getattr(result, "count", None) or 0)
     except Exception:
         return 0
@@ -245,11 +251,15 @@ def _order(query: Any, sort_by: Optional[str], sort_dir: str, allowed: set[str],
 
 
 def _or_search(query: Any, search: Optional[str], cols: list[str]):
-    text = (search or "").strip()
-    if not text:
-        return query
-    escaped = text.replace("%", "").replace(",", " ")
-    return query.or_(",".join([f"{col}.ilike.%{escaped}%" for col in cols]))
+    """Apply a safe, case-insensitive OR-across-columns search filter.
+
+    See support_db_core.build_or_ilike_filter for why this can't just
+    strip '%'/',' from the raw text (that was the old implementation, and
+    it neither preserved user intent nor actually prevented a search term
+    from redefining the filter's structure).
+    """
+    clause = build_or_ilike_filter(search, cols)
+    return query.or_(clause) if clause else query
 
 
 def _page_result(entity: str, rows: list[dict], total: int, page: int, page_size: int, offset: int, table: str) -> JsonDict:
@@ -307,7 +317,17 @@ def _direct_staff_page(scope: FastScope, page: int, page_size: int, search: Opti
     query = _or_search(query, search, ["name", "email", "employee_id", "department_name", "role_name", "phone"])
     query = _order(query, sort_by, sort_dir, {"name", "email", "employee_id", "department_name", "role_name", "salary", "status", "created_at", "updated_at"}, "name")
     offset = (page - 1) * page_size
-    rows = (query.range(offset, offset + page_size - 1).execute().data or [])
+    # Routed through _execute_supabase rather than a bare `.execute()` so a
+    # rejected/blocked request (WAF, malformed filter, upstream outage) is
+    # classified into a clean ValueError/RuntimeError instead of an
+    # unhandled postgrest/pydantic exception reaching the route layer as an
+    # opaque 500 -- this was the actual query on the Staff Search path
+    # involved in the WAF-crash bug.
+    result = _execute_supabase(
+        "fast.staff_page.rows",
+        lambda: query.range(offset, offset + page_size - 1),
+    )
+    rows = result.data or []
     try:
         import support_db  # local project mapper keeps camelCase aliases and UI branch ids consistent
         shifts_by_id = support_db._resolve_shift_map(

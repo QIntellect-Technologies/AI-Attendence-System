@@ -13,7 +13,46 @@
  * additive. Nothing here repurposes or removes the legacy fields.
  */
 
-import { BASE_URL } from "../../../api/api";
+import { BASE_URL, type User } from "../../../api/api";
+import type { ShiftConflict } from "../utils/shiftOverlap";
+
+/**
+ * A 409 from a shift write: the request was well-formed but collides with a
+ * shift that already exists (see support_db_shift_overlap.py).
+ *
+ * A plain `new Error(message)` would flatten the backend's structured
+ * `conflicts` array into a sentence, so the UI could only ever print it —
+ * it couldn't highlight the specific row that collides, or distinguish a
+ * blocking duty overlap from a non-blocking grace-tail warning. Subclasses
+ * Error, so every existing `catch (e) { e instanceof Error ? e.message : … }`
+ * call site keeps rendering the same message it already did.
+ */
+export class ShiftConflictApiError extends Error {
+  readonly conflicts: ShiftConflict[];
+
+  constructor(message: string, conflicts: ShiftConflict[]) {
+    super(message);
+    this.name = "ShiftConflictApiError";
+    this.conflicts = conflicts;
+  }
+}
+
+/** Backend conflict rows are snake_case; the shared shiftOverlap module is
+ * camelCase. Converted at this boundary so a conflict from the server and a
+ * conflict found locally are the same shape everywhere downstream. */
+function toShiftConflicts(raw: unknown): ShiftConflict[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    const row = (item ?? {}) as Record<string, unknown>;
+    return {
+      shiftId: row.shift_id ? String(row.shift_id) : undefined,
+      shiftName: String(row.shift_name ?? "Untitled shift"),
+      severity: row.severity === "warning" ? "warning" : "conflict",
+      overlapMinutes: Number(row.overlap_minutes ?? 0),
+      window: String(row.window ?? ""),
+    };
+  });
+}
 
 async function clientJson<T>(
   path: string,
@@ -33,9 +72,12 @@ async function clientJson<T>(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data?.success === false) {
-    throw new Error(
-      data?.message || data?.error || `Request failed: ${res.status}`,
-    );
+    const message =
+      data?.message || data?.error || `Request failed: ${res.status}`;
+    if (res.status === 409 && Array.isArray(data?.conflicts)) {
+      throw new ShiftConflictApiError(message, toShiftConflicts(data.conflicts));
+    }
+    throw new Error(message);
   }
   return data as T;
 }
@@ -204,19 +246,27 @@ export async function listBranchShifts(
   return res.shifts ?? [];
 }
 
+/** A saved shift plus any non-blocking grace-tail warnings the backend
+ * raised. A duty overlap never reaches here — it throws
+ * ShiftConflictApiError from the 409. */
+export interface ShiftWriteResult {
+  shift: ShiftRecord;
+  warnings: ShiftConflict[];
+}
+
 export async function createShift(
   branchId: number | string,
   organizationId: number | string,
   payload: ShiftCreatePayload,
-): Promise<ShiftRecord> {
-  const res = await clientJson<{ shift: ShiftRecord }>(
+): Promise<ShiftWriteResult> {
+  const res = await clientJson<{ shift: ShiftRecord; warnings?: unknown }>(
     `/api/client/branches/${encodeURIComponent(String(branchId))}/shifts`,
     {
       method: "POST",
       body: JSON.stringify({ ...payload, organization_id: organizationId }),
     },
   );
-  return res.shift;
+  return { shift: res.shift, warnings: toShiftConflicts(res.warnings) };
 }
 
 export async function updateShift(
@@ -224,15 +274,15 @@ export async function updateShift(
   shiftId: string,
   organizationId: number | string,
   payload: ShiftUpdatePayload,
-): Promise<ShiftRecord> {
-  const res = await clientJson<{ shift: ShiftRecord }>(
+): Promise<ShiftWriteResult> {
+  const res = await clientJson<{ shift: ShiftRecord; warnings?: unknown }>(
     `/api/client/branches/${encodeURIComponent(String(branchId))}/shifts/${encodeURIComponent(shiftId)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ ...payload, organization_id: organizationId }),
     },
   );
-  return res.shift;
+  return { shift: res.shift, warnings: toShiftConflicts(res.warnings) };
 }
 
 export async function deleteShift(
@@ -251,15 +301,39 @@ export async function deleteShift(
 
 /**
  * Assigns a staff member to a real `shifts` row (shift_id_ref, per
- * support_db_attendance_gate.py's resolution precedence). Additive: does
- * not touch the legacy `shiftId`/`shift_label` display fields.
+ * support_db_attendance_gate.py's resolution precedence). The backend
+ * response is the fully-resolved staff row — shift_label/duty_start/
+ * duty_end already folded in from the `shifts` row (see
+ * support_db_shifts.assign_staff_shift), not just the raw shift_id_ref —
+ * so the caller can rebuild a complete StaffMember via
+ * apiUserToStaffMember() instead of hand-patching individual fields.
  */
+/** The name + window of a shift, as the backend reports it on an assignment
+ * so the UI can say what changed. */
+export interface AssignedShiftSummary {
+  id: string;
+  name: string;
+  /** "09:00–17:00", or "09:00 (open-ended)". */
+  window: string;
+}
+
+/** A staff member holds exactly ONE shift, so assigning a second REPLACES
+ * the first. These two fields make that swap visible instead of silent —
+ * see support_db_shifts.assign_staff_shift. `previous_shift` is null on a
+ * first assignment, or when the shift being replaced has since been
+ * deleted. They ride on the staff row itself, so this stays a `User` and
+ * every existing caller keeps working unchanged. */
+export type StaffWithShiftSwap = User & {
+  assigned_shift?: AssignedShiftSummary | null;
+  previous_shift?: AssignedShiftSummary | null;
+};
+
 export async function assignStaffShift(
   staffId: number | string,
   shiftId: string | null,
   organizationId: number | string,
-): Promise<Record<string, unknown>> {
-  const res = await clientJson<{ staff: Record<string, unknown> }>(
+): Promise<StaffWithShiftSwap> {
+  const res = await clientJson<{ staff: StaffWithShiftSwap }>(
     `/api/client/staff/${encodeURIComponent(String(staffId))}/shift`,
     {
       method: "PATCH",

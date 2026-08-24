@@ -70,7 +70,14 @@ SQLAlchemy==2.0.23
 python-dotenv==1.0.0
 requests==2.31.0
 
-supabase>=2.3.0
+# Pinned, not >=: the exact postgrest-py version underneath `supabase`
+# determines whether a non-JSON upstream response (Cloudflare WAF/error
+# page) is caught internally or raised as an unhandled pydantic
+# ValidationError -- see support_db_core._readable_supabase_error, which
+# now classifies by structured status code and no longer depends on this,
+# but an open-ended range here still means every deploy could silently
+# pick up different postgrest internals. Bump deliberately, not by drift.
+supabase==2.31.0
 bcrypt>=4.1.2
 PyJWT>=2.8.0
 reportlab>=4.2.0

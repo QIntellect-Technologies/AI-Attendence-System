@@ -1,3 +1,415 @@
 @import "./fonts.css";
 @import "./tailwind.css";
 @import "./theme.css";
+
+.admin-dashboard-header__mobile-top,
+.admin-dashboard-header__mobile-context {
+  display: none !important;
+}
+
+.admin-dashboard-header .mobile-hamburger {
+  display: none;
+}
+
+.branch-overview-header__title {
+  min-width: 0;
+}
+
+.branch-overview-header__controls {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.branch-overview-performance-grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.staff-directory-table-scroll {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.staff-directory-table-grid {
+  min-width: 1120px;
+}
+
+.dynamic-filter-toolbar__mobile {
+  display: none;
+}
+
+.staff-management-mobile-filter {
+  display: none;
+}
+
+.module-shell-actions {
+  min-width: 0;
+}
+
+.staff-management-stats > * {
+  min-width: 0;
+}
+
+.staff-management-page {
+  min-height: 0;
+}
+
+.staff-management-mobile-tab-select {
+  display: none;
+}
+
+@media (max-width: 1120px) {
+  .staff-directory-table-grid {
+    width: 1120px !important;
+  }
+}
+
+.dynamic-filter-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.38);
+  animation: dynamic-filter-fade-in 180ms ease-out;
+}
+
+.dynamic-filter-drawer {
+  width: min(380px, 92vw);
+  height: 100%;
+  max-height: 100dvh;
+  overflow-y: auto;
+  background: #fff;
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.16);
+  animation: dynamic-filter-slide-in 220ms ease-out;
+}
+
+.dynamic-filter-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.dynamic-filter-drawer__header strong,
+.dynamic-filter-drawer__header span {
+  display: block;
+}
+
+.dynamic-filter-drawer__header strong {
+  color: #16324a;
+  font-size: 16px;
+}
+
+.dynamic-filter-drawer__header span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dynamic-filter-drawer__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.dynamic-filter-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+
+.dynamic-filter-drawer__body > * {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex: 1 1 auto !important;
+}
+
+.dynamic-filter-drawer__body input,
+.dynamic-filter-drawer__body select,
+.dynamic-filter-drawer__body textarea {
+  max-width: 100%;
+}
+
+.dynamic-filter-drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+@keyframes dynamic-filter-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dynamic-filter-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .staff-management-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .staff-management-page {
+    padding: 16px 12px !important;
+  }
+
+  .module-shell-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+  }
+
+  .module-shell-actions {
+    width: 100%;
+    justify-content: flex-end !important;
+    gap: 8px !important;
+  }
+
+  .module-shell-actions > * {
+    flex: 0 1 auto;
+  }
+
+  .staff-management-export-action {
+    order: 4;
+    margin-left: auto;
+  }
+
+  .staff-management-refresh-button {
+    order: 2;
+  }
+
+  .module-shell-actions > .staff-management-mobile-icon-button {
+    order: 3;
+  }
+
+  .staff-management-mobile-filter {
+    order: 1;
+  }
+
+  .staff-management-mobile-icon-button {
+    flex: 0 0 38px !important;
+    width: 38px !important;
+    height: 38px;
+    padding: 9px !important;
+    gap: 0 !important;
+    font-size: 0 !important;
+  }
+
+  .staff-management-mobile-icon-button
+    > span:last-child
+    > span:not([aria-hidden]) {
+    display: none;
+  }
+
+  .staff-management-tab-strip {
+    display: none !important;
+  }
+
+  .staff-management-mobile-tab-select {
+    display: block;
+    width: min(100%, 240px);
+    min-width: 0;
+    margin: 0 0 16px auto;
+  }
+
+  .staff-management-mobile-filter {
+    display: block;
+    width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .staff-management-mobile-filter .dynamic-filter-toolbar__mobile {
+    display: block;
+    margin: 0;
+  }
+
+  .dynamic-filter-toolbar__desktop {
+    display: none;
+  }
+
+  .dynamic-filter-toolbar__mobile {
+    display: block;
+    margin-bottom: 16px;
+  }
+
+  .dynamic-filter-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #fff;
+    color: #16324a;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  }
+
+  .branch-overview-performance-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .branch-overview-header {
+    align-items: stretch !important;
+    gap: 12px;
+  }
+
+  .branch-overview-header__title h2 {
+    font-size: 20px !important;
+    line-height: 1.2;
+  }
+
+  .branch-overview-header__title p {
+    max-width: 100%;
+    line-height: 1.45;
+  }
+
+  .branch-overview-header__controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .admin-dashboard-header {
+    height: auto !important;
+    min-height: 0 !important;
+    display: block !important;
+    padding: 0 !important;
+  }
+
+  .admin-dashboard-header__mobile-top {
+    min-height: 60px;
+    display: flex !important;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .admin-dashboard-header__mobile-brand {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .admin-dashboard-header__mobile-brand strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #16324a;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .admin-dashboard-header__mobile-account {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .admin-dashboard-header__mobile-account > div {
+    min-width: 0;
+    padding-left: 0 !important;
+    max-width: 100%;
+  }
+
+  .admin-dashboard-header__mobile-account > div > div:last-child {
+    min-width: 0;
+  }
+
+  .admin-dashboard-header__mobile-account > div p {
+    max-width: min(42vw, 180px) !important;
+  }
+
+  .admin-dashboard-header__desktop-title {
+    display: none !important;
+  }
+
+  .admin-dashboard-header__actions {
+    min-height: 58px;
+    display: flex !important;
+    align-items: center;
+    gap: 8px !important;
+    padding: 9px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fbfcfd;
+  }
+
+  .admin-dashboard-header__mobile-context {
+    min-width: 0;
+    flex: 1;
+    display: flex !important;
+    align-items: center;
+    gap: 6px;
+    color: #16324a;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .admin-dashboard-header__mobile-context span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .admin-dashboard-header__desktop-account {
+    display: none;
+  }
+
+  .admin-dashboard-header .mobile-hamburger {
+    display: block !important;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .staff-management-stats {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-filter-drawer-overlay,
+  .dynamic-filter-drawer {
+    animation: none;
+  }
+}

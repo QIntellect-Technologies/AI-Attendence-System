@@ -129,16 +129,20 @@ export function getPeopleTableColumns(
 
 export function staffGridTemplate(columns: StaffTemplateColumn[]): string {
   const widths = columns.map((column) => {
-    if (column.key === "name") return "1.7fr";
-    if (column.key === "code" || column.key === "personCode") return "1.1fr";
-    if (column.key === "cnic" || column.key === "fatherCnic") return "1.2fr";
-    if (column.key === "status") return ".8fr";
-    if (column.key === "salary") return ".8fr";
-    if (column.key === "shift") return "1.1fr";
-    if (column.key === "staffType") return ".9fr";
-    if (column.key === "fatherName") return "1.2fr";
-    if (column.key === "fatherPhone") return "1fr";
-    return "1fr";
+    if (column.key === "name") return "minmax(180px, 1.4fr)";
+    if (column.key === "code" || column.key === "personCode") {
+      return "minmax(100px, 0.8fr)";
+    }
+    if (column.key === "cnic" || column.key === "fatherCnic") {
+      return "minmax(145px, 1.1fr)";
+    }
+    if (column.key === "status") return "minmax(110px, 0.9fr)";
+    if (column.key === "salary") return "minmax(120px, 1fr)";
+    if (column.key === "shift") return "minmax(155px, 1.2fr)";
+    if (column.key === "staffType") return "minmax(125px, 1fr)";
+    if (column.key === "fatherName") return "minmax(160px, 1.2fr)";
+    if (column.key === "fatherPhone") return "minmax(135px, 1fr)";
+    return "minmax(140px, 1fr)";
   });
 
   return `${widths.join(" ")} ${PEOPLE_TABLE_ACTION_WIDTH}px`;

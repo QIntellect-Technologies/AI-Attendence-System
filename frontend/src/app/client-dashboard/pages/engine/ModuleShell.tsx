@@ -159,8 +159,9 @@ export const ModuleShell: React.FC<ModuleShellProps> = ({
   actions,
   children,
 }) => (
-  <section style={{ display: "grid", gap: 16 }}>
+  <section style={{ display: "grid", gap: 16, minWidth: 0 }}>
     <header
+      className="module-shell-header"
       style={{
         display: "flex",
         justifyContent: "space-between",
@@ -205,6 +206,7 @@ export const ModuleShell: React.FC<ModuleShellProps> = ({
       </div>
       {actions && (
         <div
+          className="module-shell-actions"
           style={{
             display: "flex",
             alignItems: "center",

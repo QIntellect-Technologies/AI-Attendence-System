@@ -144,7 +144,15 @@ def _half_day_window(sb, org_id: str, branch_id: str, people_type: str, period: 
 def _get_shift(sb, org_id: str, shift_id: str) -> Optional[dict]:
     result = (
         sb.table("shifts")
-        .select("check_in_time, grace_minutes, check_out_time, checkout_grace_minutes, sync_delay_minutes, is_active")
+        # `name` is selected because _window_from_shift copies it into every
+        # TimingWindow, and it is the ONLY human-readable identifier of which
+        # shift a punch was judged against — it surfaces in
+        # resolve_window_for_debug and in the node's own diagnostics. Without
+        # it in this select list, shift.get("name") was silently None on every
+        # resolved window, so "which shift is actually active for this person"
+        # had no answer anywhere in the logs (Ticket #20).
+        .select("id, name, check_in_time, grace_minutes, check_out_time, "
+                "checkout_grace_minutes, sync_delay_minutes, is_active")
         .eq("id", str(shift_id))
         .eq("org_id", str(org_id))
         .eq("is_active", True)

@@ -646,9 +646,20 @@ def record_attendance_local(
     of the above, unchanged from before.
     """
     cfg = shift_gate.load_config()
-    today = _today(cfg)
     event_dt = event_dt_utc or datetime.now(timezone.utc)
     now = event_dt.isoformat()
+    # Shift-aware bucket date, NOT the naive "today" _today() returns.
+    # For an overnight shift (e.g. 23:00 check-in -> 01:00 check-out), the
+    # checkout leg's own detection happens on the calendar day AFTER the
+    # check-in — using plain "today" here made that checkout attempt look
+    # like a brand-new person with no existing row, so it got recorded as a
+    # fresh (bogus) check-in instead of completing the shift that started
+    # the night before. See shift_gate.resolve_attendance_bucket_date's own
+    # docstring for the full mechanism. Same-day shifts are unaffected —
+    # this resolves to exactly what _today() would have returned for them.
+    today = shift_gate.resolve_attendance_bucket_date(
+        people_type, person_code, event_dt, config=cfg,
+    )
 
     # AFTER — replace the whole block above with this
     with _write_lock:

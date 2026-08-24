@@ -157,9 +157,7 @@ export const ManualAttendanceModal: FC<{
   const staffMissing = mode === "add" && !staffId;
   const checkInMissing = mode === "add" && !checkInLocal;
   const checkOutBeforeCheckIn =
-    checkInLocal &&
-    checkOutLocal &&
-    checkOutLocal < checkInLocal; // both "YYYY-MM-DDTHH:mm", lexicographic compare is safe here.
+    checkInLocal && checkOutLocal && checkOutLocal < checkInLocal; // both "YYYY-MM-DDTHH:mm", lexicographic compare is safe here.
 
   const canSubmit =
     !saving && !staffMissing && !checkInMissing && !checkOutBeforeCheckIn;
@@ -172,7 +170,9 @@ export const ManualAttendanceModal: FC<{
     if (!canSubmit) return;
     onSubmit({
       staffId: mode === "edit" ? (record?.staffId as string | number) : staffId,
-      checkIn: checkInLocal ? fromDatetimeLocalValue(checkInLocal, timeZone) : null,
+      checkIn: checkInLocal
+        ? fromDatetimeLocalValue(checkInLocal, timeZone)
+        : null,
       checkOut: checkOutLocal
         ? fromDatetimeLocalValue(checkOutLocal, timeZone)
         : null,
@@ -196,13 +196,15 @@ export const ManualAttendanceModal: FC<{
       onClick={(e) => e.target === e.currentTarget && !saving && onClose()}
     >
       <div
+        className="manual-attendance-modal"
         style={{
           background: T.bgCard,
           borderRadius: 16,
           width: "100%",
           maxWidth: 480,
           maxHeight: "90vh",
-          overflow: "auto",
+          overflow: "hidden auto",
+          boxSizing: "border-box",
           boxShadow: "0 20px 60px rgba(15,45,74,0.25)",
         }}
         role="dialog"
@@ -214,6 +216,7 @@ export const ManualAttendanceModal: FC<{
         <form onSubmit={handleSubmit}>
           {/* Header */}
           <div
+            className="manual-attendance-modal__header"
             style={{
               display: "flex",
               justifyContent: "space-between",
@@ -226,7 +229,9 @@ export const ManualAttendanceModal: FC<{
               zIndex: 1,
             }}
           >
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.textHeading }}>
+            <div
+              style={{ fontSize: 15, fontWeight: 700, color: T.textHeading }}
+            >
               {mode === "edit" ? "Edit Attendance" : "Add Attendance"}
             </div>
             <button
@@ -246,8 +251,23 @@ export const ManualAttendanceModal: FC<{
             </button>
           </div>
 
-          <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
-            <p style={{ fontSize: 13, color: T.textMuted, margin: 0, lineHeight: 1.5 }}>
+          <div
+            className="manual-attendance-modal__body"
+            style={{
+              padding: "20px 24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
+            <p
+              style={{
+                fontSize: 13,
+                color: T.textMuted,
+                margin: 0,
+                lineHeight: 1.5,
+              }}
+            >
               {mode === "edit"
                 ? "Correct this employee's check-in/check-out or add the details CCTV missed."
                 : "Use this when CCTV never captured a check-in for the day, so the next detection isn't read as a fresh check-in."}
@@ -256,7 +276,14 @@ export const ManualAttendanceModal: FC<{
             {/* Employee */}
             <div>
               <label style={fieldLabelStyle}>
-                <User size={11} style={{ display: "inline", marginRight: 4, verticalAlign: -1 }} />
+                <User
+                  size={11}
+                  style={{
+                    display: "inline",
+                    marginRight: 4,
+                    verticalAlign: -1,
+                  }}
+                />
                 Employee
               </label>
               {mode === "edit" ? (
@@ -294,32 +321,63 @@ export const ManualAttendanceModal: FC<{
             </div>
 
             {/* Check-in / Check-out */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
+            <div
+              className="manual-attendance-modal__time-grid"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 12,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
                 <label style={fieldLabelStyle}>
-                  <Clock size={11} style={{ display: "inline", marginRight: 4, verticalAlign: -1 }} />
+                  <Clock
+                    size={11}
+                    style={{
+                      display: "inline",
+                      marginRight: 4,
+                      verticalAlign: -1,
+                    }}
+                  />
                   Check-in
                 </label>
                 <input
                   type="datetime-local"
-                  style={inputStyle}
+                  style={{
+                    ...inputStyle,
+                    boxSizing: "border-box",
+                    minWidth: 0,
+                  }}
                   value={checkInLocal}
                   onChange={(e) => setCheckInLocal(e.target.value)}
                 />
                 {touched && checkInMissing && (
-                  <p style={{ fontSize: 12, color: T.red600, margin: "6px 0 0" }}>
+                  <p
+                    style={{ fontSize: 12, color: T.red600, margin: "6px 0 0" }}
+                  >
                     Check-in time is required.
                   </p>
                 )}
               </div>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <label style={fieldLabelStyle}>
-                  <Clock size={11} style={{ display: "inline", marginRight: 4, verticalAlign: -1 }} />
+                  <Clock
+                    size={11}
+                    style={{
+                      display: "inline",
+                      marginRight: 4,
+                      verticalAlign: -1,
+                    }}
+                  />
                   Check-out
                 </label>
                 <input
                   type="datetime-local"
-                  style={inputStyle}
+                  style={{
+                    ...inputStyle,
+                    boxSizing: "border-box",
+                    minWidth: 0,
+                  }}
                   value={checkOutLocal}
                   onChange={(e) => setCheckOutLocal(e.target.value)}
                 />
@@ -334,7 +392,14 @@ export const ManualAttendanceModal: FC<{
             {/* Arrival status */}
             <div>
               <label style={fieldLabelStyle}>
-                <Calendar size={11} style={{ display: "inline", marginRight: 4, verticalAlign: -1 }} />
+                <Calendar
+                  size={11}
+                  style={{
+                    display: "inline",
+                    marginRight: 4,
+                    verticalAlign: -1,
+                  }}
+                />
                 Arrival Status
               </label>
               <select
@@ -354,7 +419,12 @@ export const ManualAttendanceModal: FC<{
             <div>
               <label style={fieldLabelStyle}>Notes (optional)</label>
               <textarea
-                style={{ ...inputStyle, minHeight: 72, resize: "vertical", fontFamily: "inherit" }}
+                style={{
+                  ...inputStyle,
+                  minHeight: 72,
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                }}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="e.g. Forgot badge, verified manually by supervisor"
@@ -379,6 +449,7 @@ export const ManualAttendanceModal: FC<{
 
           {/* Footer */}
           <div
+            className="manual-attendance-modal__footer"
             style={{
               display: "flex",
               justifyContent: "flex-end",

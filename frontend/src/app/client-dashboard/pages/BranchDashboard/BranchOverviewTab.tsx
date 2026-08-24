@@ -203,6 +203,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       }}
     >
       <div
+        className="branch-overview-header"
         style={{
           display: "flex",
           alignItems: "center",
@@ -210,7 +211,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
           marginBottom: 22,
         }}
       >
-        <div>
+        <div className="branch-overview-header__title">
           <h2
             style={{
               fontSize: 22,
@@ -243,7 +244,10 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          className="branch-overview-header__controls"
+          style={{ display: "flex", alignItems: "center", gap: 10 }}
+        >
           {peopleTypeOptions.length > 1 && (
             <PeopleTypeSelector
               ariaLabel="Select people type"
@@ -379,7 +383,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       )}
 
       {(showAttendanceModule || showPayrollModule) && (
-        <div style={gridAuto(360)}>
+        <div className="branch-overview-performance-grid" style={gridAuto(360)}>
           {showAttendanceModule && (
             <AttendancePerformanceCard data={data.attendancePerformance} />
           )}

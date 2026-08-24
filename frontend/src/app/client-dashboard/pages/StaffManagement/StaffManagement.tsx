@@ -54,6 +54,7 @@ import DynamicFilterToolbar, {
 } from "../../components/ui/DynamicFilterToolbar";
 import ExportButton from "../../components/ui/ExportButton";
 import JellyButton from "../../components/ui/JellyButton";
+import ModernSelect from "../../components/ui/ModernSelect";
 import { FastPagination } from "../../components/common/FastPagination";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import {
@@ -1682,10 +1683,14 @@ const StaffDirectory: FC = () => {
 
   return (
     <div
+      className="staff-management-page"
       style={{
         background: "#f5f6fa",
-        minHeight: "100vh",
-        padding: "24px 24px 48px",
+        minWidth: 0,
+        width: "100%",
+        boxSizing: "border-box",
+        overflowX: "hidden",
+        padding: "24px",
         fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
       }}
     >
@@ -1707,41 +1712,43 @@ const StaffDirectory: FC = () => {
                 {selected.size} selected
               </span>
             )}
-            <ExportButton
-              data={filtered}
-              filename={`${peopleModel.exportFilenamePrefix}_${selectedBranchLabel}_${selectedDepartmentLabel}_${selectedRoleLabel}_${selectedStatusLabel}`}
-              organization={exportOrganization}
-              excel={{
-                columns: exportColumns,
-                // Explicitly empty, not omitted: ExportButton falls back to
-                // pdf.meta when excel.meta is undefined, which is what put the
-                // filter block (module/scope/branch/search/sort) at the top of
-                // the spreadsheet. A .xlsx is meant to be sorted and pivoted,
-                // so it carries records only — the filter context stays in the
-                // PDF report, where it belongs.
-                meta: {},
-                summary: [],
-              }}
-              pdf={{
-                title: `${peopleModel.exportModuleLabel} Report`,
-                reportPeriod: exportReportPeriod,
-                meta: exportFilters,
-                summary: [
-                  { label: "Total Records", value: String(filtered.length) },
-                  { label: "Branch", value: selectedBranchLabel },
-                  { label: "Status", value: selectedStatusLabel },
-                ],
-                columns: exportColumns,
-              }}
-              emptyMessage={peopleModel.exportEmptyMessage}
-              style={{
-                background: T.card,
-                border: `1px solid ${T.border}`,
-                color: T.head,
-                boxShadow:
-                  "0 1px 3px rgba(15,45,74,0.06),0 1px 2px rgba(15,45,74,0.04)",
-              }}
-            />
+            <div className="staff-management-export-action">
+              <ExportButton
+                data={filtered}
+                filename={`${peopleModel.exportFilenamePrefix}_${selectedBranchLabel}_${selectedDepartmentLabel}_${selectedRoleLabel}_${selectedStatusLabel}`}
+                organization={exportOrganization}
+                excel={{
+                  columns: exportColumns,
+                  // Explicitly empty, not omitted: ExportButton falls back to
+                  // pdf.meta when excel.meta is undefined, which is what put the
+                  // filter block (module/scope/branch/search/sort) at the top of
+                  // the spreadsheet. A .xlsx is meant to be sorted and pivoted,
+                  // so it carries records only — the filter context stays in the
+                  // PDF report, where it belongs.
+                  meta: {},
+                  summary: [],
+                }}
+                pdf={{
+                  title: `${peopleModel.exportModuleLabel} Report`,
+                  reportPeriod: exportReportPeriod,
+                  meta: exportFilters,
+                  summary: [
+                    { label: "Total Records", value: String(filtered.length) },
+                    { label: "Branch", value: selectedBranchLabel },
+                    { label: "Status", value: selectedStatusLabel },
+                  ],
+                  columns: exportColumns,
+                }}
+                emptyMessage={peopleModel.exportEmptyMessage}
+                style={{
+                  background: T.card,
+                  border: `1px solid ${T.border}`,
+                  color: T.head,
+                  boxShadow:
+                    "0 1px 3px rgba(15,45,74,0.06),0 1px 2px rgba(15,45,74,0.04)",
+                }}
+              />
+            </div>
             <RefreshButton
               variant="secondary"
               size="md"
@@ -1762,21 +1769,45 @@ const StaffDirectory: FC = () => {
                 }
               }}
               ariaLabel="Refresh staff list"
+              className="staff-management-refresh-button staff-management-mobile-icon-button"
             />
             {can("add") && (
               <JellyButton
                 type="button"
                 variant="primary"
                 leftIcon={<Plus size={14} />}
+                className="staff-management-mobile-icon-button"
+                aria-label={peopleModel.addButtonLabel}
+                title={peopleModel.addButtonLabel}
                 onClick={() => setEditMember("new")}
               >
                 {peopleModel.addButtonLabel}
               </JellyButton>
             )}
+            <DynamicFilterToolbar
+              sections={staffFilterSections}
+              mobileOnly
+              className="staff-management-mobile-filter"
+            />
           </>
         }
       >
+        <div className="staff-management-mobile-tab-select">
+          <ModernSelect
+            value={activeTab}
+            options={tabItems.map((tab) => ({
+              value: tab.key,
+              label: tab.label,
+              icon: <tab.Icon size={14} />,
+            }))}
+            onChange={(value) => setActiveTab(value as StaffDirectoryTab)}
+            ariaLabel="Staff management section"
+            width="100%"
+            minWidth={0}
+          />
+        </div>
         <div
+          className="staff-management-tab-strip"
           style={{
             display: "flex",
             gap: 4,
@@ -1792,6 +1823,8 @@ const StaffDirectory: FC = () => {
             <JellyButton
               key={tab.key}
               type="button"
+              aria-label={tab.label}
+              title={tab.label}
               variant={activeTab === tab.key ? "primary" : "ghost"}
               size="sm"
               leftIcon={<tab.Icon size={13} />}
@@ -1806,6 +1839,7 @@ const StaffDirectory: FC = () => {
           <>
             <DynamicFilterToolbar
               sections={staffFilterSections}
+              desktopOnly
               bordered
               style={{
                 width: "100%",
@@ -1834,18 +1868,27 @@ const StaffDirectory: FC = () => {
               />
             ) : (
               <div
+                className="staff-directory-table-scroll"
                 style={{
                   background: T.card,
                   border: `1px solid ${T.border}`,
                   borderRadius: 12,
-                  overflow: "hidden",
+                  overflowX: "auto",
+                  overflowY: "hidden",
+                  width: "100%",
+                  maxWidth: "100%",
+                  minWidth: 0,
                 }}
               >
                 {/* Table header */}
                 <div
+                  className="staff-directory-table-grid"
                   style={{
                     display: "grid",
                     gridTemplateColumns: peopleTableGridTemplate,
+                    minWidth: 1120,
+                    width: "100%",
+                    boxSizing: "border-box",
                     gap: 12,
                     padding: "10px 16px",
                     background: T.teal50,
@@ -1896,6 +1939,7 @@ const StaffDirectory: FC = () => {
                       </div>
                     );
                   })}
+                  <div aria-hidden="true" />
                 </div>
 
                 {/* Rows */}

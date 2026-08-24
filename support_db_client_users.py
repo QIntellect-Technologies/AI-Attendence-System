@@ -1772,7 +1772,7 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _compute_org_status, _execute_supabase, _json_dict, _json_list, _org_access_allows_client
+from support_db_core import _compute_org_status, _execute_supabase, _json_dict, _json_list, _org_access_allows_client, build_or_eq_filter
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -2324,7 +2324,6 @@ def create_client_invite(org_id: str, payload: dict, invited_by: str) -> dict:
                 'is_active': True,
                 'must_change_password': True,
                 'invited_by': invited_by,
-                'onboarding_completed_at': None,
             })
             .eq('id', current['id'])
             .execute()
@@ -2607,13 +2606,22 @@ def _find_active_client_staff_row(
     if not clean_identifier or not password:
         return None
 
+    # build_or_eq_filter quotes the value per PostgREST's own escaping rule
+    # instead of interpolating it raw into the `.or_()` string. This lookup
+    # runs with no org_id filter (see docstring above), so an unescaped
+    # comma/paren in `identifier` here was a genuine filter-injection risk
+    # (an attacker-controlled identifier could append its own OR clause),
+    # not just a WAF-trip -- the highest-value place in the codebase to get
+    # this right. It never trims/alters the identifier itself, so the
+    # "typed back in exactly as stored" contract above is unaffected.
+    clause = build_or_eq_filter(clean_identifier, ['email', 'phone'])
+    if not clause:
+        return None
+
     sb = get_supabase()
-    result = (
-        sb.table('client_staff')
-        .select(select_columns)
-        .or_(f'email.eq.{clean_identifier},phone.eq.{clean_identifier}')
-        .limit(2)
-        .execute()
+    result = _execute_supabase(
+        'authenticate_client_staff.lookup',
+        lambda: sb.table('client_staff').select(select_columns).or_(clause).limit(2),
     )
 
     rows = result.data or []

@@ -316,6 +316,63 @@ def is_event_within_shift(
     return (target_minutes - grace) <= local_minutes <= (target_minutes + grace)
 
 
+def resolve_attendance_bucket_date(
+    people_type: str,
+    person_code: str | None,
+    event_dt_utc: datetime,
+    config: dict[str, Any] | None = None,
+) -> str:
+    """Branch-local calendar date this DETECTION's attendance_buffer row
+    belongs to. This is deliberately NOT always the same as the event's own
+    local calendar date (what _today()/local_db._today() return) — that
+    naive "today" is exactly what breaks a shift that crosses midnight.
+
+    For an ordinary same-day shift this returns the event's own local date,
+    identical to before.
+
+    For an OVERNIGHT shift (check_out_time earlier on the clock than
+    check_in_time — e.g. 23:00 -> 01:00) there is one deliberate exception:
+    a detection landing in the early-morning tail of that window (local
+    clock-time at or before check_out_time + its grace) is that shift's
+    CHECKOUT leg, completing the check-in from the night before — so it
+    must be filed against YESTERDAY's row, not today's.
+
+    Without this, record_attendance_local's date-keyed lookup
+    (branch_id, people_type, person_code, attendance_date) finds no row for
+    "today" on that early-morning checkout sighting (the check-in row was
+    written under yesterday's date), so the checkout silently gets treated
+    as an unrelated, brand-new check-in attempt for today instead of
+    completing last night's shift — the person's real checkout is lost,
+    and they appear to have started a second, bogus shift a few hours after
+    their first one began. This is the concrete mechanism behind "midnight-
+    crossing shift not reflected" / "broken attendance tracking for night
+    shift workers".
+
+    Bounded strictly to the checkout window itself (not "any time after
+    midnight"), so every ordinary same-day shift — the overwhelming
+    majority — is completely unaffected, and a genuinely new, unrelated
+    detection hours after the checkout window closed still buckets to
+    today as normal.
+    """
+    cfg = config or load_config()
+    dt = event_dt_utc if event_dt_utc.tzinfo else event_dt_utc.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(_branch_zone(cfg))
+    local_date = local.date()
+
+    window = _resolve_window(cfg, people_type, person_code, event_dt_utc)
+    check_in = _parse_time(window.get("check_in_time")) if window else None
+    check_out = _parse_time(window.get("check_out_time")) if window else None
+
+    if check_in and check_out and (check_out < check_in):
+        grace = int(window.get("check_out_grace_minutes") or 0)
+        boundary_minutes = check_out.hour * 60 + check_out.minute + grace
+        local_minutes = local.hour * 60 + local.minute
+        if local_minutes <= boundary_minutes:
+            local_date = local_date - timedelta(days=1)
+
+    return local_date.isoformat()
+
+
 def classify_check_out_timing(
     people_type: str,
     event_dt_utc: datetime,
@@ -400,4 +457,3 @@ def resolve_leg_ready_at_utc(
     target_local = datetime.combine(local_date, target, tzinfo=zone)
     ready_at_local = target_local + timedelta(minutes=grace + delay)
     return ready_at_local.astimezone(timezone.utc).isoformat()
-

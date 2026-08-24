@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
+from support_db_shift_overlap import ShiftConflictError
+
 
 def ok(data: dict, status: int = 200):
     """Uniform success envelope: {"success": true, ...data}."""
@@ -25,9 +27,30 @@ def err(message: str, status: int = 400):
     return jsonify({"success": False, "error": message, "message": message}), status
 
 
+def conflict(message: str, conflicts: list[dict]):
+    """409 for a request that is well-formed but collides with existing
+    state. Carries the machine-readable `conflicts` list alongside the same
+    error/message keys every other response uses, so a client that doesn't
+    know about conflicts still shows a sensible message."""
+    return (
+        jsonify({
+            "success": False,
+            "error": message,
+            "message": message,
+            "conflicts": conflicts,
+        }),
+        409,
+    )
+
+
 def handle(fn):
     """Run a route's inner _run() closure with consistent error mapping.
 
+    ShiftConflictError -> 409 (well-formed but collides with an existing
+                  shift; carries a structured `conflicts` list). Checked
+                  before ValueError because it subclasses it — a bare
+                  `except ValueError` first would swallow it into a 400 and
+                  drop the payload.
     ValueError -> 400 (validation / not-found-scoped-to-org, raised
                   deliberately by support_db_* functions)
     RuntimeError -> 500 (Supabase write returned no data)
@@ -35,6 +58,8 @@ def handle(fn):
     """
     try:
         return fn()
+    except ShiftConflictError as e:
+        return conflict(str(e), e.to_payload())
     except ValueError as e:
         return err(str(e), 400)
     except RuntimeError as e:

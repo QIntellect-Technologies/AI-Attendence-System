@@ -26,6 +26,7 @@ import {
   MAX_UPLOAD_BYTES,
   checkFileSize,
 } from "../../utils/uploadLimits";
+import { findInvalidCameraRtspUrl } from "../../utils/rtspValidation";
 
 type Branch = {
   id: string;
@@ -2527,6 +2528,10 @@ export default function OnboardingWizard() {
   );
   const currentStep = steps[stepIndex] ?? steps[0];
   const canBack = stepIndex > 0;
+  const cameraRtspError = useMemo(
+    () => findInvalidCameraRtspUrl(config.cameras),
+    [config.cameras],
+  );
   const canNext = useMemo(() => {
     if (currentStep.key === "profile") {
       return Boolean(
@@ -2547,17 +2552,23 @@ export default function OnboardingWizard() {
     }
 
     if (currentStep.key === "cameras") {
+      if (cameraRtspError) return false;
       return Boolean(
         config.network.nvrDvrIp.trim() || totalCount(config.cameras) > 0,
       );
     }
 
     return true;
-  }, [config, currentStep.key]);
+  }, [cameraRtspError, config, currentStep.key]);
 
   const saveAndLaunch = async () => {
     if (!user?.id || !organizationId) {
       setError("User or organization is missing. Please log in again.");
+      return;
+    }
+
+    if (cameraRtspError) {
+      setError(cameraRtspError);
       return;
     }
 
@@ -2791,6 +2802,24 @@ export default function OnboardingWizard() {
       <main style={{ flex: 1, padding: "62px 56px 38px", overflow: "auto" }}>
         <Stepper stepIndex={stepIndex} steps={steps} />
         <div style={{ maxWidth: 1080 }}>{content()}</div>
+
+        {currentStep.key === "cameras" && cameraRtspError && (
+          <div
+            style={{
+              ...cardStyle({
+                borderColor: "#fecaca",
+                background: "#fef2f2",
+                padding: "12px 14px",
+                marginTop: 20,
+              }),
+              color: C.danger,
+              fontSize: 13,
+              fontWeight: 800,
+            }}
+          >
+            {cameraRtspError}
+          </div>
+        )}
 
         {error && (
           <div

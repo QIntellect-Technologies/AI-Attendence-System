@@ -468,15 +468,22 @@ export const branchesApi = {
 
   update: (
     orgId: string,
-    branchId: string,
+    branch: Branch,
     payload: UpdateBranchPayload,
-  ): Promise<Branch> =>
-    supportApiClient
+  ): Promise<Branch> => {
+    if (String(branch.org_id) !== String(orgId)) {
+      return Promise.reject(
+        new Error("Cannot update a branch outside the selected organization."),
+      );
+    }
+
+    return supportApiClient
       .patch<BranchEnvelope>(
-        `${BASE}/${encodeId(orgId)}/branches/${encodeId(branchId)}`,
+        `${BASE}/${encodeId(branch.org_id)}/branches/${encodeId(branch.id)}`,
         payload,
       )
-      .then((r) => r.data.branch),
+      .then((r) => r.data.branch);
+  },
 
   setFallback: (branchId: string, active: boolean): Promise<Branch> =>
     supportApiClient

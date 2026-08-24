@@ -50,6 +50,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from supabase_client import get_supabase
+from support_db_core import build_or_eq_filter
 from support_db_time_utils import (
     now_iso,
     clean_text,
@@ -100,7 +101,14 @@ def list_departments(org_id: str, branch_id: str | None = None, *, include_inact
         # branch_id is nullable on this table (org-wide departments) — an
         # explicit branch filter must still surface those org-wide rows,
         # since an org-wide department applies to every branch.
-        query = query.or_(f"branch_id.eq.{branch_id},branch_id.is.null")
+        # build_or_eq_filter quotes branch_id per PostgREST's escaping rule
+        # instead of interpolating it raw -- same class of fix as the
+        # Staff/Payroll search filters (see support_db_core). branch_id is
+        # normally a UUID, but it arrives here as an unvalidated route/query
+        # parameter, so it gets the same treatment rather than assuming its
+        # shape.
+        eq_clause = build_or_eq_filter(branch_id, ["branch_id"])
+        query = query.or_(f"{eq_clause},branch_id.is.null" if eq_clause else "branch_id.is.null")
     if not include_inactive:
         query = query.eq("status", "active")
 

@@ -58,8 +58,6 @@ export function handleSessionExpired(
     title: "Session expired",
     text: message,
     confirmButtonText: "Login",
-    timer: 4500,
-    timerProgressBar: true,
     showCloseButton: false,
     allowOutsideClick: false,
     allowEscapeKey: false,
@@ -67,8 +65,4 @@ export function handleSessionExpired(
   }).then(() => {
     window.location.replace("/login");
   });
-
-  setTimeout(() => {
-    window.location.replace("/login");
-  }, 5000);
 }
