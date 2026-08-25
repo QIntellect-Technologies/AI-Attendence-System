@@ -13,7 +13,7 @@
 import React, { Suspense, lazy } from "react";
 import { createBrowserRouter, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "./contexts/useAuth";
-import { OrgConfigProvider, useOrg } from "./contexts/OrgConfigContext";
+import { useOrg } from "./contexts/OrgConfigContext";
 import { ModuleProvider } from "./contexts/ModuleContext";
 import TenantGate from "./components/TenantGate";
 import { isModuleEnabled } from "./components/ModuleGate";
@@ -547,11 +547,9 @@ export const router = createBrowserRouter([
     path: "/admin",
     element: (
       <ProtectedRoute allowedRoles={["admin", "staff"]}>
-        <OrgConfigProvider>
-          <TenantGate>
-            <ModuleProvider>{suspense(<AdminLayout />)}</ModuleProvider>
-          </TenantGate>
-        </OrgConfigProvider>
+        <TenantGate>
+          <ModuleProvider>{suspense(<AdminLayout />)}</ModuleProvider>
+        </TenantGate>
       </ProtectedRoute>
     ),
     children: [

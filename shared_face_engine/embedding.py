@@ -64,10 +64,18 @@ def detect_and_extract(
         if conf < min_confidence:
             continue
         x1, y1, x2, y2 = face.bbox.astype(int)
+        # kps: the detector's 5 keypoints (left eye, right eye, nose tip,
+        # left mouth corner, right mouth corner). det_10g already produces
+        # these in the same forward pass as the embedding, so exposing them
+        # costs nothing and spares liveness.py from needing landmark_3d_68 —
+        # which model_loader.py deliberately excludes via allowed_modules.
+        # None when a detector build omits them, which callers must handle.
+        kps = getattr(face, "kps", None)
         results.append({
             "bbox": (int(x1), int(y1), int(x2), int(y2)),
             "conf": conf,
             "embedding": face.embedding,
+            "kps": None if kps is None else np.asarray(kps, dtype=float),
         })
     return results
 

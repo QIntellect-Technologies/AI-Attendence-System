@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { AuthProvider } from "../app/client-dashboard/contexts/AuthContext";
+import { OrgConfigProvider } from "../app/client-dashboard/contexts/OrgConfigContext";
 import { TenantConfigProvider } from "../app/client-dashboard/contexts/TenantConfigContext";
 import { useAuth } from "../app/client-dashboard/contexts/useAuth";
 import { router } from "../app/client-dashboard/routes";
@@ -31,7 +32,9 @@ export default function App() {
     <AuthProvider>
       <ToastContainer position="top-right" />
       <AuthenticatedTenantConfig>
-        <RouterProvider router={router} />
+        <OrgConfigProvider>
+          <RouterProvider router={router} />
+        </OrgConfigProvider>
       </AuthenticatedTenantConfig>
     </AuthProvider>
   );

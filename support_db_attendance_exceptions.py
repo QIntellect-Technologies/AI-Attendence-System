@@ -75,10 +75,38 @@ _CHECK_OUT_NOTES = {
 }
 
 # Face-verification failed to confirm the caller's identity (see
-# apply_face_verification_hold below) -- distinct wording from the timing
-# notes above because this isn't "late/early", it's "we don't know this is
+# apply_identity_hold below) -- distinct wording from the timing notes
+# above because this isn't "late/early", it's "we don't know this is
 # actually them".
 _FACE_MISMATCH_NOTE = "Face verification did not match the enrolled staff member — attendance is unconfirmed pending admin review."
+
+# Location-integrity holds (see apply_identity_hold / mark_field_staff_
+# attendance's is_mocked + server-recomputed geofence). Two distinct
+# reasons, two distinct notes, because they mean different things to an
+# admin: mock_location means the device's reported GPS fix cannot be
+# trusted at all (a fake-GPS app registered as the mock location
+# provider), while geofence_violation means the fix looks real but is
+# simply outside the assigned site.
+_MOCK_LOCATION_NOTE = "Location came from a mock/simulated GPS provider — attendance is unconfirmed pending admin review."
+_GEOFENCE_VIOLATION_NOTE = "Checked in outside the assigned geofence — attendance is unconfirmed pending admin review."
+
+# hold_reason -> note text, single source of truth for apply_identity_hold
+# and anything else that needs to render/recognize these. Kept as one dict
+# rather than a chain of if/elif at each call site so a new identity-hold
+# reason only ever needs an entry here.
+_IDENTITY_HOLD_NOTES = {
+    "face_mismatch": _FACE_MISMATCH_NOTE,
+    "mock_location": _MOCK_LOCATION_NOTE,
+    "geofence_violation": _GEOFENCE_VIOLATION_NOTE,
+}
+
+# Precedence when more than one identity-hold reason applies to the same
+# mark (e.g. a mocked location AND a face mismatch). Lower index wins.
+# Face mismatch stays the strongest reason -- "not even the right person"
+# outranks "not even a real location" -- and a fabricated location
+# outranks a merely-out-of-radius one, since the latter could still be a
+# genuine (if inconvenient) GPS fix.
+_IDENTITY_HOLD_PRECEDENCE = ("face_mismatch", "mock_location", "geofence_violation")
 
 
 def _append_note(existing: Optional[str], addition: Optional[str]) -> Optional[str]:
@@ -129,38 +157,58 @@ def check_in_write_fields(status: str) -> dict:
     return {"notes": None, "check_in_hold_reason": None, "check_in_confirmed": True}
 
 
-def apply_face_verification_hold(fields: dict, *, pending_face_review: bool) -> dict:
-    """Escalate a check-in/check-out write to a 'face_mismatch' hold when the
-    face verification for this mark came back negative (see
-    mark_field_staff_attendance's face_verified contract in
-    support_db_attendance_mobile.py).
+def apply_identity_hold(fields: dict, *, reasons: "set[str] | None" = None) -> dict:
+    """Escalate a check-in/check-out write to whichever identity-hold
+    reason in `reasons` outranks the others (see _IDENTITY_HOLD_PRECEDENCE),
+    covering both "we're not sure this is really them" (face_mismatch) and
+    "we're not sure they were really there" (mock_location /
+    geofence_violation -- see mark_field_staff_attendance's is_mocked and
+    server-recomputed geofence_result).
 
     `fields` is whatever check_in_write_fields()/check_out_write_fields()
     already computed from the timing classification (late/early/on_time).
-    A single write-path helper (used by BOTH legs) rather than duplicating
-    this override at each call site -- see mark_field_staff_attendance's
-    two write sites, which both call this the same way.
+    A single write-path helper (used by BOTH legs, and by every reason)
+    rather than duplicating this override at each call site -- see
+    mark_field_staff_attendance's two write sites, which both call this the
+    same way; mark_client_staff_attendance's office/WiFi path can call it
+    with reasons={'face_mismatch'} to get identical behavior to before.
 
-    An unresolved identity is a strictly stronger reason to hold the row
-    than lateness/earliness is, so 'face_mismatch' always wins the
-    hold_reason slot when present -- the original timing note (if any) is
-    kept, not discarded, by appending rather than replacing. check_in rows
-    are additionally forced to check_in_confirmed=False so they can never
-    read as a confirmed "present" until an admin actually confirms the
-    person's identity, regardless of what the timing classification alone
+    Any identity-hold reason is a strictly stronger reason to hold the row
+    than lateness/earliness is, so the winning reason always takes the
+    hold_reason slot when reasons is non-empty -- the original timing note
+    (if any) is kept, not discarded, by appending rather than replacing.
+    check_in rows are additionally forced to check_in_confirmed=False so
+    they can never read as a confirmed "present" until an admin actually
+    clears the hold, regardless of what the timing classification alone
     would have set (see check_in_write_fields' 'on_time'/'early' cases,
     which otherwise default to confirmed=True).
     """
-    if not pending_face_review:
+    if not reasons:
+        return fields
+    reason = next((r for r in _IDENTITY_HOLD_PRECEDENCE if r in reasons), None)
+    if reason is None:
         return fields
     out = dict(fields)
-    out["notes"] = _append_note(out.get("notes"), _FACE_MISMATCH_NOTE)
+    out["notes"] = _append_note(out.get("notes"), _IDENTITY_HOLD_NOTES[reason])
     if "check_in_hold_reason" in out:
-        out["check_in_hold_reason"] = "face_mismatch"
+        out["check_in_hold_reason"] = reason
         out["check_in_confirmed"] = False
     if "check_out_hold_reason" in out:
-        out["check_out_hold_reason"] = "face_mismatch"
+        out["check_out_hold_reason"] = reason
     return out
+
+
+def apply_face_verification_hold(fields: dict, *, pending_face_review: bool) -> dict:
+    """Backward-compatible face-only wrapper around apply_identity_hold --
+    kept so any existing caller/import of this name keeps working exactly
+    as before. New call sites that need to reason about more than face
+    verification (e.g. mark_field_staff_attendance's location holds) should
+    call apply_identity_hold directly instead of stacking two hold calls.
+    """
+    return apply_identity_hold(
+        fields, reasons={"face_mismatch"} if pending_face_review else None,
+    )
+
 
 
 def notify_check_in_exception(
@@ -435,22 +483,31 @@ _DAY_LEVEL_DECISIONS = {"half_day", "short_leave"}
 # do) -- a 'late' checkout hold (stayed too long / left later than
 # scheduled) has no short_leave reading, so it's deliberately left out of
 # that set.
+# mock_location/geofence_violation reuse the exact same decision set as
+# face_mismatch: all three mean "we can't take this mark at face value,"
+# and the admin action is the same shape either way -- confirm it really
+# was this person in the right place, reject the mark, or escalate.
 _CHECK_OUT_DECISIONS_BY_HOLD_REASON = {
     "late": {"late", "overtime"},
     "early": {"early_leave", "half_day", "short_leave"},
     "face_mismatch": _FACE_MISMATCH_DECISIONS,
+    "mock_location": _FACE_MISMATCH_DECISIONS,
+    "geofence_violation": _FACE_MISMATCH_DECISIONS,
 }
 
 # check_in never had a per-hold_reason restriction before face_mismatch
 # existed -- 'late' was the only check_in hold_reason, so the flat
-# _CHECK_IN_DECISIONS set above was never wrong in practice. Now that a
-# second hold_reason exists, apply the same restriction pattern checkout
+# _CHECK_IN_DECISIONS set above was never wrong in practice. Now that
+# further hold_reasons exist, apply the same restriction pattern checkout
 # already uses (same reasoning as that map's docstring above), rather than
-# letting a face_mismatch row be resolvable with 'half_day'/'short_leave'
-# -- decisions that assume the mark is legitimately this person's and
-# just needs a timing classification.
+# letting a face_mismatch/mock_location/geofence_violation row be
+# resolvable with 'half_day'/'short_leave' -- decisions that assume the
+# mark is legitimately this person's, from a real location, and just
+# needs a timing classification.
 _CHECK_IN_DECISIONS_BY_HOLD_REASON = {
     "late": {"late", "half_day", "short_leave"},
+    "mock_location": _FACE_MISMATCH_DECISIONS,
+    "geofence_violation": _FACE_MISMATCH_DECISIONS,
     "face_mismatch": _FACE_MISMATCH_DECISIONS,
 }
 
@@ -463,7 +520,7 @@ _PENDING_NOTE_FRAGMENTS = {
     _CHECK_IN_NOTES["late"],
     _CHECK_OUT_NOTES["early"],
     _CHECK_OUT_NOTES["late"],
-    _FACE_MISMATCH_NOTE,
+    *_IDENTITY_HOLD_NOTES.values(),
 }
 
 _CHECK_IN_RESOLUTION_TEXT = {

@@ -486,6 +486,7 @@ def mark_field_staff_attendance(
     latitude: float | None = None,
     longitude: float | None = None,
     geofence_result: dict | None = None,
+    is_mocked: bool = False,
     synced_after_offline: bool = False,
     client_action_id: str | None = None,
     face_verified: bool | None = None,
@@ -504,11 +505,27 @@ def mark_field_staff_attendance(
     of 'mobile_office' (both are pre-approved on attendance.source's CHECK
     constraint already -- see mark_client_staff_attendance's docstring).
 
-    A mark is NEVER blocked for being outside the geofence -- the mobile
-    flow already warns the employee and lets them proceed after firing a
-    geo-alert (see field_attendance_screen.dart's confirmation dialog) --
-    this just records what actually happened (inside/outside + distance)
-    so an admin can review it on the Client Dashboard attendance log.
+    geofence_result MUST be the server's own evaluate_field_geofence
+    output (see client_field_attendance_routes.mark_field_attendance,
+    which now recomputes it from `latitude`/`longitude` against the
+    staff row rather than forwarding whatever the client claimed) -- this
+    function no longer treats it as a client-asserted "trust me". A mark
+    is still never *blocked* for being outside the geofence or for a
+    mocked location -- the mark itself always lands, exactly like a face
+    mismatch always lands -- but both now force the row into the same
+    pending-review hold a face mismatch does (see pending_face_review
+    below and apply_identity_hold), instead of only logging a geo-alert
+    that nothing downstream ever acts on. That's the actual fix for
+    geofencing being bypassable: outside-geofence and mocked-location
+    marks are no longer indistinguishable from a normal confirmed
+    check-in once they land in the attendance table.
+
+    is_mocked: Geolocator's on-device mock-location signal
+    (geofence_service.dart's isMockLocation / Position.isMocked),
+    forwarded by the client best-effort. Treated as one more untrusted
+    input, same as latitude/longitude -- a dishonest client can still lie
+    about it, so this is defense-in-depth on top of the server-recomputed
+    geofence_result, never a replacement for it.
 
     face_verified/face_similarity: set when this mark is the sync-time
     completion of an offline queued action (OfflineQueueService's
@@ -522,7 +539,12 @@ def mark_field_staff_attendance(
     but pending" beats "not present until synced"), but is flagged
     pending_face_review alongside the existing late/early pending_review
     path, through the same notify_check_in_exception/
-    notify_check_out_exception admin-alert pipeline.
+    notify_check_out_exception admin-alert pipeline. (The current app no
+    longer calls this with face_verified=False -- a rejected offline
+    selfie is never marked at all any more, see OfflineQueueService's
+    _FaceRejected -- but the parameter and this handling stay for any
+    other caller that still wants a "recorded but flagged" outcome
+    instead of "never marked".)
 
     client_action_id: see mark_client_staff_attendance's docstring --
     identical contract, via the shared _check_action_replay helper.
@@ -563,9 +585,27 @@ def mark_field_staff_attendance(
 
     geofence_result = geofence_result or {}
     pending_face_review = face_verified is False
+
+    # Location-integrity holds -- see this function's docstring. A mocked
+    # fix always wins over a plain out-of-radius one when somehow both are
+    # true (apply_identity_hold's _IDENTITY_HOLD_PRECEDENCE breaks that
+    # tie), so only one of these two ever actually shows up in
+    # location_hold_reason even though both booleans are recorded.
+    pending_location_review = bool(is_mocked) or (
+        bool(geofence_result.get('configured')) and not bool(geofence_result.get('inside'))
+    )
+    identity_hold_reasons = set()
+    if pending_face_review:
+        identity_hold_reasons.add('face_mismatch')
+    if is_mocked:
+        identity_hold_reasons.add('mock_location')
+    elif pending_location_review:
+        identity_hold_reasons.add('geofence_violation')
+
     metadata = {
         'latitude': latitude,
         'longitude': longitude,
+        'is_mocked': bool(is_mocked),
         'geofence_configured': bool(geofence_result.get('configured')),
         'geofence_inside': bool(geofence_result.get('inside')),
         'geofence_distance_meters': geofence_result.get('distance'),
@@ -590,9 +630,9 @@ def mark_field_staff_attendance(
             'metadata': metadata,
         }
         row.update(
-            _attendance_exceptions.apply_face_verification_hold(
+            _attendance_exceptions.apply_identity_hold(
                 _attendance_exceptions.check_in_write_fields(status),
-                pending_face_review=pending_face_review,
+                reasons=identity_hold_reasons,
             )
         )
         try:
@@ -606,16 +646,17 @@ def mark_field_staff_attendance(
         if not result.data:
             raise RuntimeError('Failed to record attendance')
         new_id = result.data[0].get('id')
-        if status == 'late' or pending_face_review:
+        if status == 'late' or identity_hold_reasons:
             _attendance_exceptions.notify_check_in_exception(
                 org_id=org_key, branch_id=branch_id, staff_id=staff_key,
                 staff_name=staff_row.get('name') or 'Staff member',
                 attendance_id=new_id,
                 event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
-                # face_mismatch takes priority in the notification too --
-                # matches apply_face_verification_hold's hold_reason
-                # precedence (identity concerns outrank timing ones).
-                reason='face_mismatch' if pending_face_review else 'late',
+                # Any identity-hold reason takes priority in the
+                # notification too, in the same precedence order
+                # apply_identity_hold used to pick row['notes'] --
+                # identity/location concerns outrank plain timing ones.
+                reason=row.get('check_in_hold_reason') or 'late',
             )
         return {
             'already_marked': False,
@@ -624,13 +665,18 @@ def mark_field_staff_attendance(
             'marked_at': now,
             'status': status,
             'notes': row.get('notes'),
-            'pending_review': status == 'late' or pending_face_review,
+            'pending_review': status == 'late' or bool(identity_hold_reasons),
             'pending_face_review': pending_face_review,
+            'pending_location_review': pending_location_review,
+            'location_hold_reason': row.get('check_in_hold_reason')
+                if row.get('check_in_hold_reason') in ('mock_location', 'geofence_violation') else None,
             'face_verified': face_verified,
+            'is_mocked': bool(is_mocked),
             'source': source,
             'capture_check_out': bool(window and window.get('capture_check_out')),
             'geofence': geofence_result,
         }
+
 
     if existing.get('check_out_timestamp'):
         return {
@@ -655,9 +701,9 @@ def mark_field_staff_attendance(
     # Late/overtime classification always goes through the admin notification
     # flow instead of silently auto-approving off a stale approved OT row.
     check_out_status = resolve_check_out_status(window, event_dt, branch_zone)
-    checkout_fields = _attendance_exceptions.apply_face_verification_hold(
+    checkout_fields = _attendance_exceptions.apply_identity_hold(
         _attendance_exceptions.check_out_write_fields(check_out_status, existing.get('notes')),
-        pending_face_review=pending_face_review,
+        reasons=identity_hold_reasons,
     )
     update_payload = {
         'check_out_timestamp': now,
@@ -683,12 +729,12 @@ def mark_field_staff_attendance(
     if not update_result.data:
         raise RuntimeError('Failed to record checkout')
 
-    if check_out_status in ('early', 'late') or pending_face_review:
+    if check_out_status in ('early', 'late') or identity_hold_reasons:
         _attendance_exceptions.notify_check_out_exception(
             org_id=org_key, branch_id=branch_id, staff_id=staff_key,
             staff_name=staff_row.get('name') or 'Staff member',
             attendance_id=existing['id'],
-            status='face_mismatch' if pending_face_review else check_out_status,
+            status=checkout_fields.get('check_out_hold_reason') or check_out_status,
             event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
         )
 
@@ -699,9 +745,13 @@ def mark_field_staff_attendance(
         'marked_at': now,
         'status': check_out_status,
         'notes': checkout_fields.get('notes'),
-        'pending_review': check_out_status in ('early', 'late') or pending_face_review,
+        'pending_review': check_out_status in ('early', 'late') or bool(identity_hold_reasons),
         'pending_face_review': pending_face_review,
+        'pending_location_review': pending_location_review,
+        'location_hold_reason': checkout_fields.get('check_out_hold_reason')
+            if checkout_fields.get('check_out_hold_reason') in ('mock_location', 'geofence_violation') else None,
         'face_verified': face_verified,
+        'is_mocked': bool(is_mocked),
         'source': source,
         'capture_check_out': True,
         'geofence': geofence_result,

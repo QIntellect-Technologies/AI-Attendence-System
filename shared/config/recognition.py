@@ -30,7 +30,7 @@ RECOGNITION_CONFIDENCE_THRESHOLD = 0.6
 # liveness model replaces this -- mark-attendance's real defense
 # against one person clocking in for another is the 1:1 embedding
 # match in verify_face, not this.
-ANTI_SPOOFING_ENABLED = os.environ.get("ANTI_SPOOFING_ENABLED", "false").strip().lower() not in (
+ANTI_SPOOFING_ENABLED = os.environ.get("ANTI_SPOOFING_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",
 )
 DUPLICATE_LOG_TIMEOUT = 30  # Seconds - suppress duplicate logs for same person
