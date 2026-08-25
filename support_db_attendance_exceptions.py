@@ -74,6 +74,12 @@ _CHECK_OUT_NOTES = {
     "overtime": "Checked out within approved overtime window.",
 }
 
+# Face-verification failed to confirm the caller's identity (see
+# apply_face_verification_hold below) -- distinct wording from the timing
+# notes above because this isn't "late/early", it's "we don't know this is
+# actually them".
+_FACE_MISMATCH_NOTE = "Face verification did not match the enrolled staff member — attendance is unconfirmed pending admin review."
+
 
 def _append_note(existing: Optional[str], addition: Optional[str]) -> Optional[str]:
     existing = _clean_text(existing)
@@ -123,9 +129,43 @@ def check_in_write_fields(status: str) -> dict:
     return {"notes": None, "check_in_hold_reason": None, "check_in_confirmed": True}
 
 
+def apply_face_verification_hold(fields: dict, *, pending_face_review: bool) -> dict:
+    """Escalate a check-in/check-out write to a 'face_mismatch' hold when the
+    face verification for this mark came back negative (see
+    mark_field_staff_attendance's face_verified contract in
+    support_db_attendance_mobile.py).
+
+    `fields` is whatever check_in_write_fields()/check_out_write_fields()
+    already computed from the timing classification (late/early/on_time).
+    A single write-path helper (used by BOTH legs) rather than duplicating
+    this override at each call site -- see mark_field_staff_attendance's
+    two write sites, which both call this the same way.
+
+    An unresolved identity is a strictly stronger reason to hold the row
+    than lateness/earliness is, so 'face_mismatch' always wins the
+    hold_reason slot when present -- the original timing note (if any) is
+    kept, not discarded, by appending rather than replacing. check_in rows
+    are additionally forced to check_in_confirmed=False so they can never
+    read as a confirmed "present" until an admin actually confirms the
+    person's identity, regardless of what the timing classification alone
+    would have set (see check_in_write_fields' 'on_time'/'early' cases,
+    which otherwise default to confirmed=True).
+    """
+    if not pending_face_review:
+        return fields
+    out = dict(fields)
+    out["notes"] = _append_note(out.get("notes"), _FACE_MISMATCH_NOTE)
+    if "check_in_hold_reason" in out:
+        out["check_in_hold_reason"] = "face_mismatch"
+        out["check_in_confirmed"] = False
+    if "check_out_hold_reason" in out:
+        out["check_out_hold_reason"] = "face_mismatch"
+    return out
+
+
 def notify_check_in_exception(
     *, org_id: str, branch_id: Optional[str], staff_id: str, staff_name: str,
-    attendance_id, event_local_str: str,
+    attendance_id, event_local_str: str, reason: str = "late",
 ) -> None:
     branch_name = get_branch_name_for_notification(org_id, branch_id)
     where = f" at {branch_name}" if branch_name else ""
@@ -141,18 +181,30 @@ def notify_check_in_exception(
         # degrades to the org-wide broadcast instead of raising past this
         # function, matching this module's soft-fail contract.
         manager_recipient = hierarchy_db.resolve_notification_target(org_id, staff_id)
+        if reason == "face_mismatch":
+            event_type = "attendance.check_in.face_mismatch"
+            title = f"Face verification failed — {staff_name}"
+            body = (
+                f"{staff_name} checked in{where} ({event_local_str}) but face verification "
+                f"did not match the enrolled profile. Identity is unconfirmed — review before "
+                f"this counts as present."
+            )
+        else:
+            event_type = "attendance.check_in.late"
+            title = f"Late check-in — {staff_name}"
+            body = f"{staff_name} checked in late{where} ({event_local_str}). Decide late vs half-day."
         notifications_db.create_notification(
             org_id,
             branch_id=branch_id,
             module_key="attendance",
-            event_type="attendance.check_in.late",
-            title=f"Late check-in — {staff_name}",
-            body=f"{staff_name} checked in late{where} ({event_local_str}). Decide late vs half-day.",
+            event_type=event_type,
+            title=title,
+            body=body,
             actor_name=staff_name,
             target_entity_id=str(attendance_id),
             target_entity_type="attendance",
             target_route="/admin/attendance/exceptions",
-            metadata={"staff_id": str(staff_id), "leg": "check_in", "status": "late"},
+            metadata={"staff_id": str(staff_id), "leg": "check_in", "status": reason},
             recipient_staff_ids=[manager_recipient] if manager_recipient else None,
             # Always reach org admins too, not just the assigned manager (if
             # any) -- same reasoning as the leave-request notification in
@@ -192,8 +244,12 @@ def notify_check_out_exception(
 ) -> None:
     branch_name = get_branch_name_for_notification(org_id, branch_id)
     where = f" at {branch_name}" if branch_name else ""
-    verb = "earlier than scheduled" if status == "early" else "later than scheduled"
-    decide = "Decide early-leave vs half-day." if status == "early" else "Decide late vs overtime vs early-leave."
+    if status == "face_mismatch":
+        verb = "but face verification did not match the enrolled profile"
+        decide = "Identity is unconfirmed — review before this counts as present."
+    else:
+        verb = "earlier than scheduled" if status == "early" else "later than scheduled"
+        decide = "Decide early-leave vs half-day." if status == "early" else "Decide late vs overtime vs early-leave."
     # Same manager-plus-admins routing as notify_check_in_exception — a
     # checkout exception is no less this staff member's manager's concern
     # than a late check-in is, but org admins always see it too (also_broadcast
@@ -206,13 +262,22 @@ def notify_check_out_exception(
         # the notification becomes unreachable by anyone. Also moved inside
         # this try, same defense-in-depth reasoning.
         manager_recipient = hierarchy_db.resolve_notification_target(org_id, staff_id)
+        title = (
+            f"Face verification failed — {staff_name}"
+            if status == "face_mismatch" else f"Checkout exception — {staff_name}"
+        )
+        body = (
+            f"{staff_name} checked out{where} ({event_local_str}) {verb}. {decide}"
+            if status == "face_mismatch"
+            else f"{staff_name} checked out {verb}{where} ({event_local_str}). {decide}"
+        )
         notifications_db.create_notification(
             org_id,
             branch_id=branch_id,
             module_key="attendance",
             event_type=f"attendance.check_out.{status}",
-            title=f"Checkout exception — {staff_name}",
-            body=f"{staff_name} checked out {verb}{where} ({event_local_str}). {decide}",
+            title=title,
+            body=body,
             actor_name=staff_name,
             target_entity_id=str(attendance_id),
             target_entity_type="attendance",
@@ -328,11 +393,28 @@ def compute_duration(start_iso: Optional[str], end_iso: Optional[str]) -> tuple[
 
 # ─── Admin resolve ──────────────────────────────────────────────────────
 
-_CHECK_IN_DECISIONS = {"late", "half_day", "short_leave"}
-_CHECK_OUT_DECISIONS = {"early_leave", "half_day", "overtime", "late", "short_leave"}
+# A face_mismatch hold is an identity question, not a timing one, so it
+# gets its own decision vocabulary distinct from late/early's
+# present-but-X classification. Same three outcomes on both legs:
+#   confirm_identity   -- admin has verified (by other means) this really
+#                         is the enrolled staff member; counts as present.
+#   reject_attendance  -- identity could not be confirmed; the mark stands
+#                         for audit purposes but never counts as present
+#                         or toward payroll.
+#   escalate           -- same as reject_attendance, plus a dedicated
+#                         security notification for repeat/suspicious cases.
+_FACE_MISMATCH_DECISIONS = {"confirm_identity", "reject_attendance", "escalate"}
+
+_CHECK_IN_DECISIONS = {"late", "half_day", "short_leave"} | _FACE_MISMATCH_DECISIONS
+_CHECK_OUT_DECISIONS = {"early_leave", "half_day", "overtime", "late", "short_leave"} | _FACE_MISMATCH_DECISIONS
 _CHECK_OUT_STATUS_BY_DECISION = {
     "early_leave": "early", "late": "late", "overtime": "overtime", "short_leave": "short_leave",
 }
+
+# Decisions that mean "this leg never happened as claimed" -- never a
+# present/day-level outcome, always excluded from payroll outright (see
+# resolve_attendance_exception's handling below), regardless of leg.
+_IDENTITY_REJECTED_DECISIONS = {"reject_attendance", "escalate"}
 
 # half_day and short_leave are both day-level outcomes (like the local
 # node's own day_status vocabulary) rather than a checkout sub-classification,
@@ -356,6 +438,20 @@ _DAY_LEVEL_DECISIONS = {"half_day", "short_leave"}
 _CHECK_OUT_DECISIONS_BY_HOLD_REASON = {
     "late": {"late", "overtime"},
     "early": {"early_leave", "half_day", "short_leave"},
+    "face_mismatch": _FACE_MISMATCH_DECISIONS,
+}
+
+# check_in never had a per-hold_reason restriction before face_mismatch
+# existed -- 'late' was the only check_in hold_reason, so the flat
+# _CHECK_IN_DECISIONS set above was never wrong in practice. Now that a
+# second hold_reason exists, apply the same restriction pattern checkout
+# already uses (same reasoning as that map's docstring above), rather than
+# letting a face_mismatch row be resolvable with 'half_day'/'short_leave'
+# -- decisions that assume the mark is legitimately this person's and
+# just needs a timing classification.
+_CHECK_IN_DECISIONS_BY_HOLD_REASON = {
+    "late": {"late", "half_day", "short_leave"},
+    "face_mismatch": _FACE_MISMATCH_DECISIONS,
 }
 
 # The fixed "awaiting admin review" fragments written at check-in/check-out
@@ -367,12 +463,16 @@ _PENDING_NOTE_FRAGMENTS = {
     _CHECK_IN_NOTES["late"],
     _CHECK_OUT_NOTES["early"],
     _CHECK_OUT_NOTES["late"],
+    _FACE_MISMATCH_NOTE,
 }
 
 _CHECK_IN_RESOLUTION_TEXT = {
     "late": "Admin resolved: present (late arrival confirmed).",
     "half_day": "Admin resolved: marked as half day.",
     "short_leave": "Admin resolved: marked as short leave (manager-approved).",
+    "confirm_identity": "Admin resolved: identity confirmed, present.",
+    "reject_attendance": "Admin resolved: identity not confirmed — attendance rejected, does not count as present.",
+    "escalate": "Admin resolved: identity not confirmed — escalated for security review, does not count as present.",
 }
 _CHECK_OUT_RESOLUTION_TEXT = {
     "early_leave": "Admin resolved: early leave confirmed.",
@@ -380,6 +480,9 @@ _CHECK_OUT_RESOLUTION_TEXT = {
     "overtime": "Admin resolved: overtime confirmed.",
     "half_day": "Admin resolved: marked as half day.",
     "short_leave": "Admin resolved: marked as short leave (manager-approved).",
+    "confirm_identity": "Admin resolved: identity confirmed, present.",
+    "reject_attendance": "Admin resolved: identity not confirmed — attendance rejected, does not count as present.",
+    "escalate": "Admin resolved: identity not confirmed — escalated for security review, does not count as present.",
 }
 
 
@@ -928,6 +1031,55 @@ def _notify_payroll_decision_needed(
             "Failed to notify payroll decision pending for attendance=%s", attendance_id,
         )
 
+def _notify_face_mismatch_escalation(
+    *, org_id: str, branch_id: Optional[str], staff_id: Optional[str],
+    attendance_id: str, leg: str, resolved_by: Optional[str],
+) -> None:
+    """Dedicated security alert for an admin explicitly escalating a
+    face-mismatch exception (decision='escalate' in
+    resolve_attendance_exception), separate from the routine
+    notify_check_in_exception/notify_check_out_exception fired when the
+    mark first landed -- this is "an admin looked at it and flagged it as
+    suspicious", not just "a hold exists". Broadcast org-wide (not just
+    the staff member's manager) since a confirmed identity mismatch is an
+    org-level security concern. Soft-fail, same contract as every other
+    notifier in this module -- never undoes the resolve that already
+    committed.
+    """
+    if not staff_id:
+        return
+    try:
+        sb = get_supabase()
+        staff_row = (
+            sb.table("client_staff").select("name").eq("id", str(staff_id)).limit(1).execute()
+        )
+        staff_name = (staff_row.data[0].get("name") if staff_row.data else None) or "Staff member"
+        notifications_db.create_notification(
+            org_id,
+            branch_id=branch_id,
+            module_key="attendance",
+            event_type="attendance.face_mismatch.escalated",
+            title=f"Security review — {staff_name}",
+            body=(
+                f"A face-verification mismatch for {staff_name} was escalated for security "
+                f"review. The attendance mark does not count as present."
+            ),
+            actor_name=staff_name,
+            target_entity_id=str(attendance_id),
+            target_entity_type="attendance",
+            target_route="/admin/attendance/exceptions",
+            metadata={
+                "staff_id": str(staff_id), "leg": leg,
+                "status": "face_mismatch_escalated", "resolved_by": str(resolved_by) if resolved_by else None,
+            },
+            also_broadcast=True,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify face-mismatch escalation for attendance=%s", attendance_id,
+        )
+
+
 def resolve_attendance_exception(
     org_id: str,
     attendance_id: str,
@@ -941,13 +1093,21 @@ def resolve_attendance_exception(
 
     leg: 'check_in' | 'check_out'
     decision:
-      check_in  -> 'late' (present, just late) | 'half_day' | 'short_leave'
-      check_out -> hold_reason 'late'  -> 'late' | 'overtime'
-                   hold_reason 'early' -> 'early_leave' | 'half_day' | 'short_leave'
+      check_in  -> hold_reason 'late'          -> 'late' | 'half_day' | 'short_leave'
+                   hold_reason 'face_mismatch'  -> 'confirm_identity' | 'reject_attendance' | 'escalate'
+      check_out -> hold_reason 'late'          -> 'late' | 'overtime'
+                   hold_reason 'early'         -> 'early_leave' | 'half_day' | 'short_leave'
+                   hold_reason 'face_mismatch' -> 'confirm_identity' | 'reject_attendance' | 'escalate'
                    (an unrecognized/missing hold_reason falls back to
-                   accepting any of 'early_leave' | 'late' | 'overtime' |
-                   'half_day' | 'short_leave', see
-                   _CHECK_OUT_DECISIONS_BY_HOLD_REASON)
+                   accepting any decision valid for that leg at all, see
+                   _CHECK_OUT_DECISIONS_BY_HOLD_REASON /
+                   _CHECK_IN_DECISIONS_BY_HOLD_REASON)
+
+    'reject_attendance'/'escalate' (both legs) mean the caller's identity
+    could not be confirmed: the row is kept for audit but is force-excluded
+    from payroll and never marked present (see _IDENTITY_REJECTED_DECISIONS
+    handling below) -- 'escalate' additionally fires a dedicated security
+    notification instead of the ordinary resolution notice.
 
     Clears the relevant hold_reason, sets day_status, appends the admin's
     note (if any) to the notes column, and records resolved_by/resolved_at.
@@ -970,7 +1130,10 @@ def resolve_attendance_exception(
     sb = get_supabase()
     existing_result = (
         sb.table("attendance")
-        .select("id, notes, day_status, staff_id, branch_id, timestamp, check_out_timestamp, check_out_hold_reason")
+        .select(
+            "id, notes, day_status, staff_id, branch_id, timestamp, check_out_timestamp, "
+            "check_in_hold_reason, check_out_hold_reason"
+        )
         .eq("id", str(attendance_id))
         .eq("org_id", org_key)
         .limit(1)
@@ -980,7 +1143,15 @@ def resolve_attendance_exception(
         raise ValueError("Attendance record not found for this organization")
     existing = existing_result.data[0]
 
-    if leg == "check_out":
+    if leg == "check_in":
+        hold_reason = (existing.get("check_in_hold_reason") or "").strip().lower()
+        allowed_for_reason = _CHECK_IN_DECISIONS_BY_HOLD_REASON.get(hold_reason)
+        if allowed_for_reason and decision not in allowed_for_reason:
+            raise ValueError(
+                f"decision must be one of {sorted(allowed_for_reason)} "
+                f"for a '{hold_reason}' check-in"
+            )
+    else:
         hold_reason = (existing.get("check_out_hold_reason") or "").strip().lower()
         allowed_for_reason = _CHECK_OUT_DECISIONS_BY_HOLD_REASON.get(hold_reason)
         if allowed_for_reason and decision not in allowed_for_reason:
@@ -1007,18 +1178,48 @@ def resolve_attendance_exception(
 
     if leg == "check_in":
         update["check_in_hold_reason"] = None
-        update["check_in_confirmed"] = True
-        # half_day, short_leave, AND late are all day-level outcomes now --
-        # 'late' used to collapse into a plain 'present' day here, which
-        # meant a confirmed-late check-in was indistinguishable from an
-        # on-time one downstream (stats, payroll's lateComingPolicy
-        # occurrence counting, etc). _CHECK_IN_DECISIONS only ever contains
-        # these three values, so this is just "trust the decision" rather
-        # than a lookup against _DAY_LEVEL_DECISIONS.
-        update["day_status"] = decision
+        if decision in _IDENTITY_REJECTED_DECISIONS:
+            # Identity never confirmed -- never a present day, never a
+            # payroll-eligible one, regardless of what the original timing
+            # classification would have been. check_in_confirmed stays
+            # False permanently (there is no "confirmed absent"), and the
+            # row is force-excluded from payroll rather than left for a
+            # second payroll decision the way half_day/overtime are --
+            # there is nothing ambiguous left for payroll to decide here.
+            update["check_in_confirmed"] = False
+            update["day_status"] = "rejected"
+            update["check_in_payroll_decision"] = "exclude"
+        elif decision == "confirm_identity":
+            # Identity confirmed by other means -- reverts to a normal
+            # confirmed present day. Deliberately 'present' rather than
+            # re-deriving late/on_time here: the original timing note (if
+            # any) was preserved in `notes` by apply_face_verification_hold,
+            # but re-litigating late-vs-on-time is a separate admin
+            # decision this endpoint doesn't have enough information to
+            # make on its own -- an admin who also wants that can resolve
+            # it the same way any other 'present' day would be corrected.
+            update["check_in_confirmed"] = True
+            update["day_status"] = "present"
+        else:
+            # half_day, short_leave, AND late are all day-level outcomes
+            # now -- 'late' used to collapse into a plain 'present' day
+            # here, which meant a confirmed-late check-in was
+            # indistinguishable from an on-time one downstream (stats,
+            # payroll's lateComingPolicy occurrence counting, etc).
+            update["check_in_confirmed"] = True
+            update["day_status"] = decision
     else:
         update["check_out_hold_reason"] = None
-        if decision in _DAY_LEVEL_DECISIONS:
+        if decision in _IDENTITY_REJECTED_DECISIONS:
+            # See the check_in branch above -- same reasoning, mirrored
+            # for the checkout leg's own payroll-decision column.
+            update["day_status"] = "rejected"
+            update["check_out_payroll_decision"] = "exclude"
+        elif decision == "confirm_identity":
+            update["check_out_status"] = "on_time"
+            if existing.get("day_status") not in _DAY_LEVEL_DECISIONS:
+                update["day_status"] = "present"
+        elif decision in _DAY_LEVEL_DECISIONS:
             update["day_status"] = decision
         else:
             update["check_out_status"] = _CHECK_OUT_STATUS_BY_DECISION[decision]
@@ -1139,6 +1340,15 @@ def resolve_attendance_exception(
             attendance_id=str(attendance_id),
             day_status="late",
             event_timestamp=existing.get("timestamp"),
+        )
+    elif decision == "escalate":
+        _notify_face_mismatch_escalation(
+            org_id=org_key,
+            branch_id=existing.get("branch_id"),
+            staff_id=existing.get("staff_id"),
+            attendance_id=str(attendance_id),
+            leg=leg,
+            resolved_by=resolved_by,
         )
 
     return result.data[0]

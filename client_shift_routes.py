@@ -11,23 +11,24 @@ no-overlapping-shifts invariant (support_db_shift_overlap.py) — lives in the
 db layer, so the HTTP surface never becomes a second place where the rules
 are half-expressed.
 
-Write routes read org_id through the shared require_org_id_from_payload()
-helper rather than each repeating the same
-`payload.get("organization_id") or payload.get("org_id")` line; that line
-had been copy-pasted into all four handlers, which is precisely how the
-GET route and the write routes had drifted into resolving org_id
-differently.
+Every route here carries @require_client_dashboard_auth and reads org_id
+via dashboard_org_id() (client_routes_helpers.py) — resolved from the
+verified Client Dashboard token, never from the request itself. This
+replaced an earlier require_org_id()/require_org_id_from_payload() pattern
+that trusted a client-supplied organization_id with no auth decorator at
+all, so an anonymous caller could reach shift-assignment/overlap logic
+(including the ShiftConflictError -> 409 path) for any org it named.
 """
 from __future__ import annotations
 
 from flask import Blueprint, request
 
 import support_db_shifts as shifts_db
+from client_dashboard_auth import require_client_dashboard_auth
 from client_routes_helpers import (
+    dashboard_org_id as _dashboard_org_id,
     handle as _handle,
     ok as _ok,
-    require_org_id as _require_org_id,
-    require_org_id_from_payload as _require_org_id_from_payload,
 )
 
 client_shifts_bp = Blueprint("client_shifts", __name__, url_prefix="/api/client")
@@ -38,9 +39,10 @@ def _payload() -> dict:
 
 
 @client_shifts_bp.route("/branches/<branch_id>/shifts", methods=["GET"])
+@require_client_dashboard_auth
 def list_shifts(branch_id):
     def _run():
-        org_id = _require_org_id()
+        org_id = _dashboard_org_id()
         people_type = request.args.get("people_type")
         shifts = shifts_db.list_branch_shifts(org_id, branch_id, people_type)
         return _ok({"shifts": shifts})
@@ -49,10 +51,11 @@ def list_shifts(branch_id):
 
 
 @client_shifts_bp.route("/branches/<branch_id>/shifts", methods=["POST"])
+@require_client_dashboard_auth
 def create_shift(branch_id):
     def _run():
         payload = _payload()
-        org_id = _require_org_id_from_payload(payload)
+        org_id = _dashboard_org_id()
         shift = shifts_db.create_shift(org_id, branch_id, payload)
         # A duty overlap raises and never reaches here (409 via handle()).
         # Grace-tail warnings are non-blocking and ride along with the 201 so
@@ -65,10 +68,11 @@ def create_shift(branch_id):
 
 
 @client_shifts_bp.route("/branches/<branch_id>/shifts/<shift_id>", methods=["PATCH"])
+@require_client_dashboard_auth
 def update_shift(branch_id, shift_id):
     def _run():
         payload = _payload()
-        org_id = _require_org_id_from_payload(payload)
+        org_id = _dashboard_org_id()
         shift = shifts_db.update_shift(org_id, branch_id, shift_id, payload)
         return _ok({"shift": shift, "warnings": shift.pop("overlap_warnings", [])})
 
@@ -76,14 +80,10 @@ def update_shift(branch_id, shift_id):
 
 
 @client_shifts_bp.route("/branches/<branch_id>/shifts/<shift_id>", methods=["DELETE"])
+@require_client_dashboard_auth
 def delete_shift(branch_id, shift_id):
     def _run():
-        # DELETE is the one write that also accepts org_id as a query param —
-        # some clients send no body at all — so it merges the two sources
-        # before running the shared payload check.
-        payload = {**_payload()}
-        payload.setdefault("organization_id", request.args.get("organization_id"))
-        org_id = _require_org_id_from_payload(payload)
+        org_id = _dashboard_org_id()
         shifts_db.delete_shift(org_id, branch_id, shift_id)
         return _ok({"deleted": True})
 
@@ -91,10 +91,11 @@ def delete_shift(branch_id, shift_id):
 
 
 @client_shifts_bp.route("/staff/<staff_id>/shift", methods=["PATCH"])
+@require_client_dashboard_auth
 def assign_staff_shift(staff_id):
     def _run():
         payload = _payload()
-        org_id = _require_org_id_from_payload(payload)
+        org_id = _dashboard_org_id()
         # Grace overrides were already part of assign_staff_shift's signature
         # but no caller ever passed them, so a per-person grace delta sent by
         # the UI was silently dropped. Forwarded explicitly now.

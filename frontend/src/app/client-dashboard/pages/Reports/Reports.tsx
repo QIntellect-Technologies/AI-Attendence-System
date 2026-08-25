@@ -2,7 +2,9 @@
  * modules/reports/index.tsx — REFACTORED
  * ─────────────────────────────────────────────────────────────────────────────
  * Reports & Analytics — follows OvertimeManagement architecture pattern.
- * Uses ExportExcelButton (formatted, branded .xlsx) with jelly hover fill effect.
+ * Uses ExportButton (single Excel/PDF trigger, branded) with jelly hover
+ * fill effect, and DateFilterBar (daily/weekly/monthly/custom, unbounded)
+ * for the reporting range instead of a fixed 7/14-day bucket.
  *
  * Scope resolution:
  *   - Route param :branchId + ModuleContext.activeBranchId (same as OvertimeManagement)
@@ -59,17 +61,24 @@ import { T } from "../../components/ui/theme";
 import DynamicFilterToolbar, {
   type DynamicFilterSection,
 } from "../../components/ui/DynamicFilterToolbar";
-import ExportExcelButton, {
-  type ExportExcelColumn,
-} from "../../components/ui/ExportExcelButton";
+import { type ExportExcelColumn } from "../../components/ui/ExportExcelButton";
+// Single "Export ▾" trigger (Excel / PDF Report) — same reusable component
+// PayrollModule uses, instead of two separate buttons. It reuses the
+// headless build/download logic already in ExportExcelButton.tsx /
+// ExportPdfButton.tsx, so this is a chrome-only addition, not new export
+// logic — and it's what "the export button should also export in PDF"
+// literally maps to: one button, one more format, not a second button.
+import ExportButton from "../../components/ui/ExportButton";
 import RefreshButton from "../../components/ui/RefreshButton";
+import DateFilterBar from "../../components/ui/DateFilterBar";
+import { useDateFilter } from "../../hooks/useDateFilter";
 
 import { useReportMetrics } from "./hooks/useReportMetrics";
 import { useReportFilters } from "./hooks/useReportFilters";
 import { buildExportRows, type ReportExportRow } from "./utils/reports.export";
 
 import { isModuleEnabled } from "../../utils/moduleAccess";
-import { formatPKR, periodLabel } from "./utils/reports.metrics";
+import { formatPKR } from "./utils/reports.metrics";
 
 // ─── UI atoms ─────────────────────────────────────────────────────────────────
 
@@ -333,11 +342,9 @@ const Reports: React.FC = () => {
   const {
     branchFilter,
     peopleTypeFilter,
-    period,
     search,
     setBranchFilter,
     setPeopleTypeFilter,
-    setPeriod,
     setSearch,
     reset,
     peopleTypeOptions,
@@ -349,6 +356,17 @@ const Reports: React.FC = () => {
     peopleTypeLabel: (type) => peopleLabelForType(type, cfg).plural,
     staffCountByPeopleType,
   });
+
+  // Real, unbounded date range — shared with Attendance/Payroll/
+  // LeaveManagement (see useDateFilter.ts) instead of the old fixed
+  // "today"/"7d"/"30d"/"month"/"all" bucket, which silently capped every
+  // report (including "All Time") at 7-14 days with no way to override it.
+  // "weekly" mirrors the previous default ("Last 7 Days").
+  const dateFilter = useDateFilter("weekly");
+  const resetAll = () => {
+    reset();
+    dateFilter.setMode("weekly");
+  };
 
   const [activeTab, setActiveTab] = useState<ReportTab>("attendance");
 
@@ -375,7 +393,7 @@ const Reports: React.FC = () => {
     [cfg.modules],
   );
   const showPayrollStat =
-  orgHasPayrollModule && payrollPeopleTypes.includes(peopleModel.peopleType);
+    orgHasPayrollModule && payrollPeopleTypes.includes(peopleModel.peopleType);
 
   // Hide the Payroll tab for people types that don't support payroll
   // (e.g. students). This list drives the tab bar, the "Report" filter
@@ -426,7 +444,7 @@ const Reports: React.FC = () => {
     branchLookup,
     branchFilter,
     peopleType: peopleTypeFilter,
-    period,
+    dateRange: dateFilter.range,
     isGlobalDashboard,
   });
 
@@ -437,7 +455,7 @@ const Reports: React.FC = () => {
         branchMetrics,
         departmentMetrics,
         selectedBranchLabel,
-        period,
+        period: dateFilter.label,
         search,
         personPlural: peopleModel.personPlural,
         groupLabel: peopleModel.groupLabel,
@@ -448,7 +466,7 @@ const Reports: React.FC = () => {
       branchMetrics,
       departmentMetrics,
       selectedBranchLabel,
-      period,
+      dateFilter.label,
       search,
       peopleModel.personPlural,
       peopleModel.groupLabel,
@@ -565,19 +583,9 @@ const Reports: React.FC = () => {
         onChange: setPeopleTypeFilter,
       },
       {
-        id: "period",
-        type: "select",
-        label: "Period",
-        value: period,
-        minWidth: 155,
-        options: [
-          { value: "today", label: "Today" },
-          { value: "7d", label: "Last 7 Days" },
-          { value: "30d", label: "Last 30 Days" },
-          { value: "month", label: "This Month" },
-          { value: "all", label: "All Time" },
-        ],
-        onChange: (v) => setPeriod(v as typeof period),
+        id: "date",
+        type: "custom",
+        render: <DateFilterBar filter={dateFilter} compact />,
       },
       {
         id: "report",
@@ -605,18 +613,17 @@ const Reports: React.FC = () => {
     [
       allBranches,
       branchFilter,
+      dateFilter,
       effectiveTab,
       isGlobalDashboard,
       peopleModel.groupLabel,
       peopleTypeFilter,
       peopleTypeOptions,
-      period,
       reset,
       search,
       scopedStaff,
       setBranchFilter,
       setPeopleTypeFilter,
-      setPeriod,
       setSearch,
       visibleTabs,
     ],
@@ -630,7 +637,7 @@ const Reports: React.FC = () => {
     distribution: "Status Distribution",
     attendance: "Attendance Trend",
   }[effectiveTab];
-  const activeChartSubtitle = `${selectedBranchLabel} · ${periodLabel(period)} · ${exportRows.length} export rows`;
+  const activeChartSubtitle = `${selectedBranchLabel} · ${dateFilter.label} · ${exportRows.length} export rows`;
 
   const GRADIENT_ID = "attendanceGradient";
 
@@ -683,15 +690,27 @@ const Reports: React.FC = () => {
             onClick={refresh}
             ariaLabel="Refresh reports data"
           />
-          <ExportExcelButton
+          <ExportButton
             data={exportRows}
-            columns={exportColumns}
-            filename={`reports_${selectedBranchLabel}_${periodLabel(period)}_${effectiveTab}_${new Date().toISOString().split("T")[0]}`}
-            organization={{ name: cfg.orgName || undefined }}
-            title="Reports & Analytics"
-            subtitle={`${selectedBranchLabel} · ${effectiveTab}`}
-            reportPeriod={periodLabel(period)}
-            label="Export Excel"
+            filename={`reports_${selectedBranchLabel}_${dateFilter.label}_${effectiveTab}_${new Date().toISOString().split("T")[0]}`}
+            organization={{ name: cfg.orgName || undefined, logoUrl: cfg.logo }}
+            excel={{
+              columns: exportColumns,
+              title: "Reports & Analytics",
+              subtitle: `${selectedBranchLabel} · ${effectiveTab}`,
+              reportPeriod: dateFilter.label,
+            }}
+            pdf={{
+              columns: exportColumns,
+              title: "Reports & Analytics",
+              subtitle: `${selectedBranchLabel} · ${effectiveTab}`,
+              reportPeriod: dateFilter.label,
+              summary: [
+                { label: "Total Staff", value: String(totals.totalStaff) },
+                { label: "Attendance Rate", value: `${totals.attendanceRate}%` },
+                { label: "Pending Leaves", value: String(totals.pendingLeaves) },
+              ],
+            }}
             emptyMessage="No report data available to export."
           />
         </div>
@@ -1060,7 +1079,7 @@ const Reports: React.FC = () => {
                   marginTop: 8,
                 }}
               >
-                {periodLabel(period)}
+                {dateFilter.label}
               </div>
               <div style={{ fontSize: 11, color: T.muted, fontWeight: 800 }}>
                 Period
@@ -1073,7 +1092,7 @@ const Reports: React.FC = () => {
       {/* ── Report data table ── */}
       <Panel
         title="Report Data"
-        subtitle="The same filtered rows are used by the CSV export button."
+        subtitle="The same filtered rows are used by the Export button."
       >
         <div
           style={{

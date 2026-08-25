@@ -1318,6 +1318,20 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
   const refreshOrgConfig = useCallback(
     async (opts?: { silent?: boolean }) => {
+      // A session-expiry redirect is already in flight (handleSessionExpired
+      // already fired — see sessionExpired.ts's own doc comment, which names
+      // this provider specifically as the thing that must stop here). Both
+      // call sites below (the mount/dependency effect below, and the focus/
+      // visibilitychange effect further down) can re-invoke this while the
+      // "Session expired" dialog is still on screen or the redirect hasn't
+      // completed yet. Without this guard, each re-invocation still flips
+      // isOrgReady false→true (the fetch below short-circuits to a 401 via
+      // getClientBootstrap's own guard, but THIS function still churns
+      // React state around that failed call), which is what made TenantGate
+      // flicker "Loading dashboard configuration" instead of holding still
+      // until window.location.replace("/login") actually navigates away.
+      if (isSessionExpiryHandled()) return;
+
       const requestId = ++refreshRequestIdRef.current;
       const isStale = () => requestId !== refreshRequestIdRef.current;
 
@@ -1456,6 +1470,14 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
         mergeCurrentUserOrganization(result.organization);
       } catch (error) {
         if (isStale()) return;
+        // If this particular failure IS the 401 that just called
+        // handleSessionExpired() (set synchronously before the throw — see
+        // getClientBootstrap above), stop here too: a redirect to /login is
+        // already in flight, so resetting org state to "no org" only to
+        // have `finally` immediately mark isOrgReady=true is exactly the
+        // false-ready state that let TenantGate fall through to a real
+        // page (onboarding/blocked) behind the "Session expired" dialog.
+        if (isSessionExpiryHandled()) return;
         // A silent background refresh failing must not nuke an already
         // working session's config — only the initial hydration treats a
         // failure as "this account has no org yet".
@@ -1467,7 +1489,7 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
           clearLegacyOrgConfig();
         }
       } finally {
-        if (!isStale()) {
+        if (!isStale() && !isSessionExpiryHandled()) {
           setIsOrgReady(true);
           setIsRefreshingOrgConfig(false);
         }

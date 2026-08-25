@@ -11,7 +11,7 @@ creates a second blueprint or route collision.
 """
 from __future__ import annotations
 
-from flask import jsonify, request
+from flask import g, jsonify, request
 
 from support_db_shift_overlap import ShiftConflictError
 
@@ -68,24 +68,19 @@ def handle(fn):
         return err("Internal server error", 500)
 
 
-def require_org_id() -> str:
-    """For GET routes: org_id travels as a query param, with a JSON-body
-    fallback for clients that also send it there."""
-    org_id = (
-        request.args.get("organization_id")
-        or request.args.get("org_id")
-        or (request.get_json(silent=True) or {}).get("organization_id")
-    )
-    if not org_id:
-        raise ValueError("organization_id is required")
-    return str(org_id)
+def dashboard_org_id() -> str:
+    """org_id for every /api/client/* route, resolved from the verified
+    Client Dashboard token (g.dashboard_user, set by
+    @require_client_dashboard_auth) — never from a client-supplied query
+    param or JSON body.
 
-
-def require_org_id_from_payload(payload: dict) -> str:
-    """For POST/PATCH routes: org_id travels in the already-parsed JSON body.
-    Takes the payload explicitly rather than re-parsing request.get_json()
-    a second time in the same request."""
-    org_id = str(payload.get("organization_id") or payload.get("org_id") or "").strip()
-    if not org_id:
-        raise ValueError("organization_id is required")
-    return org_id
+    Replaces the former require_org_id()/require_org_id_from_payload()
+    pair, which read organization_id straight off the request with no
+    identity check behind it: any caller could name any org and reach
+    this file family's business logic (including shift-overlap conflict
+    detection) unauthenticated, surfacing as a stray 409/400 instead of
+    the 401 an unauthenticated request should get. Every route in this
+    file family must carry @require_client_dashboard_auth so
+    g.dashboard_user is populated before this is called.
+    """
+    return str(g.dashboard_user["org_id"])

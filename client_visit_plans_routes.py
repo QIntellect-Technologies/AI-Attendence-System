@@ -9,10 +9,13 @@ an employee-created stop are indistinguishable in storage except for
 created_by_role.
 
 Register this blueprint in app.py alongside client_attendance_settings_bp
-(same /api/client prefix family, same branch-admin audience, same
-require_org_id / require_org_id_from_payload pattern -- no per-route auth
-decorator here because that's handled the same way the rest of this file
-family handles it).
+(same /api/client prefix family, same branch-admin audience).
+
+Every route below carries @require_client_dashboard_auth and reads org_id
+via dashboard_org_id() (client_routes_helpers.py), never from the request
+itself — see that helper's docstring for why the previous
+require_org_id()/require_org_id_from_payload() pattern was a real,
+unauthenticated-access bug and not just a style choice.
 """
 from __future__ import annotations
 
@@ -21,7 +24,8 @@ from datetime import date
 from flask import Blueprint, request
 
 import support_db_visits as visits_db
-from client_routes_helpers import ok, handle, require_org_id, require_org_id_from_payload
+from client_dashboard_auth import require_client_dashboard_auth
+from client_routes_helpers import ok, handle, dashboard_org_id
 
 client_visit_plans_bp = Blueprint(
     "client_visit_plans", __name__, url_prefix="/api/client"
@@ -31,6 +35,7 @@ client_visit_plans_bp = Blueprint(
 # ─── Plans ──────────────────────────────────────────────────────────────
 
 @client_visit_plans_bp.route("/staff/<staff_id>/visit-plan", methods=["GET"])
+@require_client_dashboard_auth
 def get_staff_plan(staff_id):
     """Query: ?date=YYYY-MM-DD (optional, defaults to today). Same raw
     shape the mobile app's /api/field/visits/today returns -- plan + stops
@@ -40,7 +45,7 @@ def get_staff_plan(staff_id):
     visit_plan_service.dart's logic, instead of the backend doing it
     twice for two different frontends."""
     def _run():
-        org_id = require_org_id()
+        org_id = dashboard_org_id()
         plan_date = request.args.get("date") or date.today().isoformat()
         data = visits_db.get_plan_raw(org_id, staff_id, plan_date)
         return ok(data)
@@ -49,6 +54,7 @@ def get_staff_plan(staff_id):
 
 
 @client_visit_plans_bp.route("/staff/<staff_id>/visit-plan", methods=["POST"])
+@require_client_dashboard_auth
 def create_staff_plan(staff_id):
     """
     Body: { "organization_id": ..., "branch_id": str (optional),
@@ -62,7 +68,7 @@ def create_staff_plan(staff_id):
     """
     def _run():
         payload = request.get_json(silent=True) or {}
-        org_id = require_org_id_from_payload(payload)
+        org_id = dashboard_org_id()
         plan_date = (payload.get("date") or date.today().isoformat()).strip()
         plan = visits_db.get_or_create_plan(
             org_id=org_id,
@@ -78,6 +84,7 @@ def create_staff_plan(staff_id):
 
 
 @client_visit_plans_bp.route("/branches/<branch_id>/visit-plans", methods=["GET"])
+@require_client_dashboard_auth
 def list_branch_plans(branch_id):
     """Roster-style overview: every staff member's plan for one day on one
     branch. Query: ?date=YYYY-MM-DD (optional, defaults to today).
@@ -85,7 +92,7 @@ def list_branch_plans(branch_id):
     a compliance overview needs per-branch context to be readable; the
     frontend should loop branches if a global view is ever needed."""
     def _run():
-        org_id = require_org_id()
+        org_id = dashboard_org_id()
         plan_date = request.args.get("date") or date.today().isoformat()
         plans = visits_db.list_plans_for_branch(org_id, branch_id, plan_date)
         return ok({"plans": plans})
@@ -96,6 +103,7 @@ def list_branch_plans(branch_id):
 # ─── Stops ──────────────────────────────────────────────────────────────
 
 @client_visit_plans_bp.route("/visit-plans/<plan_id>/stops", methods=["POST"])
+@require_client_dashboard_auth
 def add_stop(plan_id):
     """
     Body: { "organization_id": ..., "created_by": str (optional),
@@ -106,7 +114,7 @@ def add_stop(plan_id):
     """
     def _run():
         payload = request.get_json(silent=True) or {}
-        org_id = require_org_id_from_payload(payload)
+        org_id = dashboard_org_id()
         stop = visits_db.add_stop(
             org_id=org_id,
             plan_id=plan_id,
@@ -120,10 +128,11 @@ def add_stop(plan_id):
 
 
 @client_visit_plans_bp.route("/visit-plan-stops/<stop_id>", methods=["PATCH"])
+@require_client_dashboard_auth
 def update_stop(stop_id):
     def _run():
         payload = request.get_json(silent=True) or {}
-        org_id = require_org_id_from_payload(payload)
+        org_id = dashboard_org_id()
         stop = visits_db.update_stop(org_id, stop_id, payload)
         return ok({"stop": stop})
 
@@ -131,18 +140,17 @@ def update_stop(stop_id):
 
 
 @client_visit_plans_bp.route("/visit-plan-stops/<stop_id>", methods=["DELETE"])
+@require_client_dashboard_auth
 def delete_stop(stop_id):
     def _run():
-        payload = request.get_json(silent=True) or {}
-        org_id = str(payload.get("organization_id") or request.args.get("organization_id") or "").strip()
-        if not org_id:
-            raise ValueError("organization_id is required")
+        org_id = dashboard_org_id()
         visits_db.remove_stop(org_id, stop_id)
         return ok({"deleted": True})
 
     return handle(_run)
 
 @client_visit_plans_bp.route("/staff/<staff_id>/visit-plans-history", methods=["GET"])
+@require_client_dashboard_auth
 def get_staff_plans_history(staff_id):
     """Admin dashboard History view. Query: ?month=YYYY-MM (convenience,
     defaults to current month) or ?start_date=&end_date=. Same
@@ -150,7 +158,7 @@ def get_staff_plans_history(staff_id):
     one { date, plan, stops, visits } entry per day, newest first. See
     that function's docstring."""
     def _run():
-        org_id = require_org_id()
+        org_id = dashboard_org_id()
         month = request.args.get("month")
         if month:
             try:

@@ -15,6 +15,7 @@ import { useMemo } from "react";
 import { useOrg } from "../../../contexts/OrgConfigContext";
 import { useAttendanceData } from "../../attendance_temp/hooks/useAttendanceData";
 import { normalizePeopleType } from "../../../utils/templateRendering";
+import { getDatesBetween, type DateRange } from "../../../hooks/useDateFilter";
 import {
   branchIdentityValues,
   cleanId,
@@ -22,7 +23,7 @@ import {
   resolveTenantScope,
 } from "../../../utils/tenantScope";
 
-export type ReportPeriod = "today" | "7d" | "30d" | "month" | "all" | string;
+export type { DateRange };
 
 type AnyRecord = Record<string, any>;
 
@@ -67,7 +68,14 @@ export interface UseReportMetricsInput {
   branchFilter: string;
   /** "all" (default) or a specific people type, e.g. "student". */
   peopleType?: string;
-  period: ReportPeriod;
+  /**
+   * Real, unbounded start/end date ("YYYY-MM-DD", inclusive) — same shape
+   * `useDateFilter` produces for Attendance/Payroll/LeaveManagement. Replaces
+   * the old fixed "today"/"7d"/"30d"/"month"/"all" bucket, which silently
+   * capped every report (including "All Time") to at most 7-14 days of
+   * trend data with no way for the caller to ask for more.
+   */
+  dateRange: DateRange;
   isGlobalDashboard: boolean;
 }
 
@@ -80,8 +88,6 @@ export interface UseReportMetricsReturn {
   isAllBranchAdmin: boolean;
   selectedBranchLabel: string;
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 function toArray(value: unknown[]): AnyRecord[] {
   return (Array.isArray(value) ? value : []).filter(Boolean) as AnyRecord[];
@@ -196,27 +202,60 @@ function dateKey(row: AnyRecord): string {
   ).slice(0, 10);
 }
 
-function daysForPeriod(period: ReportPeriod): number {
-  if (period === "today") return 1;
-  if (period === "30d") return 30;
-  if (period === "month") return 30;
-  if (period === "all") return 7;
-  return 7;
+/**
+ * Number of daily buckets above which the trend chart switches from
+ * one-bar-per-day to one-bar-per-week. This is purely a chart-legibility
+ * decision (nobody can read 365 daily bars) — it does NOT limit which days'
+ * data feed into the bucket, or the totals/export rows below, which always
+ * cover the full selected range. This is what makes a quarterly/annual
+ * report actually usable, replacing the old hard 7/14-day cap that dropped
+ * data outside that window entirely.
+ */
+const DAILY_BUCKET_THRESHOLD_DAYS = 60;
+
+interface TrendBucket {
+  label: string;
+  /** Every "YYYY-MM-DD" day-key that rolls up into this bucket. */
+  keys: string[];
 }
 
-function recentDayLabels(
-  period: ReportPeriod,
-): { label: string; key: string }[] {
-  const days = Math.min(daysForPeriod(period), 14);
-  const formatter = new Intl.DateTimeFormat(undefined, { weekday: "short" });
-  const today = new Date();
-  return Array.from({ length: days }).map((_, index) => {
-    const date = new Date(today.getTime() - (days - 1 - index) * DAY_MS);
-    return {
-      label: formatter.format(date),
-      key: date.toISOString().slice(0, 10),
-    };
+/**
+ * rangeTrendBuckets — one bucket per day (short ranges) or per ISO week
+ * (long ranges), spanning the *entire* selected date range.
+ *
+ * Reuses `getDatesBetween` from useDateFilter.ts (the same date-math
+ * Attendance/Payroll/LeaveManagement already rely on) instead of
+ * reimplementing day-iteration here — one source of truth for "what are
+ * the days in this range".
+ */
+function rangeTrendBuckets(range: DateRange): TrendBucket[] {
+  const dates = getDatesBetween(range.startDate, range.endDate);
+  if (dates.length === 0) return [];
+
+  if (dates.length <= DAILY_BUCKET_THRESHOLD_DAYS) {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "2-digit",
+    });
+    return dates.map((key) => ({
+      label: formatter.format(new Date(`${key}T00:00:00`)),
+      keys: [key],
+    }));
+  }
+
+  const weekFormatter = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
   });
+  const buckets: TrendBucket[] = [];
+  for (let i = 0; i < dates.length; i += 7) {
+    const week = dates.slice(i, i + 7);
+    buckets.push({
+      label: `Week of ${weekFormatter.format(new Date(`${week[0]}T00:00:00`))}`,
+      keys: week,
+    });
+  }
+  return buckets;
 }
 
 function buildMetricRow(
@@ -271,11 +310,26 @@ export function useReportMetrics(
       ? normalizePeopleType(input.peopleType)
       : undefined;
 
+  // Fetch volume scales with the selected range instead of a fixed 3000-row
+  // guess: a one-day view needs far fewer rows than a full year, and a very
+  // large org's year view needs more than 3000. Bounded by the backend's own
+  // ceiling (see support_db_attendance_dashboard.py's max_rows=20000).
+  const rangeDayCount = useMemo(
+    () => getDatesBetween(input.dateRange.startDate, input.dateRange.endDate).length,
+    [input.dateRange.startDate, input.dateRange.endDate],
+  );
+  const logsLimit = useMemo(
+    () => Math.min(20000, Math.max(3000, rangeDayCount * 200)),
+    [rangeDayCount],
+  );
+
   const attendance = useAttendanceData({
     organizationId: scope?.organizationId ?? organizationId ?? undefined,
     branchId: scope?.apiBranchId ?? undefined,
     peopleType: peopleTypeKey,
-    logsLimit: 3000,
+    start: input.dateRange.startDate,
+    end: input.dateRange.endDate,
+    logsLimit,
     autoRefresh: false,
   });
 
@@ -287,8 +341,46 @@ export function useReportMetrics(
       (row) => !peopleTypeKey || rowPeopleType(row) === peopleTypeKey,
     );
     const payrollRows = toArray(input.payroll);
-    const attendanceToday = toArray(attendance.today as unknown as unknown[]);
+    // NOTE: `attendance.today` is intentionally not used here. Once a real
+    // start/end range is passed to useAttendanceData (above), both
+    // getAttendanceToday and getAttendanceLogs resolve to the exact same
+    // Supabase rows (see _client_attendance_rows' today_only=False path in
+    // support_db_attendance_dashboard.py) — summing both would double-count
+    // every attendance row across the whole range, not just "today".
+    // `attendance.logs` alone is the single source of truth for this hook.
     const attendanceLogs = toArray(attendance.logs as unknown as unknown[]);
+    const rangeDates = getDatesBetween(
+      input.dateRange.startDate,
+      input.dateRange.endDate,
+    );
+
+    // presenceByDay: for every day in the selected range, the set of staff
+    // ids with at least one attendance row that day. This is the single
+    // building block every present/attendanceRate figure below is derived
+    // from, so a branch/department/total figure over a 1-day range and a
+    // 365-day range use the exact same logic — just averaged over more days.
+    const presenceByDay = new Map<string, Set<string>>();
+    rangeDates.forEach((day) => presenceByDay.set(day, new Set()));
+    attendanceLogs.forEach((row) => {
+      const day = dateKey(row);
+      const bucket = presenceByDay.get(day);
+      if (!bucket) return; // outside the requested range
+      const id = staffIdentity(row);
+      if (id) bucket.add(id);
+    });
+
+    /** Average number of `staffIds` present per day across the whole range. */
+    function averagePresent(staffIds: Set<string>): number {
+      if (rangeDates.length === 0 || staffIds.size === 0) return 0;
+      let total = 0;
+      presenceByDay.forEach((presentOnDay) => {
+        presentOnDay.forEach((id) => {
+          if (staffIds.has(id)) total += 1;
+        });
+      });
+      return total / rangeDates.length;
+    }
+
     const branches = (
       input.allBranches?.length ? input.allBranches : cfg.branches
     ) as AnyRecord[];
@@ -322,19 +414,6 @@ export function useReportMetrics(
       if (id) staffById.set(id, row);
     });
 
-    const todayPresentByStaff = new Map<string, AnyRecord>();
-    attendanceToday.forEach((row) => {
-      const id = staffIdentity(row);
-      if (!id) return;
-      if (useSingleBranch) {
-        const branchId =
-          uiBranchIdForRow(row, branches) ??
-          uiBranchIdForRow(staffById.get(id) ?? {}, branches);
-        if (branchId === null || !visibleBranchIds.has(branchId)) return;
-      }
-      todayPresentByStaff.set(id, row);
-    });
-
     const payrollByStaff = new Map<string, number>();
     payrollRows.forEach((row) => {
       const id = payrollStaffId(row);
@@ -359,10 +438,7 @@ export function useReportMetrics(
       const branchStaffIds = new Set(
         branchStaff.map(staffIdentity).filter(Boolean),
       );
-      let present = 0;
-      todayPresentByStaff.forEach((_row, id) => {
-        if (branchStaffIds.has(id)) present += 1;
-      });
+      const present = Math.round(averagePresent(branchStaffIds));
       const backendBranchId =
         cleanId(
           branch.backendBranchId ??
@@ -424,10 +500,7 @@ export function useReportMetrics(
         const staffIds = new Set(
           bucket.staff.map(staffIdentity).filter(Boolean),
         );
-        let present = 0;
-        todayPresentByStaff.forEach((_row, id) => {
-          if (staffIds.has(id)) present += 1;
-        });
+        const present = Math.round(averagePresent(staffIds));
         const monthlyPayroll = bucket.staff.reduce((sum, row) => {
           const id = staffIdentity(row);
           return sum + (payrollByStaff.get(id) ?? Number(row.salary ?? 0) ?? 0);
@@ -451,10 +524,8 @@ export function useReportMetrics(
     );
 
     const totalStaff = scopedStaff.length;
-    const present = Math.min(
-      totalStaff || todayPresentByStaff.size,
-      todayPresentByStaff.size,
-    );
+    const allStaffIds = new Set(scopedStaff.map(staffIdentity).filter(Boolean));
+    const present = Math.min(totalStaff, Math.round(averagePresent(allStaffIds)));
     const absent = Math.max(0, totalStaff - present);
     const monthlyPayroll = branchMetrics.reduce(
       (sum, row) => sum + row.monthlyPayroll,
@@ -476,19 +547,22 @@ export function useReportMetrics(
       pendingLeaves,
     };
 
-    const labels = recentDayLabels(input.period);
-    const trendData = labels.map(({ label, key }) => ({
-      label,
-      attendance:
-        attendanceLogs.filter((row) => dateKey(row) === key).length +
-        attendanceToday.filter((row) => dateKey(row) === key).length,
-    }));
+    const buckets = rangeTrendBuckets(input.dateRange);
+    const trendData = buckets.map(({ label, keys }) => {
+      const keySet = new Set(keys);
+      return {
+        label,
+        attendance: attendanceLogs.filter((row) => keySet.has(dateKey(row)))
+          .length,
+      };
+    });
 
-    const branchTrendData = labels.map(({ label, key }) => {
+    const branchTrendData = buckets.map(({ label, keys }) => {
+      const keySet = new Set(keys);
       const record: ReportTrendRow = { label, attendance: 0 };
       branchMetrics.forEach((branch) => {
-        const count = [...attendanceLogs, ...attendanceToday].filter((row) => {
-          if (dateKey(row) !== key) return false;
+        const count = attendanceLogs.filter((row) => {
+          if (!keySet.has(dateKey(row))) return false;
           const id = staffIdentity(row);
           const source = staffById.get(id) ?? row;
           return uiBranchIdForRow(source, branches) === branch.branchId;
@@ -517,16 +591,16 @@ export function useReportMetrics(
     };
   }, [
     attendance.logs,
-    attendance.today,
     cfg.branches,
     input.activeBranchId,
     input.allBranches,
     input.branchFilter,
     input.branchLookup,
+    input.dateRange.endDate,
+    input.dateRange.startDate,
     input.isGlobalDashboard,
     input.leave,
     input.payroll,
-    input.period,
     input.staff,
     peopleTypeKey,
     scope?.uiBranchId,

@@ -1749,6 +1749,11 @@ const StaffDirectory: FC = () => {
                 }}
               />
             </div>
+            <DynamicFilterToolbar
+              sections={staffFilterSections}
+              mobileOnly
+              className="staff-management-mobile-filter"
+            />
             <RefreshButton
               variant="secondary"
               size="md"
@@ -1784,11 +1789,6 @@ const StaffDirectory: FC = () => {
                 {peopleModel.addButtonLabel}
               </JellyButton>
             )}
-            <DynamicFilterToolbar
-              sections={staffFilterSections}
-              mobileOnly
-              className="staff-management-mobile-filter"
-            />
           </>
         }
       >

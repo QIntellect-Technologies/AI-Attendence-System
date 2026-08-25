@@ -3880,6 +3880,11 @@ def api_get_attendance():
     limit = request.args.get('limit', 200, type=int)
     requested_view = request.args.get('view') or request.args.get('teamView')
     scope_ids = get_effective_scope_ids(dashboard_user, requested_view=requested_view)
+    # 'YYYY-MM-DD', inclusive. Read once, up here, so both the Supabase and
+    # legacy-SQLite branches below can honor an actual caller-supplied range
+    # instead of only the legacy branch's user_id lookup being range-aware.
+    start = request.args.get('start')
+    end = request.args.get('end')
 
     # Supabase attendance for Support-created UUID organizations.
     if raw_org_id and not _positive_int(raw_org_id):
@@ -3889,12 +3894,12 @@ def api_get_attendance():
             limit=limit,
             people_type=people_type,
             scope_ids=scope_ids,
+            start=start,
+            end=end,
         )
         return jsonify(logs), 200
 
     user_id = request.args.get('user_id', type=int)
-    start = request.args.get('start')
-    end = request.args.get('end')
     if user_id and start and end:
         logs = db.get_attendance_by_user(user_id, start, end)
     elif user_id:

@@ -25,8 +25,8 @@ from __future__ import annotations
 from flask import Blueprint, request
 
 import support_db_attendance_exceptions as attendance_exceptions_db
-from client_routes_helpers import ok, err, handle, require_org_id, require_org_id_from_payload
-from supabase_client import get_supabase
+from client_dashboard_auth import require_client_dashboard_auth
+from client_routes_helpers import ok, err, handle, dashboard_org_id
 
 client_payroll_decisions_bp = Blueprint(
     "client_payroll_decisions", __name__, url_prefix="/api/client"
@@ -43,12 +43,13 @@ def _resolved_branch_id(branch_id: str | None) -> str | None:
 
 
 @client_payroll_decisions_bp.route("/branches/<branch_id>/payroll-decisions", methods=["GET"])
+@require_client_dashboard_auth
 def list_payroll_decisions(branch_id):
     """Local-node-sourced rows already classified but with no payroll
     include/exclude decision recorded yet — the source of truth for this
     admin screen."""
     def _run():
-        org_id = require_org_id()
+        org_id = dashboard_org_id()
         rows = attendance_exceptions_db.list_local_node_payroll_pending(
             org_id, _resolved_branch_id(branch_id)
         )
@@ -58,53 +59,30 @@ def list_payroll_decisions(branch_id):
 
 
 @client_payroll_decisions_bp.route("/payroll-decisions/<attendance_id>", methods=["POST"])
+@require_client_dashboard_auth
 def set_payroll_decision(attendance_id):
     """Admin's include/exclude call on one already-classified local-node
     attendance row.
 
-    Body: { organization_id, decision: 'include' | 'exclude',
-            note?: str, decided_by?: uuid }
+    Body: { decision: 'include' | 'exclude', note?: str, decided_by?: uuid }
     """
     def _run():
         payload = request.get_json(silent=True) or {}
-        org_id = require_org_id_from_payload(payload)
-        try:
-            row = attendance_exceptions_db.set_local_node_payroll_decision(
-                org_id,
-                attendance_id,
-                payload.get("decision"),
-                note=payload.get("note"),
-                decided_by=payload.get("decided_by"),
-            )
-        except ValueError as e:
-            msg = str(e)
-            # If the attendance exists but was recorded under a different
-            # org id (legacy vs UUID mismatch), retry using the attendance
-            # row's own org_id to be tolerant of metadata inconsistencies.
-            if "Attendance record not found" in msg:
-                try:
-                    sb = get_supabase()
-                    res = sb.table("attendance").select("org_id").eq("id", str(attendance_id)).limit(1).execute()
-                    if res and res.data:
-                        actual_org = res.data[0].get("org_id")
-                        if actual_org:
-                            row = attendance_exceptions_db.set_local_node_payroll_decision(
-                                str(actual_org),
-                                attendance_id,
-                                payload.get("decision"),
-                                note=payload.get("note"),
-                                decided_by=payload.get("decided_by"),
-                            )
-                        else:
-                            raise
-                    else:
-                        raise
-                except Exception:
-                    # Re-raise the original ValueError to surface a clear
-                    # client error message.
-                    raise
-            else:
-                raise
+        org_id = dashboard_org_id()
+        # org_id is always the verified caller's own org (dashboard_org_id) —
+        # no fallback to the attendance row's own org_id. That fallback used
+        # to retry the write under whatever org_id the row itself carried,
+        # which meant a caller could get their decision applied to another
+        # org's attendance record just by knowing/guessing its attendance_id.
+        # A genuine legacy-id/UUID metadata mismatch should be a data-cleanup
+        # job, not a route that silently switches which org it's writing to.
+        row = attendance_exceptions_db.set_local_node_payroll_decision(
+            org_id,
+            attendance_id,
+            payload.get("decision"),
+            note=payload.get("note"),
+            decided_by=payload.get("decided_by"),
+        )
         return ok({"attendance": row})
 
     return handle(_run)

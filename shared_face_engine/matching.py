@@ -121,6 +121,26 @@ def _max_similarity_to_person(test_embedding: np.ndarray, person_vectors: Sequen
     return best
 
 
+def verify_against_vectors(
+    test_embedding: np.ndarray,
+    person_vectors: Sequence[np.ndarray],
+    threshold: float = DEFAULT_MATCH_THRESHOLD,
+) -> tuple[float, bool]:
+    """Public 1:1 counterpart to best_match_multi(), for callers that
+    already know which single person they're checking against (mobile
+    self-verify) rather than scanning a candidate pool. Returns
+    (best_similarity, is_match) using the same per-vector max-similarity
+    approach as best_match_multi/_max_similarity_to_person, instead of
+    compare_embeddings() against a compute_aggregate_embedding() mean —
+    see _max_similarity_to_person's docstring for why the aggregate is
+    the wrong comparison for a live 1:1 check against multi-frame
+    enrollment vectors. Returns (-1.0, False) for no stored vectors,
+    same "treat as no match, don't raise" contract as the rest of this
+    module."""
+    best = _max_similarity_to_person(test_embedding, person_vectors)
+    return best, best >= threshold
+
+
 def _scan_candidates_multi(
     test_embedding: np.ndarray,
     candidates: dict[str, Sequence[np.ndarray]],
@@ -179,4 +199,3 @@ def closest_candidate(
     cleared the threshold. Callers that need to explain a non-match (not
     just detect one) use this after best_match() returns None."""
     return _scan_candidates(test_embedding, candidates)
-

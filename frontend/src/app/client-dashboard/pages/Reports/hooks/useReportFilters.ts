@@ -47,7 +47,6 @@ export interface ReportFiltersInput {
 export interface ReportFiltersState {
   branchFilter: "all" | string;
   peopleTypeFilter: "all" | string;
-  period: "today" | "7d" | "30d" | "month" | "all";
   search: string;
 }
 
@@ -55,16 +54,18 @@ export interface UseReportFiltersOutput extends ReportFiltersState {
   // ─── Setters ───────────────────────────────────────────────────────
   setBranchFilter: (value: "all" | string) => void;
   setPeopleTypeFilter: (value: "all" | string) => void;
-  setPeriod: (value: "today" | "7d" | "30d" | "month" | "all") => void;
   setSearch: (value: string) => void;
   reset: () => void;
 
   // ─── Options for select dropdowns ──────────────────────────────────
   branchOptions: FilterOptions[];
   peopleTypeOptions: FilterOptions[];
-  periodOptions: FilterOptions[];
 
   // ─── Derived ───────────────────────────────────────────────────────
+  // Does NOT factor in the date range — Reports.tsx's date filter (see
+  // useDateFilter, shared with Attendance/Payroll/LeaveManagement) is a
+  // separate concern with its own "reset to default" notion, so the caller
+  // combines `hasActiveFilters || dateFilter.mode !== defaultMode` itself.
   hasActiveFilters: boolean;
 }
 
@@ -113,16 +114,12 @@ export function useReportFilters(
   const [peopleTypeFilter, setPeopleTypeFilter] = useState<"all" | string>(() =>
     resolveDefaultPeopleType(visiblePeopleTypes),
   );
-  const [period, setPeriod] = useState<
-    "today" | "7d" | "30d" | "month" | "all"
-  >("7d");
   const [search, setSearch] = useState("");
 
   // ─── Reset ────────────────────────────────────────────────────────────────
   const reset = useCallback(() => {
     setBranchFilter("all");
     setPeopleTypeFilter(resolveDefaultPeopleType(visiblePeopleTypes));
-    setPeriod("7d");
     setSearch("");
   }, [visiblePeopleTypes]);
 
@@ -160,18 +157,6 @@ export function useReportFilters(
     }));
   }, [peopleTypeLabel, staffCountByPeopleType, visiblePeopleTypes]);
 
-  // ─── Period options ────────────────────────────────────────────────────────
-  const periodOptions = useMemo<FilterOptions[]>(
-    () => [
-      { value: "today", label: "Today", count: 0 },
-      { value: "7d", label: "Last 7 Days", count: 0 },
-      { value: "30d", label: "Last 30 Days", count: 0 },
-      { value: "month", label: "This Month", count: 0 },
-      { value: "all", label: "All Time", count: 0 },
-    ],
-    [],
-  );
-
   // ─── Derived state ────────────────────────────────────────────────────────
   const defaultPeopleType = useMemo(
     () => resolveDefaultPeopleType(visiblePeopleTypes),
@@ -180,22 +165,18 @@ export function useReportFilters(
   const hasActiveFilters =
     branchFilter !== "all" ||
     peopleTypeFilter !== defaultPeopleType ||
-    period !== "7d" ||
     search.trim().length > 0;
 
   return {
     branchFilter,
     peopleTypeFilter,
-    period,
     search,
     setBranchFilter,
     setPeopleTypeFilter,
-    setPeriod,
     setSearch,
     reset,
     branchOptions,
     peopleTypeOptions,
-    periodOptions,
     hasActiveFilters,
   };
 }

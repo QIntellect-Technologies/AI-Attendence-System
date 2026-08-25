@@ -366,6 +366,8 @@ export function useAttendanceData(
     branch_uuid,
     date,
     log_date,
+    start,
+    end,
     peopleType,
     people_type,
   } = options;
@@ -403,6 +405,13 @@ export function useAttendanceData(
       branchId: scope.apiBranchId,
       date,
       log_date,
+      // 'YYYY-MM-DD', inclusive — a real multi-day range, distinct from the
+      // single-day `date`/`log_date` above. Forwarded to both
+      // getAttendanceToday and getAttendanceLogs below so any caller (e.g.
+      // Reports' date-range picker) gets actual range-filtered data instead
+      // of always falling back to "today" / "most recent N rows".
+      start,
+      end,
       peopleType: peopleType ?? people_type ?? undefined,
     };
   }, [
@@ -416,12 +425,14 @@ export function useAttendanceData(
     cfg.branches,
     contextOrganizationId,
     date,
+    end,
     log_date,
     org_id,
     organizationId,
     organization_id,
     peopleType,
     people_type,
+    start,
   ]);
 
   const load = useCallback(async () => {

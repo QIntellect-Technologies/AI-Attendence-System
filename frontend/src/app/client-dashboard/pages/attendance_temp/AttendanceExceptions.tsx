@@ -57,11 +57,34 @@ interface PendingLeg {
   label: string;
   detail: string;
   decisions: { value: string; label: string }[];
+  // Face-mismatch legs render in red, not the routine-exception amber --
+  // an unconfirmed identity is a security concern, not a scheduling one,
+  // and shouldn't be visually triaged the same as a late arrival.
+  severity?: "warning" | "danger";
 }
+
+// Face-mismatch decisions are identical in shape for both legs -- an admin
+// either confirms the person's identity by other means, rejects the mark
+// outright, or escalates it for security review. Shared here so the
+// check-in/check-out branches below (and their labels) can't drift apart.
+const FACE_MISMATCH_DECISIONS: PendingLeg["decisions"] = [
+  { value: "confirm_identity", label: "Confirm Identity" },
+  { value: "reject_attendance", label: "Reject Attendance" },
+  { value: "escalate", label: "Escalate" },
+];
 
 function legsFor(row: AttendanceException): PendingLeg[] {
   const legs: PendingLeg[] = [];
-  if (row.check_in_hold_reason) {
+  if (row.check_in_hold_reason === "face_mismatch") {
+    legs.push({
+      key: `${row.id}-check_in`,
+      leg: "check_in",
+      label: "Face verification failed",
+      detail: `Checked in at ${formatTime(row.timestamp)} — identity unconfirmed, not counted as present`,
+      decisions: FACE_MISMATCH_DECISIONS,
+      severity: "danger",
+    });
+  } else if (row.check_in_hold_reason) {
     legs.push({
       key: `${row.id}-check_in`,
       leg: "check_in",
@@ -74,7 +97,16 @@ function legsFor(row: AttendanceException): PendingLeg[] {
       ],
     });
   }
-  if (row.check_out_hold_reason === "early") {
+  if (row.check_out_hold_reason === "face_mismatch") {
+    legs.push({
+      key: `${row.id}-check_out`,
+      leg: "check_out",
+      label: "Face verification failed",
+      detail: `Checked out at ${formatTime(row.check_out_timestamp)} — identity unconfirmed, not counted as present`,
+      decisions: FACE_MISMATCH_DECISIONS,
+      severity: "danger",
+    });
+  } else if (row.check_out_hold_reason === "early") {
     legs.push({
       key: `${row.id}-check_out`,
       leg: "check_out",
@@ -133,6 +165,8 @@ const LegRow: React.FC<{
     }
   };
 
+  const accent = leg.severity === "danger" ? T.red : T.amber;
+
   return (
     <div
       style={{
@@ -149,17 +183,19 @@ const LegRow: React.FC<{
           width: 34,
           height: 34,
           borderRadius: 10,
-          background: `${T.amber}18`,
+          background: `${accent}18`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           flexShrink: 0,
         }}
       >
-        {leg.leg === "check_in" ? (
-          <LogIn size={16} color={T.amber} />
+        {leg.severity === "danger" ? (
+          <AlertTriangle size={16} color={accent} />
+        ) : leg.leg === "check_in" ? (
+          <LogIn size={16} color={accent} />
         ) : (
-          <LogOut size={16} color={T.amber} />
+          <LogOut size={16} color={accent} />
         )}
       </div>
 
@@ -177,8 +213,8 @@ const LegRow: React.FC<{
           </strong>
           <span
             style={{
-              background: `${T.amber}18`,
-              color: T.amber,
+              background: `${accent}18`,
+              color: accent,
               borderRadius: 20,
               padding: "2px 8px",
               fontSize: 10,

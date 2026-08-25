@@ -1,5 +1,5 @@
 """
-shared_face_engine
+shared_face_engine/__init__.py
 
 Single face engine (model loading, detection, embedding, quality scoring,
 and now matching) shared by Trainer Desktop, Local Node, and the backend
@@ -36,6 +36,7 @@ from shared_face_engine.matching import (
     closest_candidate_multi,
     compare_embeddings,
     compute_aggregate_embedding,
+    verify_against_vectors,
 )
 
 __all__ = [
@@ -57,5 +58,6 @@ __all__ = [
     "closest_candidate_multi",
     "compare_embeddings",
     "compute_aggregate_embedding",
+    "verify_against_vectors",
     "detect_spoofing"
 ]

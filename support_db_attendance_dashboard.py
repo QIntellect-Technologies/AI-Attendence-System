@@ -321,7 +321,15 @@ def _client_attendance_rows(
     branch_ui_by_id = {str(branch.get('id')): idx for idx, branch in enumerate(branches, start=1) if branch.get('id')}
     backend_branch_id = _resolve_attendance_branch_id(branch_id, branches)
 
-    safe_limit = max(1, min(int(limit or 500), 2000))
+    # A date-range query (today_only=False — weekly/monthly/custom views and
+    # the Reports export) needs a much higher ceiling than the single-day
+    # "today" widget: a month of attendance for a few hundred staff can
+    # easily exceed the old 2000-row cap, which silently truncated any
+    # export longer than roughly a week with no indication to the caller.
+    # today_only queries keep the tighter cap since they only ever cover
+    # one day's worth of rows.
+    max_rows = 2000 if today_only else 20000
+    safe_limit = max(1, min(int(limit or 500), max_rows))
 
     log_date = None
     start_iso = None
@@ -541,9 +549,22 @@ def get_client_attendance_today(
 def get_client_attendance_logs(
     org_id: str, branch_id: object = None, limit: int = 100,
     people_type: str | None = None, scope_ids: frozenset | None = None,
+    start: str | None = None, end: str | None = None,
 ) -> list[dict]:
+    """Attendance log stream for the Client Dashboard.
+
+    `start`/`end` ('YYYY-MM-DD', inclusive) scope the query to a real date
+    range via `_client_attendance_rows`' existing start/end handling — the
+    same path `get_client_attendance_today` already uses for its
+    weekly/monthly/custom views. Previously this function silently ignored
+    any range and always returned the most recent `limit` rows regardless
+    of what the caller asked for, which is what made Reports/Attendance
+    exports appear hard-capped to whatever the default page size happened
+    to cover (in practice, about a week of a typical org's volume).
+    """
     return _client_attendance_rows(
-        org_id, branch_id=branch_id, today_only=False, limit=limit,
+        org_id, branch_id=branch_id, start=start, end=end,
+        today_only=False, limit=limit,
         people_type=people_type, scope_ids=scope_ids,
     )
 

@@ -48,7 +48,7 @@ from flask import Blueprint, request, g
 from client_staff_auth import require_client_staff_auth
 from client_routes_helpers import ok, handle
 import support_db as support_cp_db
-from shared_face_engine import detect_and_extract, compute_aggregate_embedding, compare_embeddings
+from shared_face_engine import detect_and_extract, verify_against_vectors
 from shared_face_engine.spoof import detect_spoofing
 from config import MODELS_DIR, FACE_DETECTION_CONFIDENCE, FACE_MATCHING_THRESHOLD, ANTI_SPOOFING_ENABLED
 
@@ -240,15 +240,19 @@ def verify_face():
                 "message": "Your face isn't enrolled yet. Contact your admin to complete enrollment.",
             })
 
-        aggregate_emb = compute_aggregate_embedding([np.array(v) for v in stored_vectors])
-        if aggregate_emb is None:
-            return ok({
-                "verified": False,
-                "message": "Your face isn't enrolled yet. Contact your admin to complete enrollment.",
-            })
-
-        similarity, is_match = compare_embeddings(
-            aggregate_emb, test_embedding, threshold=FACE_MATCHING_THRESHOLD,
+        # Compare against every enrolled vector individually and keep the
+        # best match, rather than compare_embeddings() against one
+        # compute_aggregate_embedding() mean. Mean-pooling dozens of
+        # enrollment-video frames (different pose/lighting/glasses) into
+        # a single centroid can sit further from any one genuine live
+        # appearance than that appearance sits from an actual same-person
+        # match -- see verify_against_vectors' docstring. That produced
+        # real false rejects for correctly-enrolled staff once the app's
+        # verified-flag bug (which discarded this result entirely) was
+        # fixed and this comparison started actually mattering.
+        similarity, is_match = verify_against_vectors(
+            test_embedding, [np.array(v) for v in stored_vectors],
+            threshold=FACE_MATCHING_THRESHOLD,
         )
         return ok({
             "verified": bool(is_match),

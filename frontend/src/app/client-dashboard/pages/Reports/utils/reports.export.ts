@@ -21,12 +21,7 @@
  *   - Testable
  */
 
-import {
-  formatPKR,
-  periodLabel,
-  monthLabel,
-  todayISO,
-} from "./reports.metrics";
+import { formatPKR, monthLabel, todayISO } from "./reports.metrics";
 
 /**
  * Row shape actually produced by hooks/useReportMetrics.ts at runtime.
@@ -93,7 +88,13 @@ export function buildExportRows(args: {
   branchMetrics: ReportExportMetricRow[];
   departmentMetrics: ReportExportMetricRow[];
   selectedBranchLabel: string;
-  period: "today" | "7d" | "30d" | "month" | "all";
+  /**
+   * Human-readable label for the selected date range, e.g.
+   * "Jan 01 → Mar 31, 2026" (from useDateFilter's `label`). Free-form now
+   * that Reports supports an arbitrary custom range instead of a fixed
+   * "today"/"7d"/"30d"/"month"/"all" bucket.
+   */
+  period: string;
   search: string;
   personPlural: string;
   groupLabel: string;
@@ -112,7 +113,7 @@ export function buildExportRows(args: {
     supportsPayroll,
   } = args;
 
-  const periodText = periodLabel(period);
+  const periodText = period;
   const allGroupsLabel = `All ${groupPlural}`;
   const attendanceNotes = (row: ReportExportMetricRow) =>
     `${row.present} present, ${row.late} late, ${row.absent} absent`;
@@ -263,7 +264,7 @@ export function exportReportsCsv(filename: string, csvContent: string): void {
 export function buildExportMeta(args: {
   scope: "global" | "branch";
   selectedBranchLabel: string;
-  period: "today" | "7d" | "30d" | "month" | "all";
+  period: string;
   recordCount: number;
 }): ReportExportMeta {
   const { scope, selectedBranchLabel, period, recordCount } = args;
@@ -272,7 +273,7 @@ export function buildExportMeta(args: {
     module: "Reports & Analytics",
     scope: scope === "global" ? "Admin / All Branches" : "Branch Dashboard",
     branch: selectedBranchLabel,
-    period: periodLabel(period),
+    period,
     records: recordCount,
     generatedOn: todayISO(),
   };

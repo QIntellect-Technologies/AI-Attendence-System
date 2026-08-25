@@ -2528,37 +2528,27 @@ export default function AttendanceView() {
       style={{ fontFamily: "'DM Sans', 'Inter', sans-serif" }}
       className="min-h-screen bg-[#f5f6fa] p-6"
     >
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1
-            className="flex items-center gap-2 text-2xl font-bold"
-            style={{ color: "#1a699f" }}
-          >
-            <ClipboardCheck
-              className="h-6 w-6"
-              strokeWidth={2.25}
-              size={22}
-              color={T.teal600}
-            />
-            Attendance
-          </h1>
-        </div>
+      <div className="mb-3">
+        <h1
+          className="flex items-center gap-2 text-2xl font-bold"
+          style={{ color: "#1a699f" }}
+        >
+          <ClipboardCheck
+            className="h-6 w-6"
+            strokeWidth={2.25}
+            size={22}
+            color={T.teal600}
+          />
+          Attendance
+        </h1>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => openAddAttendanceModal()}
-            disabled={!useRealApi}
-            title={
-              !useRealApi
-                ? "Demo mode uses ModuleContext attendance"
-                : "Hand-enter attendance for an employee CCTV missed"
-            }
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ background: T.teal600 }}
-          >
-            <Plus className="w-4 h-4" strokeWidth={2.5} />
-            Add Attendance
-          </button>
+          <DynamicFilterToolbar
+            sections={attendanceFilterSections}
+            mobileOnly
+            className="staff-management-mobile-filter attendance-action-filter"
+          />
           <RefreshButton
             size="md"
             loading={loadingRefresh}
@@ -2572,7 +2562,25 @@ export default function AttendanceView() {
               }
             }}
             ariaLabel="Refresh attendance"
+            className="staff-management-refresh-button staff-management-mobile-icon-button attendance-action-refresh"
           />
+          <button
+            type="button"
+            onClick={() => openAddAttendanceModal()}
+            disabled={!useRealApi}
+            title={
+              !useRealApi
+                ? "Demo mode uses ModuleContext attendance"
+                : "Hand-enter attendance for an employee CCTV missed"
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed staff-management-mobile-icon-button attendance-action-add"
+            style={{ background: T.teal600 }}
+          >
+            <Plus className="w-4 h-4" strokeWidth={2.5} />
+            Add Attendance
+          </button>
+        </div>
+        <div className="staff-management-export-action">
           <ExportButton
             data={attendanceExportRows}
             filename={`Attendance_${filter.mode}_${exportDateRange.from}_${exportDateRange.to}`}
@@ -2608,7 +2616,7 @@ export default function AttendanceView() {
         </div>
       )}
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard
           label={peopleModel.statsTotalLabel}
           value={totalStaff}
@@ -2633,6 +2641,7 @@ export default function AttendanceView() {
 
       <DynamicFilterToolbar
         sections={attendanceFilterSections}
+        desktopOnly
         bordered
         style={{ marginBottom: 24 }}
       />
@@ -2646,7 +2655,7 @@ export default function AttendanceView() {
         </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-3">
         <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-semibold" style={{ color: "#1a699f" }}>

@@ -1,4 +1,3 @@
-
 """
 support_db_attendance_mobile.py
 ───────────────────────────────────────────────────────────────────────────────
@@ -590,7 +589,12 @@ def mark_field_staff_attendance(
             'confidence': 1.0,
             'metadata': metadata,
         }
-        row.update(_attendance_exceptions.check_in_write_fields(status))
+        row.update(
+            _attendance_exceptions.apply_face_verification_hold(
+                _attendance_exceptions.check_in_write_fields(status),
+                pending_face_review=pending_face_review,
+            )
+        )
         try:
             result = sb.table('attendance').insert(row).execute()
         except Exception as exc:
@@ -608,6 +612,10 @@ def mark_field_staff_attendance(
                 staff_name=staff_row.get('name') or 'Staff member',
                 attendance_id=new_id,
                 event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
+                # face_mismatch takes priority in the notification too --
+                # matches apply_face_verification_hold's hold_reason
+                # precedence (identity concerns outrank timing ones).
+                reason='face_mismatch' if pending_face_review else 'late',
             )
         return {
             'already_marked': False,
@@ -647,7 +655,10 @@ def mark_field_staff_attendance(
     # Late/overtime classification always goes through the admin notification
     # flow instead of silently auto-approving off a stale approved OT row.
     check_out_status = resolve_check_out_status(window, event_dt, branch_zone)
-    checkout_fields = _attendance_exceptions.check_out_write_fields(check_out_status, existing.get('notes'))
+    checkout_fields = _attendance_exceptions.apply_face_verification_hold(
+        _attendance_exceptions.check_out_write_fields(check_out_status, existing.get('notes')),
+        pending_face_review=pending_face_review,
+    )
     update_payload = {
         'check_out_timestamp': now,
         'check_out_status': check_out_status,
@@ -676,7 +687,8 @@ def mark_field_staff_attendance(
         _attendance_exceptions.notify_check_out_exception(
             org_id=org_key, branch_id=branch_id, staff_id=staff_key,
             staff_name=staff_row.get('name') or 'Staff member',
-            attendance_id=existing['id'], status=check_out_status,
+            attendance_id=existing['id'],
+            status='face_mismatch' if pending_face_review else check_out_status,
             event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
         )
 

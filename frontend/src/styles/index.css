@@ -44,6 +44,12 @@
   display: none;
 }
 
+.attendance-action-filter,
+.attendance-action-refresh,
+.attendance-action-add {
+  order: 0;
+}
+
 .module-shell-actions {
   min-width: 0;
 }
@@ -172,6 +178,18 @@
 }
 
 @media (max-width: 768px) {
+  .attendance-action-filter {
+    order: 1;
+  }
+
+  .attendance-action-refresh {
+    order: 2;
+  }
+
+  .attendance-action-add {
+    order: 3;
+  }
+
   .staff-management-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
