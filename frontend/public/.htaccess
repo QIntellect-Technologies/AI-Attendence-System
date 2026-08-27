@@ -1,0 +1,30 @@
+# .htaccess for the built React SPA on cPanel/Apache
+# ──────────────────────────────────────────────────────────────────────
+# Rename this file to ".htaccess" (note the leading dot) and place it in
+# the SAME directory as the frontend's built index.html — i.e. wherever
+# you upload the contents of `frontend/dist/` (public_html, or a
+# subdomain's document root if the frontend gets its own subdomain).
+#
+# This is unrelated to Railway/Docker — Railway never serves the SPA via
+# Apache, so nothing here can conflict with the existing deploy path.
+#
+# Why this is needed: Vite/React Router does client-side routing. Without
+# this rule, refreshing the browser on any non-root route (e.g.
+# /dashboard/staff) causes Apache to 404, because no such file exists on
+# disk — only index.html does, and the router only kicks in once
+# index.html's JS has loaded. This rewrites every request that isn't a
+# real file or directory back to index.html so the router can take over.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Let real files (JS/CSS/images/fonts emitted by the Vite build) and
+  # real directories serve normally — do not rewrite those.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Everything else falls back to index.html for client-side routing.
+  RewriteRule ^ index.html [L]
+</IfModule>

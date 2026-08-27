@@ -312,32 +312,45 @@ def get_face_model(models_root: Path, prefer_gpu: bool = True):
 
 def _cuda_provider_probe_succeeds(models_root: Path, timeout: int = 30) -> bool:
     """Run a minimal CUDAExecutionProvider session-creation test in a
-    subprocess, since the crash mode we've seen (STATUS_STACK_BUFFER_OVERRUN)
-    kills the process natively with no Python-catchable exception — an
-    in-process try/except cannot protect against this."""
+    disposable child process, since the crash mode we've seen
+    (STATUS_STACK_BUFFER_OVERRUN) kills the process natively with no
+    Python-catchable exception — an in-process try/except cannot protect
+    against this.
+
+    Works identically from a source checkout and from a frozen build; only
+    the command used to spawn the child process differs, because a frozen
+    exe has no `-c`/`-m` flag to run arbitrary code the way a real
+    python.exe does. The frozen branch relies on local_node.launcher
+    recognizing --cuda-provider-probe as a dedicated, minimal entrypoint
+    (see launcher._run_cuda_probe) that imports nothing but onnxruntime and
+    exits immediately, instead of relaunching the full node.
+
+    Previously this returned True unconditionally when frozen, skipping
+    the probe entirely — which meant the ONE deployment shape most likely
+    to hit this crash (the shipped client build) was exactly the one
+    running unguarded. That defeated the purpose of having this probe at
+    all, and is what let this crash reach a client instead of falling back
+    to CPU.
+    """
     import subprocess
     import sys
-
-    if getattr(sys, "frozen", False) or "__compiled__" in globals():
-        # sys.executable is the node exe here, so the subprocess probe would
-        # relaunch the application instead of running Python. Skip it and let
-        # provider init happen normally.
-        return True
 
     det_model = _target_model_path(models_root) / "det_10g.onnx"
     if not det_model.exists():
         return False
 
-    probe_script = (
-        "import onnxruntime as ort\n"
-        f"sess = ort.InferenceSession(r'{det_model}', providers=['CUDAExecutionProvider'])\n"
-        "print('OK')\n"
-    )
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", probe_script],
-            capture_output=True, timeout=timeout,
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        command = [sys.executable, "--cuda-provider-probe", str(det_model)]
+    else:
+        probe_script = (
+            "import onnxruntime as ort\n"
+            f"sess = ort.InferenceSession(r'{det_model}', providers=['CUDAExecutionProvider'])\n"
+            "print('OK')\n"
         )
+        command = [sys.executable, "-c", probe_script]
+
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=timeout)
         return result.returncode == 0 and b"OK" in result.stdout
     except subprocess.TimeoutExpired:
         return False

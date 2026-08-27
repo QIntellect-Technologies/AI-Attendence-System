@@ -3058,6 +3058,9 @@ const Modal: React.FC<{
       onClick={(event) => event.stopPropagation()}
     >
       <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close modal"
         style={{
           position: "absolute",
           top: 16,
@@ -3077,6 +3080,7 @@ const Modal: React.FC<{
           style={{
             maxHeight: "calc(min(75vh, calc(100vh - 32px)) - 64px)",
             overflowY: "auto",
+            marginRight: -30,
             scrollbarGutter: "stable",
             scrollbarWidth: "auto",
             scrollbarColor: `${T.slate200} transparent`,

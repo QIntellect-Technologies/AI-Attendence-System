@@ -122,7 +122,20 @@ def _attendance_row_for_dashboard(
     from support_db_staff import _normalize_people_type
     staff_id = str(row.get('staff_id') or '').strip()
     staff = staff_by_id.get(staff_id, {})
-    backend_branch_id = str(row.get('branch_id') or staff.get('branch_id') or '').strip()
+    # staff['branch_id'] here may be either a raw DB row's real UUID
+    # (staff_by_id built straight from a Supabase query) or the safe-
+    # serialized _client_staff_safe dict, whose 'branch_id' is the small
+    # UI ordinal, not a UUID -- backend_branch_id/branch_uuid are the
+    # UUID fields on that shape. Try the UUID-shaped fields first so this
+    # fallback (row.branch_id is only ever empty on an edge case) never
+    # resolves to an ordinal.
+    backend_branch_id = str(
+        row.get('branch_id')
+        or staff.get('backend_branch_id')
+        or staff.get('branch_uuid')
+        or staff.get('branch_id')
+        or ''
+    ).strip()
     branch = branch_by_id.get(backend_branch_id, {})
     branch_ui_id = branch_ui_by_id.get(backend_branch_id)
     ts = row.get('timestamp') or row.get('created_at') or _iso_now()
@@ -893,9 +906,27 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
 
     staff = get_client_staff_member(staff_id)
 
+    # staff['branch_id'] (from _client_staff_safe) is the small display
+    # ordinal shown in the UI (1, 2, 3...), not a real branch UUID -- only
+    # backend_branch_id/branch_uuid on that dict hold the actual Supabase
+    # id. Falling back to the ordinal here silently inserted values like
+    # "2" into attendance.branch_id (a uuid column), raising "invalid
+    # input syntax for type uuid: '2'" on every manual add whose caller
+    # didn't explicitly pass a branch_id (e.g. the global/all-branches
+    # view, which never sets one).
     raw_branch_id = payload.get('branch_id') or payload.get('branchId')
+    # Defensive: resolve in case a caller ever passes the small UI ordinal
+    # (1, 2, 3...) instead of the real branch UUID -- same ordinal-or-UUID
+    # acceptance _resolve_branch_id (support_db_fast.py) already applies
+    # to the read path.
+    if raw_branch_id:
+        raw_branch_id = _resolve_owned_backend_branch_id(org_key, raw_branch_id) or raw_branch_id
     branch_id = str(
-        raw_branch_id or (existing_row or {}).get('branch_id') or staff.get('branch_id') or '',
+        raw_branch_id
+        or (existing_row or {}).get('branch_id')
+        or staff.get('backend_branch_id')
+        or staff.get('branch_uuid')
+        or '',
     ).strip() or None
 
     check_in_provided = any(key in payload for key in ('check_in', 'checkIn'))

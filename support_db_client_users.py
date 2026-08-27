@@ -19,10 +19,13 @@
 # import hashlib
 # import uuid
 # import os
-# from shared.logging import logger
+# import re
+# from urllib.parse import urlparse
 # from supabase_client import get_supabase, reset_supabase_client
 # from logger_config import get_logger
-# from support_db_core import _compute_org_status, _execute_supabase, _json_dict, _json_list, _org_access_allows_client
+
+# logger = get_logger(__name__)
+# from support_db_core import _compute_org_status, _execute_supabase, _json_dict, _json_list, _org_access_allows_client, build_or_eq_filter
 # from support_invite_message import build_client_invite_message
 # from support_db_attendance_gate import (
 #     resolve_timing_source,
@@ -122,6 +125,31 @@
 #         return bcrypt.checkpw(raw_password.encode('utf-8'), password_hash.encode('utf-8'))
 #     except Exception:
 #         return False
+
+# def validate_strong_password(new_password: str) -> None:
+#     """
+#     Single source of truth for password-strength rules across every
+#     self-service password-change path (client_users, client_staff, and the
+#     legacy numeric-id dashboard route in app.py all call this).
+
+#     Rules: 8+ characters, at least one uppercase, one lowercase, one digit,
+#     and one special character. Raises ValueError with a user-facing message
+#     on the first rule that fails, so callers can surface it as a 400
+#     directly — same pattern as every other validation in this module.
+#     """
+#     pw = str(new_password or '')
+
+#     if len(pw) < 8:
+#         raise ValueError('Password must be at least 8 characters long')
+#     if not re.search(r'[A-Z]', pw):
+#         raise ValueError('Password must include at least one uppercase letter')
+#     if not re.search(r'[a-z]', pw):
+#         raise ValueError('Password must include at least one lowercase letter')
+#     if not re.search(r'[0-9]', pw):
+#         raise ValueError('Password must include at least one number')
+#     if not re.search(r'[^A-Za-z0-9]', pw):
+#         raise ValueError('Password must include at least one special character')
+
 
 # def _active_client_modules(org_id: str) -> list[str]:
 #     from support_db_branches import list_org_modules
@@ -447,7 +475,11 @@
 #     }
 
 #     return {
-#         'bizType': org.get('org_type') or business_type,
+#         # business_type is the source of truth; org_type is a derived mirror
+#         # kept for backwards compatibility. Preferring org_type here let a
+#         # free-text value ('Software House') reach tenant rendering, where it
+#         # matched no known type and fell through to defaults.
+#         'bizType': business_type or org.get('org_type'),
 #         'businessType': business_type,
 #         'business_type': business_type,
 #         'primaryPeopleType': primary_people_type,
@@ -490,7 +522,15 @@
 
 # def create_client_invite(org_id: str, payload: dict, invited_by: str) -> dict:
 #     """
-#     Create or reset a Client Dashboard admin/HR account for one organization.
+#     Create or reset a Client Dashboard admin account for one organization.
+
+#     client_users is exclusively the org-owner seat, always role='admin' —
+#     there is no HR/co-admin tier here (that option was removed; any
+#     per-person access narrower than full admin is a client_staff row,
+#     managed from Staff Management's own module picker, not a Support-issued
+#     invite). Any 'role' key in payload is ignored on purpose: this endpoint
+#     cannot be used to mint anything other than an admin seat, regardless of
+#     what a caller sends.
 
 #     The temporary password is returned once and is never stored in plaintext.
 #     The invite message is generated from the real support-owned deal settings:
@@ -504,14 +544,12 @@
 
 #     email = str(payload.get('email') or org.get('contact_email') or '').strip().lower()
 #     full_name = str(payload.get('full_name') or payload.get('name') or f"{org.get('name')} Admin").strip()
-#     role = str(payload.get('role') or 'admin').strip().lower()
+#     role = 'admin'
 
 #     if not email:
 #         raise ValueError('Client email is required')
 #     if not full_name:
 #         raise ValueError('Client full name is required')
-#     if role not in ('admin', 'hr'):
-#         raise ValueError('role must be admin or hr')
 
 #     temporary_password = str(payload.get('temporary_password') or '').strip() or _generate_temp_password()
 #     password_hash = _hash_password(temporary_password)
@@ -539,12 +577,23 @@
 #                 'is_active': True,
 #                 'must_change_password': True,
 #                 'invited_by': invited_by,
-#                 'onboarding_completed_at': None,
 #             })
 #             .eq('id', current['id'])
 #             .execute()
 #         )
 #         row = result.data[0] if result.data else None
+
+#         # This is the actual recovery step for a hijacked client_users admin
+#         # account (Support resets the password after verifying identity
+#         # out-of-band). Without this, the reset changes the password but an
+#         # already-authenticated attacker's token stays valid until natural
+#         # expiry (up to 12h) -- the exact gap that made recovery impossible
+#         # for a hacked admin. Only reached on the existing-row branch: a
+#         # brand-new invite (else branch below) has no prior session to kill.
+#         import session_registry
+#         session_registry.invalidate_session(
+#             'client_user', str(current['id']), reason='password_changed'
+#         )
 #     else:
 #         result = sb.table('client_users').insert({
 #             'org_id': org_id,
@@ -651,7 +700,11 @@
 #         'profileImageName': row.get('profile_image_name') or '',
 #         'password_changed_at': row.get('password_changed_at'),
 #         'passwordChangedAt': row.get('password_changed_at'),
-#         'role': 'admin' if row.get('role') == 'admin' else 'hr',
+#         # No more coercing any non-'admin' value to 'hr' — that tier is
+#         # gone. Pass the stored value through as-is; see the migration
+#         # note in role_permissions.py for what to do with any pre-existing
+#         # role='hr' rows from before this change.
+#         'role': row.get('role') or 'admin',
 #         'client_role': row.get('role'),
 #         'source': 'client_users',
 #         'organization_id': org_id,
@@ -703,6 +756,42 @@
 #         raise ValueError('Client user is inactive')
 
 #     return _client_user_session_from_row(row)
+
+# def get_client_user_basic(user_id: str) -> dict:
+#     """Minimal, display-only lookup for a Client Dashboard user (org admin
+#     or manager) by id — name/email/role only, no session/module data.
+
+#     Exists because `approved_by` on a leave request can be either a
+#     client_staff row (a manager who is also an employee) or a client_users
+#     row (an org admin with no employee record). get_client_staff_member
+#     only ever finds the former and 404s on the latter. This is the
+#     fallback lookup for that case.
+
+#     Unlike get_client_user_session_by_id, this never raises for an
+#     inactive account — a deactivated admin should still resolve by name
+#     on historical records they approved.
+#     """
+#     result = _execute_supabase(
+#         'get_client_user_basic',
+#         lambda: (
+#             get_supabase()
+#             .table('client_users')
+#             .select('id, full_name, email, role')
+#             .eq('id', str(user_id))
+#             .limit(1)
+#         ),
+#     )
+#     if not result.data:
+#         raise ValueError('Client user not found')
+
+#     row = result.data[0]
+#     return {
+#         'id': row.get('id'),
+#         'name': row.get('full_name'),
+#         'full_name': row.get('full_name'),
+#         'email': row.get('email'),
+#         'role': row.get('role'),
+#     }
 
 # def authenticate_client_user(email: str, password: str) -> Optional[dict]:
 #     """Authenticate a Client Dashboard user from Supabase client_users."""
@@ -770,13 +859,22 @@
 #     if not clean_identifier or not password:
 #         return None
 
+#     # build_or_eq_filter quotes the value per PostgREST's own escaping rule
+#     # instead of interpolating it raw into the `.or_()` string. This lookup
+#     # runs with no org_id filter (see docstring above), so an unescaped
+#     # comma/paren in `identifier` here was a genuine filter-injection risk
+#     # (an attacker-controlled identifier could append its own OR clause),
+#     # not just a WAF-trip -- the highest-value place in the codebase to get
+#     # this right. It never trims/alters the identifier itself, so the
+#     # "typed back in exactly as stored" contract above is unaffected.
+#     clause = build_or_eq_filter(clean_identifier, ['email', 'phone'])
+#     if not clause:
+#         return None
+
 #     sb = get_supabase()
-#     result = (
-#         sb.table('client_staff')
-#         .select(select_columns)
-#         .or_(f'email.eq.{clean_identifier},phone.eq.{clean_identifier}')
-#         .limit(2)
-#         .execute()
+#     result = _execute_supabase(
+#         'authenticate_client_staff.lookup',
+#         lambda: sb.table('client_staff').select(select_columns).or_(clause).limit(2),
 #     )
 
 #     rows = result.data or []
@@ -1127,12 +1225,74 @@
 #     backend_id = branches[ui_id - 1].get('id')
 #     return str(backend_id) if backend_id else None
 
+# _GROUP_NAME_MAX_LENGTH = 300  # generous ceiling above the 100-char per-field
+# # frontend limit (class + " - " + section can combine into one `name`); this
+# # is the real boundary — the frontend maxLength is UX only. Blocks the
+# # unbounded-paste case (10,000+ chars) reaching Supabase via departments/
+# # roles onboarding config.
+
+
+# def _validate_group_item_name(item: dict, bucket_name: str) -> None:
+#     """Reject department/designation/class-section names over the length
+#     ceiling. Mirrors _validate_camera_rtsp_url: client-side maxLength on
+#     Settings.tsx/OnboardingWizard.tsx inputs is UX only, this is what
+#     actually stops an oversized payload from being persisted."""
+#     for key in ('name', 'className', 'sectionName'):
+#         value = item.get(key)
+#         if value and len(str(value)) > _GROUP_NAME_MAX_LENGTH:
+#             raise ValueError(
+#                 f'{bucket_name}[].{key} must be {_GROUP_NAME_MAX_LENGTH} characters or fewer'
+#             )
+
+
+# _ALLOWED_RTSP_SCHEMES = {'rtsp', 'rtsps'}
+
+
+# def _validate_camera_rtsp_url(item: dict) -> None:
+#     """Reject any custom camera URL whose scheme isn't rtsp/rtsps.
+
+#     See _normalize_branch_keyed_config's docstring for why this matters:
+#     the stored value is later opened directly by an ffmpeg-backed
+#     cv2.VideoCapture on the backend (app.py's /api/stream/<camera_id>) and by
+#     the local node client, both of which happily follow http(s):// (and other
+#     schemes) — an unvalidated URL here is a straight path to SSRF against
+#     internal infrastructure. A webcam entry has no rtsp_url and is exempt.
+#     """
+#     camera_type = str(item.get('camera_type') or item.get('cameraType') or item.get('type') or '').strip().lower()
+#     if camera_type == 'webcam':
+#         return
+
+#     raw_url = item.get('rtsp_url')
+#     if raw_url in (None, ''):
+#         raw_url = item.get('rtspUrl')
+#     if raw_url in (None, ''):
+#         return
+
+#     raw_url = str(raw_url).strip()
+#     scheme = urlparse(raw_url).scheme.lower()
+#     if scheme not in _ALLOWED_RTSP_SCHEMES:
+#         raise ValueError(
+#             "cameras[].rtsp_url must use the rtsp:// (or rtsps://) protocol"
+#         )
+
+
 # def _normalize_branch_keyed_config(value: object, branches: list[dict], bucket_name: str) -> dict[str, list[dict]]:
 #     """Normalize branch-keyed onboarding buckets to real branch UUID keys.
 
 #     Accepts incoming config keyed by either real Supabase branch UUIDs or current
 #     dashboard numeric route ids. Empty/missing branches are returned as empty
 #     arrays so saved config remains predictable.
+
+#     For bucket_name == 'cameras', each item's rtsp_url/rtspUrl is validated
+#     (see _validate_camera_rtsp_url) — this is the actual persistence point for
+#     onboarding/Settings camera config, and both /api/stream/<camera_id>
+#     (app.py) and the local node client ultimately hand this value straight to
+#     an ffmpeg-backed cv2.VideoCapture, which understands http(s)://, file://,
+#     and other schemes beyond rtsp. Without this check, a client could set
+#     rtsp_url to an internal http(s) URL and get the backend server (or the
+#     local node) to fetch it and stream the response back as "camera video" —
+#     classic SSRF. Rejecting anything but rtsp/rtsps here is the actual
+#     security boundary; any client-side check is UX only.
 #     """
 #     result: dict[str, list[dict]] = {
 #         str(branch.get('id')): []
@@ -1158,7 +1318,14 @@
 #         if not isinstance(raw_items, list):
 #             raise ValueError(f'{bucket_name}[{raw_key}] must be an array')
 
-#         result[backend_id] = [item for item in raw_items if isinstance(item, dict)]
+#         items = [item for item in raw_items if isinstance(item, dict)]
+#         if bucket_name == 'cameras':
+#             for item in items:
+#                 _validate_camera_rtsp_url(item)
+#         if bucket_name in ('departments', 'roles'):
+#             for item in items:
+#                 _validate_group_item_name(item, bucket_name)
+#         result[backend_id] = items
 
 #     return result
 
@@ -1353,7 +1520,12 @@
 
 #     return {
 #         'orgName': org.get('name') or config.get('orgName') or '',
-#         'bizType': org.get('org_type') or config.get('bizType') or 'business',
+#         'bizType': (
+#             org.get('business_type')
+#             or org.get('org_type')
+#             or config.get('bizType')
+#             or 'business'
+#         ),
 #         'tagline': profile.get('tagline') or config.get('tagline') or '',
 #         'address': profile.get('address') or config.get('address') or '',
 #         'city': profile.get('city') or config.get('city') or '',
@@ -1493,6 +1665,15 @@
 #     }
 
 # def _person_code_from_payload(payload: dict, people_type: str, fallback: str = '') -> str:
+#     # Single choke point for both create_client_staff and update_client_staff
+#     # (support_db_staff.py) — validating here means every write path gets
+#     # the same length cap and character allow-list for free, with no risk of
+#     # the two call sites drifting apart the way name validation once did
+#     # between create and update (see the comment above the update loop in
+#     # support_db_staff.py). Raises ValueError on empty, oversized, or
+#     # markup/SQL-shaped input; surfaced as a 400 by the route the same way
+#     # _validate_person_name's ValueError already is.
+#     from support_db_staff import _validate_person_code
 #     value = (
 #         payload.get('person_code')
 #         or payload.get('personCode')
@@ -1507,10 +1688,7 @@
 #         or payload.get('employee_id')
 #         or fallback
 #     )
-#     text = str(value or '').strip()
-#     if not text:
-#         raise ValueError('Person code is required.')
-#     return text
+#     return _validate_person_code(value, _person_code_label(people_type))
 
 # def _person_code_label(people_type: object) -> str:
 #     from support_db_staff import _normalize_people_type
@@ -1613,7 +1791,9 @@
  
 #     Separation of concerns:
 #       - Profile fields (name, email, phone, photo) are updated independently.
-#       - Password change requires current_password bcrypt verification.
+#       - Password change trusts the caller's session (the route this is
+#         reached through is behind @require_client_dashboard_auth's
+#         self-only JWT check) — no current_password re-verification.
 #       - must_change_password is only cleared on a successful password change.
 #       - A profile-only save never touches password state at all.
  
@@ -1697,20 +1877,20 @@
 #     if photo_name_value is not None:
 #         update_data['profile_image_name'] = str(photo_name_value).strip() or None
  
-#     # ── Password change ──────────────────────────────────────────────────────
-#     current_password = str(payload.get('current_password') or '')
-#     new_password = str(payload.get('new_password') or '')
+#     # ── Password change ────────────────────────────────────────────────
+#     # No current_password check: this function is only ever reached via
+#     # routes behind @require_client_dashboard_auth's self-only check
+#     # (g.dashboard_user['id'] == user_id, from a signed JWT — see
+#     # client_dashboard_auth.py). The session itself is the proof of
+#     # identity; re-asking for the current password here would be a second,
+#     # redundant login, not additional security, and it breaks first-login
+#     # flows where the password was auto-generated and never seen by the
+#     # user (see StaffManagement.tsx's credentials-download modal).
+#     new_password = str(payload.get('new_password') or '').strip()
  
 #     if new_password:
-#         if len(new_password) < 6:
-#             raise ValueError('New password must be at least 6 characters')
- 
-#         if not current_password:
-#             raise ValueError('Current password is required to change password')
- 
-#         if not _verify_password(current_password, current.get('password_hash') or ''):
-#             raise ValueError('Current password is incorrect')
- 
+#         validate_strong_password(new_password)
+
 #         update_data['password_hash'] = _hash_password(new_password)
 #         update_data['must_change_password'] = False
 #         update_data['password_changed_at'] = datetime.now(timezone.utc).isoformat()
@@ -1743,6 +1923,32 @@
 #     # Re-fetch via the canonical session builder so the response shape is
 #     # identical to what login / refreshUser return.
 #     return get_client_user_session_by_id(str(user_id))
+
+# def change_own_dashboard_password(account_type: str, user_id: str, new_password: str) -> dict:
+#     """
+#     Single entry point for 'change my own password' from the Client
+#     Dashboard, regardless of which table the caller's session lives in.
+ 
+#     account_type MUST come from g.dashboard_user (the decoded JWT set by
+#     @require_client_dashboard_auth in client_dashboard_auth.py) — never
+#     from the request body. Same for user_id. This keeps the whole
+#     endpoint free of any user-id-spoofing surface: whoever the token says
+#     you are is the only account you can ever touch here.
+ 
+#     Dispatches to the table-specific implementation:
+#       - 'client_user'  -> update_client_user_profile (password-only call,
+#                           reuses its existing validation/hashing so there
+#                           is exactly one place that logic lives).
+#       - 'client_staff' -> support_db_staff.update_client_staff_own_password.
+#     """
+#     if account_type == 'client_staff':
+#         from support_db_staff import update_client_staff_own_password
+#         return update_client_staff_own_password(str(user_id), new_password)
+ 
+#     if account_type == 'client_user':
+#         return update_client_user_profile(str(user_id), {'new_password': new_password})
+ 
+#     raise ValueError('Unsupported account type for password change')
 
 
 """
@@ -2776,55 +2982,80 @@ def _normalize_named_items_by_branch(value: object, branches: list[dict]) -> dic
         result[str(ui_id)] = normalized
     return result
 
-def _normalize_cameras_by_branch(value: object, branches: list[dict]) -> dict[str, list[dict]]:
-    """Map camera configs from backend branch UUID keys into dashboard UI branch ids."""
+def _live_cameras_by_branch(org_id: str, branches: list[dict]) -> dict[str, list[dict]]:
+    """Build the Client Dashboard's camera-by-branch map from branch_cameras
+    with live per-camera status merged in — the single source of truth for
+    both this bootstrap config and /api/cctv/live-tracking.
+
+    Replaces the old onboarding-blob-based _normalize_cameras_by_branch,
+    which read client_onboarding_configs.cameras: a JSONB snapshot taken at
+    onboarding time that goes stale the moment a client edits cameras
+    afterward (list_client_cameras()'s own docstring warns against reading
+    it), and whose ids never match branch_cameras.id — the id space the
+    local node itself uses — so live heartbeat status could never be joined
+    onto it correctly. branch_cameras is also what get_node_config() (what
+    the node actually runs) and list_client_cameras() (what
+    /api/cctv/live-tracking already correctly shows) both read, so this
+    keeps every surface — node, this dashboard, and the live tracking page —
+    looking at the exact same camera identities.
+    """
+    from support_db_attendance_dashboard import list_client_cameras
+    from support_db_nodes import apply_camera_live_status
+
     backend_to_ui, ui_to_backend = _branch_maps(branches)
     result: dict[str, list[dict]] = {str(i): [] for i in range(1, len(branches) + 1)}
 
-    if not isinstance(value, dict):
-        return result
+    raw_cameras = list_client_cameras(org_id) or []
+    live_cameras = apply_camera_live_status(raw_cameras, org_id)
 
-    for raw_key, raw_items in value.items():
-        ui_id = _ui_branch_key(raw_key, backend_to_ui)
+    for item in live_cameras:
+        backend_branch_id = str(item.get('branch_id') or '').strip()
+        ui_id = backend_to_ui.get(backend_branch_id)
         if not ui_id:
             continue
-        backend_branch_id = backend_to_ui.get(str(raw_key)) and str(raw_key)
-        if not backend_branch_id:
-            backend_branch_id = ui_to_backend.get(str(ui_id))
 
-        items = raw_items if isinstance(raw_items, list) else []
-        normalized: list[dict] = []
-        for idx, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
-                continue
-            cam_id = str(item.get('id') or f'camera-{ui_id}-{idx}').strip()
-            name = str(item.get('name') or f'Camera {idx}').strip()
-            rtsp_url = str(item.get('rtspUrl') or item.get('rtsp_url') or '').strip()
-            normalized.append({
-                **item,
-                'id': cam_id,
-                'branchId': ui_id,
-                'backend_branch_id': backend_branch_id,
-                'backendBranchId': backend_branch_id,
-                'name': name,
-                'location': str(item.get('location') or name).strip(),
-                'rtspUrl': rtsp_url,
-                'rtsp_url': rtsp_url,
-                'channel': str(item.get('channel') or '').strip(),
-                'type': item.get('type') or 'nvr',
-                'status': item.get('status') or 'Normal',
-                'streamPath': item.get('streamPath') or item.get('stream_path'),
-            })
-        result[str(ui_id)] = normalized
+        cam_id = str(item.get('id') or '').strip()
+        name = str(item.get('camera_name') or item.get('name') or 'Camera').strip()
+        rtsp_url = str(item.get('rtsp_url') or item.get('rtspUrl') or '').strip()
+        last_seen = item.get('lastSeen') or item.get('last_seen')
+
+        result.setdefault(str(ui_id), []).append({
+            'id': cam_id,
+            'branchId': ui_id,
+            'backend_branch_id': backend_branch_id,
+            'backendBranchId': backend_branch_id,
+            'name': name,
+            'location': str(item.get('location') or name).strip(),
+            'rtspUrl': rtsp_url,
+            'rtsp_url': rtsp_url,
+            'channel': str(item.get('channel') or '').strip(),
+            'type': item.get('camera_type') or 'nvr',
+            'cameraType': item.get('camera_type') or 'nvr',
+            # Always one of Normal / Offline / Not Synced — see
+            # apply_camera_live_status(). Never defaulted to 'Normal' here.
+            'status': item.get('status'),
+            **({'lastSeen': last_seen} if last_seen else {}),
+            'streamPath': item.get('stream_path') or item.get('streamPath'),
+        })
+
     return result
 
-def _merge_operational_config(base_config: dict, saved: Optional[dict], branches: list[dict]) -> dict:
+def _merge_operational_config(
+    base_config: dict,
+    saved: Optional[dict],
+    branches: list[dict],
+    org_id: str,
+) -> dict:
     """
     Merge client operational configuration into support-owned base config.
 
     Supabase is the source of truth. Support-owned values stay authoritative:
     branches, capacities, purchased modules, attendance mode, and max branches.
-    Client-owned values come from client_onboarding_configs.
+    Client-owned values come from client_onboarding_configs — with the
+    exception of cameras, which come from branch_cameras via
+    _live_cameras_by_branch(): see that function's docstring for why the
+    onboarding blob is never a valid camera source once a client can edit
+    cameras post-onboarding.
     """
     if not saved:
         return base_config
@@ -2855,7 +3086,7 @@ def _merge_operational_config(base_config: dict, saved: Optional[dict], branches
 
     merged['departments'] = _normalize_named_items_by_branch(saved.get('departments'), branches)
     merged['roles'] = _normalize_named_items_by_branch(saved.get('roles'), branches)
-    merged['cameras'] = _normalize_cameras_by_branch(saved.get('cameras'), branches)
+    merged['cameras'] = _live_cameras_by_branch(org_id, branches)
     merged['network'] = saved.get('network') or {}
     merged['networkConfig'] = saved.get('network') or {}
 
@@ -2917,7 +3148,7 @@ def get_client_bootstrap(org_id: str) -> dict:
     access_status = org.get('status') or _compute_org_status(org_key)
     onboarding_completed = bool(onboarding_config and onboarding_config.get('completed_at'))
     base_config = _build_client_config(org, branches, active_module_keys, module_people_types_by_branch=module_people_types_by_branch)
-    config = _merge_operational_config(base_config, onboarding_config, branches)
+    config = _merge_operational_config(base_config, onboarding_config, branches, org_key)
 
     return {
         'organization': org,
