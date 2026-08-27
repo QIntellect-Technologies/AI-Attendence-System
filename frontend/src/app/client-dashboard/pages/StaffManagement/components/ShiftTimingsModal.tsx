@@ -252,25 +252,25 @@ export const ShiftTimingsModal: FC<{
       };
       try {
         if (row.isDraft) {
-          const { shift, notes } = await createShift(
+          const { shift, warnings } = await createShift(
             branchId,
             organizationId,
             payload,
           );
-          nextNotes.push(...notes);
+          nextNotes.push(...warnings);
           setRows((items) =>
             items.map((item) =>
               item.id === row.id ? shiftRecordToDraftRow(shift) : item,
             ),
           );
         } else {
-          const { notes } = await updateShift(
+          const { warnings } = await updateShift(
             branchId,
             row.id,
             organizationId,
             payload,
           );
-          nextNotes.push(...notes);
+          nextNotes.push(...warnings);
         }
         anySucceeded = true;
       } catch (error) {

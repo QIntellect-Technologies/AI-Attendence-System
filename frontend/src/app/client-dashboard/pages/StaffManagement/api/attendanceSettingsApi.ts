@@ -13,7 +13,8 @@
  * additive. Nothing here repurposes or removes the legacy fields.
  */
 
-import { BASE_URL, type User } from "../../../api/api";
+import { BASE_URL, dashboardAuthHeaders, type User } from "../../../api/api";
+import { handleSessionExpired } from "../../../api/sessionExpired";
 import type { ShiftConflict } from "../utils/shiftOverlap";
 
 /**
@@ -58,10 +59,20 @@ async function clientJson<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  // Every /api/client/* route behind client_dashboard_auth.py's
+  // @require_client_auth rejects requests with no Authorization header
+  // (see support_auth.py / client_dashboard_auth.py's 401 "Authorization
+  // header required"). dashboardAuthHeaders() reads the same
+  // "dashboardAuthToken" localStorage key staffApi.ts's staffJson and
+  // api.ts's other callers use — this adapter was missing it entirely,
+  // so every shift/department/manual-instruction call in this file went
+  // out unauthenticated and 401'd.
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   if (options.body && !headers.has("Content-Type"))
     headers.set("Content-Type", "application/json");
+  const auth = dashboardAuthHeaders() as Record<string, string>;
+  Object.entries(auth).forEach(([key, value]) => headers.set(key, value));
 
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
@@ -71,6 +82,19 @@ async function clientJson<T>(
   });
 
   const data = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    // Missing/expired session — same handling as staffApi.ts's staffJson,
+    // so a stale token surfaces the login dialog instead of a generic
+    // "Authorization header required" error string in shiftsError/applyError.
+    const message =
+      data?.error || data?.message || "Session expired. Please log in again.";
+    handleSessionExpired(message);
+    const err = new Error(message) as Error & { isAuthError?: boolean };
+    err.isAuthError = true;
+    throw err;
+  }
+
   if (!res.ok || data?.success === false) {
     const message =
       data?.message || data?.error || `Request failed: ${res.status}`;

@@ -2032,7 +2032,10 @@ export default function PayrollModule() {
       )}
 
       {isRulesModalOpen && (
-        <Modal onClose={() => !policySaving && setIsRulesModalOpen(false)}>
+        <Modal
+          scrollable
+          onClose={() => !policySaving && setIsRulesModalOpen(false)}
+        >
           <h2 style={modalTitleStyle}>
             {isGlobal
               ? "Company Payroll Rules"
@@ -2930,6 +2933,13 @@ export default function PayrollModule() {
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: ${T.slate200}; border-radius: 4px; }
 
+        .payroll-modal-scrollable::-webkit-scrollbar { width: 6px; }
+        .payroll-modal-scrollable::-webkit-scrollbar-track { background: transparent; }
+        .payroll-modal-scrollable::-webkit-scrollbar-thumb {
+          background: ${T.slate200};
+          border-radius: 6px;
+        }
+
         @keyframes payroll-spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
@@ -3008,10 +3018,11 @@ const BreakdownValue: React.FC<{
   </span>
 );
 
-const Modal: React.FC<{ children: React.ReactNode; onClose: () => void }> = ({
-  children,
-  onClose,
-}) => (
+const Modal: React.FC<{
+  children: React.ReactNode;
+  onClose: () => void;
+  scrollable?: boolean;
+}> = ({ children, onClose, scrollable = false }) => (
   <div
     style={{
       position: "fixed",
@@ -3035,11 +3046,18 @@ const Modal: React.FC<{ children: React.ReactNode; onClose: () => void }> = ({
         maxWidth: 460,
         boxShadow: T.shadowLg,
         position: "relative",
+        ...(scrollable
+          ? {
+              height: "fit-content",
+              minHeight: 0,
+              maxHeight: "min(75vh, calc(100vh - 32px))",
+              overflow: "hidden",
+            }
+          : null),
       }}
       onClick={(event) => event.stopPropagation()}
     >
       <button
-        onClick={onClose}
         style={{
           position: "absolute",
           top: 16,
@@ -3053,7 +3071,22 @@ const Modal: React.FC<{ children: React.ReactNode; onClose: () => void }> = ({
       >
         <X size={18} />
       </button>
-      {children}
+      {scrollable ? (
+        <div
+          className="payroll-modal-scrollable"
+          style={{
+            maxHeight: "calc(min(75vh, calc(100vh - 32px)) - 64px)",
+            overflowY: "auto",
+            scrollbarGutter: "stable",
+            scrollbarWidth: "auto",
+            scrollbarColor: `${T.slate200} transparent`,
+          }}
+        >
+          {children}
+        </div>
+      ) : (
+        children
+      )}
     </div>
   </div>
 );

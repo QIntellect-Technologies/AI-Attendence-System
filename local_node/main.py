@@ -9,6 +9,24 @@ import time
 import webbrowser
 from threading import Timer
 
+# PyInstaller's --windowed build (build_pyinstaller.py's onefile target)
+# runs with no console attached, so sys.stdout/sys.stderr are None rather
+# than a real stream. Any library on the import path below that calls
+# print(...) or sys.stdout.write(...) unconditionally — cv2 and onnxruntime
+# both do this for certain warnings — hits `AttributeError: 'NoneType'
+# object has no attribute 'write'` on that call, which is unhandled and
+# kills the whole process. This must run before cv2 (or anything else) is
+# imported. Console builds (--console / Nuitka's --windows-console-mode=
+# force) are unaffected: sys.stdout/stderr are real streams there, so this
+# is a no-op for them. All actual diagnostics still go to LOG_DIR/node.log
+# via logging_config.setup_logging() regardless of console state — this
+# guard only prevents a crash, it does not change what gets logged.
+if getattr(sys, "frozen", False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
 import cv2
 
 try:

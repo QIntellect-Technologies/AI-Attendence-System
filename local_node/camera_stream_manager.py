@@ -92,12 +92,75 @@ STREAM_DISPLAY_INTERPOLATION = cv2.INTER_LINEAR
 # running. Keeps a viewer from hanging forever if the processor stalls.
 MJPEG_WAIT_TIMEOUT_SECONDS = 1.0
 
+
+def _build_reconnecting_placeholder_jpeg() -> bytes:
+    """One dark-gray frame with a centered 'Reconnecting…' label, built
+    once at import time and reused for every camera and every reconnect
+    attempt (it never changes, so there is nothing to gain from rebuilding
+    it per-camera or per-attempt).
+
+    mjpeg_frames() has no way today to tell a viewer 'the reader is
+    between connections, not dead' — the exact same MJPEG stream carries
+    either a real frame or nothing at all, so a normal few-second RTSP
+    reconnect and a genuinely broken camera both render as an identical
+    flat black tile in the browser grid. Publishing this instead during
+    that window (see _run_reader's open/read failure paths) makes the two
+    cases visually distinguishable without the UI needing any new state
+    or polling."""
+    canvas = np.full((360, 640, 3), 32, dtype=np.uint8)
+    text = "Reconnecting..."
+    font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2
+    (text_w, text_h), _ = cv2.getTextSize(text, font, scale, thickness)
+    origin = ((canvas.shape[1] - text_w) // 2, (canvas.shape[0] + text_h) // 2)
+    cv2.putText(canvas, text, origin, font, scale, (210, 210, 210), thickness, cv2.LINE_AA)
+    ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
+    return encoded.tobytes() if ok else b""
+
+
+_RECONNECTING_PLACEHOLDER_JPEG = _build_reconnecting_placeholder_jpeg()
+
+# Bound the connect/read timeout explicitly. Without this, an unreachable
+# NVR/DVR doesn't fail — cv2.VideoCapture(...) just blocks inside its own
+# constructor for however long the underlying ffmpeg/TCP stack is willing
+# to wait (ffmpeg's own default is ~30s, as seen in
+# "_opencv_ffmpeg_interrupt_callback Stream timeout triggered after
+# 30000ms" in node.log when the LAN briefly dropped this camera).
+#
+# Defined here (rather than down near _rtsp_timeout_params(), the more
+# obvious home) because RTSP_LOW_LATENCY_ENV_OPTIONS below needs the same
+# number for ffmpeg's OWN "stimeout"/"timeout" AVOptions — see that
+# constant's comment for why both mechanisms are needed. One constant,
+# two enforcement paths, so they cannot drift out of sync with each other.
+RTSP_OPEN_TIMEOUT_MSEC = 5000
+RTSP_READ_TIMEOUT_MSEC = 5000
+
 # RTSP/FFMPEG-backend frames arrive over a socket that keeps buffering
 # while nothing reads it. cv2's CAP_PROP_BUFFERSIZE is a no-op on the
 # FFMPEG backend, so the only real way to stop the stream drifting behind
 # live is (a) tell ffmpeg itself not to buffer, and (b) drain any frames
 # it queued up before trusting the next one as "now".
-RTSP_LOW_LATENCY_ENV_OPTIONS = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0"
+#
+# stimeout/timeout (both included — the RTSP demuxer's socket-timeout
+# AVOption was renamed between ffmpeg versions, and an unrecognized key
+# here is silently ignored rather than an error, so there's no downside
+# to setting both) bound the TCP connect+read timeout INSIDE ffmpeg's own
+# RTSP demuxer, in microseconds. This is a second, independent enforcement
+# of the same limit as CAP_PROP_OPEN_TIMEOUT_MSEC/CAP_PROP_READ_TIMEOUT_MSEC
+# (see _rtsp_timeout_params() below) — belt-and-braces on purpose. Those
+# two cv2 properties are documented (OpenCV 4.5.4+) to bound the open, but
+# in production a real node's log showed ffmpeg's ~30s built-in default
+# winning anyway — three ~30s "Stream timeout triggered" hits back to
+# back, once per open() call across the hw-accel candidates and the
+# plain-software fallback, turning one transient NVR blip into ~90s of
+# black screen. The timeout is therefore also enforced at the
+# ffmpeg-option level, which the RTSP demuxer's own connect/read loop
+# consumes directly and does not depend on OpenCV's C++ property plumbing
+# (or on `cap.set(...)` being called before the FFMPEG backend has
+# already finished its open() synchronously inside the constructor).
+RTSP_LOW_LATENCY_ENV_OPTIONS = (
+    "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0"
+    f"|stimeout;{RTSP_OPEN_TIMEOUT_MSEC * 1000}|timeout;{RTSP_OPEN_TIMEOUT_MSEC * 1000}"
+)
 
 # How many frames the reader grabs per iteration, retrieving only the last.
 #
@@ -280,23 +343,76 @@ _HW_ACCEL_CANDIDATES: tuple[tuple[str, int | None], ...] = (
 )
 
 
-def _open_capture_with_hw_accel(url: str, backend: int) -> cv2.VideoCapture | None:
-    """Try each candidate in `_HW_ACCEL_CANDIDATES` in order, returning the
-    first capture that both opens AND reports the acceleration actually
-    engaged. Returns None if every candidate fails or silently falls back
-    to software — the caller (`_open_capture`) then does a plain,
-    unaccelerated open, which always succeeds if the stream is reachable.
+# CAP_PROP_READ_TIMEOUT_MSEC bounds later grab()/read() calls and CAN be
+# applied with cap.set(...) after a successful open, because those calls
+# happen after construction. CAP_PROP_OPEN_TIMEOUT_MSEC cannot — the
+# FFMPEG backend performs the actual open synchronously INSIDE the
+# VideoCapture(...) constructor, so by the time a caller reaches a later
+# cap.set(CAP_PROP_OPEN_TIMEOUT_MSEC, ...) line the open has already run
+# to completion (or blocked for ffmpeg's own default, which is exactly
+# the bug this fixes). Both timeouts must therefore be passed as
+# constructor `params`, exactly like CAP_PROP_HW_ACCELERATION already is
+# below — that's the only point in OpenCV's FFMPEG backend where they can
+# still change the open's own behavior. Available since OpenCV 4.5.4;
+# harmless to include on older builds since _rtsp_timeout_params() below
+# omits any prop name the installed cv2 doesn't expose.
+def _rtsp_timeout_params() -> list[int]:
+    """Flat [prop, value, prop, value, ...] pairs for the two timeouts
+    above, filtered to whatever this cv2 build actually exposes. Shared
+    by every VideoCapture(...) construction site for a network stream
+    (hardware-accelerated candidates and the plain software fallback) so
+    the two open paths can't silently drift out of sync with each other
+    the way HW_ACCELERATION and OPEN_TIMEOUT_MSEC previously did — the
+    hw-accel candidates had a bounded open timeout, the plain fallback
+    open did not, and it was the plain fallback that hit ffmpeg's ~30s
+    default in production."""
+    params: list[int] = []
+    for prop_name, timeout_ms in (
+        ("CAP_PROP_OPEN_TIMEOUT_MSEC", RTSP_OPEN_TIMEOUT_MSEC),
+        ("CAP_PROP_READ_TIMEOUT_MSEC", RTSP_READ_TIMEOUT_MSEC),
+    ):
+        prop = getattr(cv2, prop_name, None)
+        if prop is not None:
+            params += [prop, timeout_ms]
+    return params
 
-    isOpened() alone is not sufficient to confirm success: OpenCV can open
-    the stream and decode in software while still returning an opened
-    capture (see `_report_capture_properties`'s docstring — this is the
-    same failure mode that diagnostic exists to catch). Reading back
-    CAP_PROP_HW_ACCELERATION after open is what actually confirms the
-    request was honored, so a candidate that silently downgraded is
-    rejected here instead of being mistaken for a working GPU path.
+
+def _open_capture_with_hw_accel(url: str, backend: int) -> tuple[cv2.VideoCapture | None, bool]:
+    """Try each candidate in `_HW_ACCEL_CANDIDATES` in order, returning the
+    first capture that opens at all. Prefers one that also confirms
+    hardware acceleration actually engaged, but falls back to a plain
+    opened-in-software capture rather than throwing it away — see the
+    return-value contract below.
+
+    isOpened() alone is not sufficient to confirm hw accel: OpenCV can
+    open the stream and decode in software while still returning an
+    opened capture (see `_report_capture_properties`'s docstring — this
+    is the same failure mode that diagnostic exists to catch). Reading
+    back CAP_PROP_HW_ACCELERATION after open is what actually confirms
+    the request was honored.
+
+    Returns (capture_or_None, source_unreachable):
+      - (cap, False): opened. May or may not have hw accel — caller can
+        tell via CAP_PROP_HW_ACCELERATION if it cares.
+      - (None, True): every candidate FAILED TO OPEN — i.e. the RTSP
+        source itself is unreachable (NVR down, network blip, wrong
+        credentials), not merely "no hardware acceleration available".
+        Retrying a different acceleration mode against a source that
+        just failed to connect burns another full RTSP_OPEN_TIMEOUT_MSEC
+        for a result already known — this is exactly what turned one
+        real reconnect into three back-to-back timeouts (~90s of a black
+        preview) in production. The caller must NOT attempt the plain-
+        software fallback open in this case either — same unreachable
+        source, same guaranteed timeout.
+      - (None, False): this cv2 build doesn't expose HW_ACCELERATION at
+        all, or every candidate list entry was unsupported. The source's
+        reachability was never actually tested — caller should proceed
+        to the plain software open as normal.
     """
     if not hasattr(cv2, "CAP_PROP_HW_ACCELERATION"):
-        return None
+        return None, False
+
+    software_fallback: cv2.VideoCapture | None = None
 
     for accel_attr, device_index in _HW_ACCEL_CANDIDATES:
         accel_value = getattr(cv2, accel_attr, None)
@@ -306,17 +422,22 @@ def _open_capture_with_hw_accel(url: str, backend: int) -> cv2.VideoCapture | No
         params = [cv2.CAP_PROP_HW_ACCELERATION, accel_value]
         if device_index is not None:
             params += [cv2.CAP_PROP_HW_DEVICE, device_index]
+        params += _rtsp_timeout_params()
 
         try:
             cap = cv2.VideoCapture(url, backend, params)
         except Exception:
-            continue
+            cap = None
 
-        if cap is None:
-            continue
-        if not cap.isOpened():
-            cap.release()
-            continue
+        if cap is None or not cap.isOpened():
+            # Genuine connection failure, not an acceleration-negotiation
+            # miss. Stop here — every remaining candidate (and the plain
+            # software open after this function returns) would hit the
+            # identical unreachable source and pay the identical timeout
+            # for nothing.
+            if cap is not None:
+                cap.release()
+            return None, True
 
         try:
             negotiated = cap.get(cv2.CAP_PROP_HW_ACCELERATION)
@@ -324,11 +445,21 @@ def _open_capture_with_hw_accel(url: str, backend: int) -> cv2.VideoCapture | No
             negotiated = None
 
         if negotiated and int(negotiated) != 0:
-            return cap  # confirmed: hardware decode actually engaged
+            if software_fallback is not None:
+                software_fallback.release()
+            return cap, False  # confirmed: hardware decode actually engaged
 
-        cap.release()  # opened, but silently fell back to software — try the next candidate
+        # Opened fine (source IS reachable), just didn't confirm hw accel
+        # on this candidate. Keep it as a fallback instead of releasing it
+        # outright — if no later candidate does better, reuse THIS
+        # connection rather than paying for a third full RTSP handshake
+        # in _open_capture's plain-software branch.
+        if software_fallback is None:
+            software_fallback = cap
+        else:
+            cap.release()
 
-    return None
+    return software_fallback, False
 
 
 def _report_capture_properties(state: _CameraState, cap) -> None:
@@ -807,27 +938,29 @@ class CameraStreamManager:
             # each candidate in turn and confirms via readback (not just
             # isOpened()) that acceleration actually engaged, falling
             # through to a plain software open if none of them do.
-            cap = _open_capture_with_hw_accel(url, backend)
+            cap, source_unreachable = _open_capture_with_hw_accel(url, backend)
+            if cap is None and source_unreachable:
+                # Every hw-accel candidate already proved this exact
+                # source unreachable — a third open attempt in plain
+                # software mode would hit the same dead connection and
+                # burn another full RTSP_OPEN_TIMEOUT_MSEC for a result
+                # we already know. Return None now so the caller's normal
+                # retry/backoff path (_run_reader -> _handle_open_or_read_failure
+                # -> RECONNECT_BACKOFF_SECONDS) takes over immediately
+                # instead of waiting through a guaranteed-failing open.
+                return None
             if cap is None:
-                cap = cv2.VideoCapture(url, backend)
-            # Bound the connect/read timeout explicitly. Without this, an
-            # unreachable NVR/DVR doesn't fail — cap.read() just blocks for
-            # however long the underlying ffmpeg/TCP stack is willing to wait
-            # (unbounded on some builds), which is exactly what makes a
-            # genuinely-dead camera look identical to a UI/threading bug: the
-            # reader thread is alive, just stuck inside a single read() call
-            # instead of ever reaching the failure/retry path below. Available
-            # since OpenCV 4.5.4; silently skipped on older builds.
-            for prop_name, timeout_ms in (
-                ("CAP_PROP_OPEN_TIMEOUT_MSEC", 5000),
-                ("CAP_PROP_READ_TIMEOUT_MSEC", 5000),
-            ):
-                prop = getattr(cv2, prop_name, None)
-                if prop is not None:
-                    try:
-                        cap.set(prop, timeout_ms)
-                    except Exception:
-                        pass
+                # Same timeout params as the hw-accel candidates above,
+                # passed into the constructor for the same reason: this is
+                # a plain software open() of the exact same RTSP source,
+                # so it needs the exact same bounded connect timeout, not
+                # ffmpeg's ~30s default. See _rtsp_timeout_params()
+                # docstring for why this must be a constructor param, not
+                # a later cap.set() call. Only reached when
+                # HW_ACCELERATION isn't supported by this cv2 build at
+                # all — source reachability was never actually tested
+                # above, so this open is genuine.
+                cap = cv2.VideoCapture(url, backend, _rtsp_timeout_params())
 
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -841,6 +974,18 @@ class CameraStreamManager:
         _report_capture_properties(state, cap)
         return cap
 
+    @staticmethod
+    def _publish_jpeg(state: _CameraState, jpeg_bytes: bytes) -> None:
+        """Push a JPEG — a real encoded frame or a status placeholder —
+        into the shared 'latest_jpeg' slot and wake any browser tabs
+        blocked waiting for the next one. Single choke point for the
+        write side of the mjpeg_frames() contract, so real frames
+        (_encode_and_publish) and the reconnect placeholder (_run_reader,
+        below) can never diverge on how they publish."""
+        with state.jpeg_ready:
+            state.latest_jpeg = jpeg_bytes
+            state.jpeg_version += 1
+            state.jpeg_ready.notify_all()
 
     def _run_reader(self, state: _CameraState) -> None:
         cap: cv2.VideoCapture | None = None
@@ -866,6 +1011,12 @@ class CameraStreamManager:
                             state.camera_id, source_desc, state.camera_type,
                         )
                         _handle_open_or_read_failure(state)
+                        # Show "Reconnecting…" instead of leaving whatever
+                        # was on screen before (nothing, on first boot, or
+                        # a now-stale last-known frame) — see
+                        # _build_reconnecting_placeholder_jpeg's docstring
+                        # for why this distinction matters to a viewer.
+                        self._publish_jpeg(state, _RECONNECTING_PLACEHOLDER_JPEG)
                         state.stop_event.wait(RECONNECT_BACKOFF_SECONDS)
                         continue
                     state.consecutive_failures = 0
@@ -927,6 +1078,7 @@ class CameraStreamManager:
                     cap.release()
                     cap = None
                     _handle_open_or_read_failure(state)
+                    self._publish_jpeg(state, _RECONNECTING_PLACEHOLDER_JPEG)
                     state.stop_event.wait(RECONNECT_BACKOFF_SECONDS)
                     continue
 
@@ -1001,10 +1153,7 @@ class CameraStreamManager:
         if not ok:
             return
 
-        with state.jpeg_ready:
-            state.latest_jpeg = encoded.tobytes()
-            state.jpeg_version += 1
-            state.jpeg_ready.notify_all()
+        CameraStreamManager._publish_jpeg(state, encoded.tobytes())
 
     # ── detector thread: the CPU-heavy work, off the display path ───────
 
@@ -1143,23 +1292,39 @@ class CameraStreamManager:
             bbox = face.get("bbox")
             track_id, track = self._assign_track(state, bbox, now)
 
-            # Only pay for best_match() the FIRST time a face is seen, or
-            # if it's still unidentified — once a track has a confirmed
-            # match, every subsequent frame of that same physical face
-            # (same person standing in view) reuses the cached identity
-            # instead of re-running the match against every enrolled
-            # profile again. This is what actually stops the redundant
-            # work that Fix 1's cache alone doesn't: Fix 1 makes each
-            # match cheap; this stops it from running dozens of times per
-            # second for the same person.
-            if track.get("match") is None:
+            # Skip best_match() ONLY once a track has a CONFIRMED match —
+            # that's the only case where re-matching genuinely adds
+            # nothing, since the same physical face's identity doesn't
+            # change frame to frame. An UNMATCHED track is retried on
+            # every detection pass it's part of, not just its first.
+            #
+            # This used to cache a failed first attempt as permanent
+            # "no match" (see git history / previous revision), on the
+            # theory that best_match() was expensive enough to ration.
+            # It isn't: best_match() is a NumPy cosine-similarity compare
+            # against an already-cached candidate list — no model
+            # inference. The actual expensive step, detect_and_extract(),
+            # already ran above regardless of whether matching happens,
+            # so retrying the comparison here costs next to nothing. What
+            # the old behaviour DID cost: a single poor-quality first
+            # embedding (motion blur or an off-angle while someone is
+            # still walking into frame — exactly the common case) would
+            # permanently blacklist that person for their entire visit,
+            # even though a much better frame of the same face might
+            # arrive a second later. That is what was causing marks to
+            # go missing rather than merely being late.
+            if not track.get("matched"):
                 match_started = perf_stats.now()
                 match = best_match(embedding)
                 perf_stats.record(state.camera_id, "detect.best_match", match_started)
-                track["match"] = match if match is not None else False   # False = "tried, no match"
+                if match is not None:
+                    track["match"] = match
+                    track["matched"] = True
+                else:
+                    perf_stats.count(state.camera_id, "detect.match_retry_still_unmatched")
             else:
                 perf_stats.count(state.camera_id, "detect.match_served_from_track")
-            match = track["match"] or None
+            match = track.get("match")
             if not match:
                 continue
 
@@ -1292,7 +1457,7 @@ class CameraStreamManager:
 
         tid = state.next_track_id
         state.next_track_id += 1
-        track = {"bbox": bbox, "last_seen": now, "match": None}
+        track = {"bbox": bbox, "last_seen": now, "match": None, "matched": False}
         state.tracked_faces[tid] = track
         return tid, track
     

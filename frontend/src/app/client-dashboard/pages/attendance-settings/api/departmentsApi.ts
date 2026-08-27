@@ -14,7 +14,8 @@
  * Mirrors client_attendance_settings_routes.py's department routes 1:1.
  */
 
-import { BASE_URL } from "../../../api/api";
+import { BASE_URL, dashboardAuthHeaders } from "../../../api/api";
+import { handleSessionExpired } from "../../../api/sessionExpired";
 
 export interface Department {
   id: string;
@@ -43,14 +44,32 @@ async function settingsJson<T extends object>(
   path: string,
   options?: RequestInit,
 ): Promise<T & Envelope<T>> {
+  // Same fix as attendanceSettingsApi.ts's clientJson: these routes sit
+  // behind client_dashboard_auth.py's @require_client_auth and 401 with
+  // "Authorization header required" without a Bearer token. This adapter
+  // never attached dashboardAuthHeaders(), so it always 401'd.
   const res = await fetch(`${BASE_URL}${path}`, {
     cache: "no-store",
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...dashboardAuthHeaders(),
+    },
     ...options,
   });
 
   const body = await res.json().catch(() => ({}));
+
+  if (res.status === 401) {
+    const message =
+      body?.error ?? body?.message ?? "Session expired. Please log in again.";
+    handleSessionExpired(message);
+    const err = new Error(message) as Error & { isAuthError?: boolean };
+    err.isAuthError = true;
+    throw err;
+  }
+
   if (!res.ok || body?.success === false) {
     throw new Error(body?.error ?? body?.message ?? res.statusText);
   }
