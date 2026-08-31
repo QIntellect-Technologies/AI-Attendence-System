@@ -24,6 +24,7 @@ import React, {
 } from "react";
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
+import { BASE_URL } from "../api/api";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -418,7 +419,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         clearOrganizationStorage();
 
-        const res = await fetch("/api/login", {
+        const res = await fetch(`${BASE_URL}/api/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: email.trim(), password }),
@@ -469,7 +470,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         clearOrganizationStorage();
 
-        const res = await fetch("/api/staff", {
+        const res = await fetch(`${BASE_URL}/api/staff`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -530,7 +531,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const token = localStorage.getItem(DASHBOARD_AUTH_TOKEN_KEY);
       if (token) {
-        void fetch("/api/client/auth/logout", {
+        void fetch(`${BASE_URL}/api/client/auth/logout`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         }).catch(() => {
@@ -574,8 +575,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
         const url =
           source === "client_users" || isUuidLike
-            ? `/api/client/session/${encodeURIComponent(rawId)}`
-            : `/api/users/${encodeURIComponent(rawId)}`;
+            ? `${BASE_URL}/api/client/session/${encodeURIComponent(rawId)}`
+            : `${BASE_URL}/api/users/${encodeURIComponent(rawId)}`;
 
         const storedToken = (() => {
           try {

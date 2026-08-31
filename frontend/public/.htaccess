@@ -17,7 +17,7 @@
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteBase /
+  RewriteBase /attendancepro/
 
   # Let real files (JS/CSS/images/fonts emitted by the Vite build) and
   # real directories serve normally — do not rewrite those.

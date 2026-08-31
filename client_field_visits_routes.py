@@ -188,6 +188,39 @@ def log_visit():
     return handle(_run)
 
 
+@client_field_visits_bp.route("/log/<visit_id>/checkout", methods=["POST"])
+@require_client_staff_auth
+def check_out_visit(visit_id):
+    """
+    Body: { "latitude"|"lat": float, "longitude"|"lng": float,
+            "client_action_id": str (optional -- offline-queue idempotency
+              key; see check_out_visit's docstring in support_db_visits.py) }
+
+    Closes out a visit opened by log_visit -- GPS only, no evidence gate
+    (unlike log_visit, there's no "missing required photo" judgment call
+    on the way out). Ownership (org_id/staff_id) is enforced the same way
+    as every other route here: from the verified JWT, never the body.
+    """
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        lat = payload.get("latitude", payload.get("lat"))
+        lng = payload.get("longitude", payload.get("lng"))
+        if lat is None or lng is None:
+            raise ValueError("latitude/longitude are required")
+
+        visit = visits_db.check_out_visit(
+            org_id=g.client_staff["org_id"],
+            staff_id=g.client_staff["id"],
+            visit_id=visit_id,
+            latitude=float(lat),
+            longitude=float(lng),
+            client_action_id=payload.get("client_action_id"),
+        )
+        return ok({"visit": visit})
+
+    return handle(_run)
+
+
 @client_field_visits_bp.route("/plans-history", methods=["GET"])
 @require_client_staff_auth
 def get_plans_history():

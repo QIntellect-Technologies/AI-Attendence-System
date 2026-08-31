@@ -57,10 +57,7 @@ scikit-image==0.22.0
 # useless on Railway's CPU-only compute. This index serves CPU-only
 # builds instead, cutting install size/time drastically.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.1.1
-torchvision==0.16.1
 onnxruntime==1.19.2  # CPU build — Railway has no GPU/CUDA available
-ultralytics==8.0.228
 insightface==0.7.3
 
 # Database
