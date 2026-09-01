@@ -12975,7 +12975,7 @@ if os.path.isdir(FRONTEND_DIST):
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
     def serve_spa(path):
-        if path.startswith("api/"):
+        if path.startswith("api/") or path.startswith("v1/"):
             return jsonify({
                 "success": False,
                 "error": "API endpoint not found",

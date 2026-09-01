@@ -303,7 +303,7 @@
 //     headers.set("Content-Type", "application/json");
 //   }
 
-//   const response = await fetch(`${API_BASE}${path}`, {
+//   const response = await fetch(`${API_BASE}/api${path}`, {
 //     ...options,
 //     signal,
 //     credentials: "same-origin",
@@ -926,7 +926,7 @@ async function requestJson<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${API_BASE}/api${path}`, {
     ...options,
     signal,
     credentials: "same-origin",
@@ -1130,7 +1130,8 @@ export async function initAiEngine(signal?: AbortSignal): Promise<void> {
 
 export function getCameraStreamUrl(camera: LiveCamera): string {
   return (
-    camera.streamUrl || `${API_BASE}/stream/${encodeURIComponent(camera.id)}`
+    camera.streamUrl ||
+    `${API_BASE}/api/stream/${encodeURIComponent(camera.id)}`
   );
 }
 

@@ -19,6 +19,8 @@
  * the org_id-qualified one).
  */
 
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || "";
+
 export function getClientAuthToken(): string | null {
   try {
     return (
@@ -44,7 +46,7 @@ export async function fetchClientJson<T>(
   init?: RequestInit,
 ): Promise<T> {
   const token = getClientAuthToken();
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     cache: "no-store",
     credentials: "include",
     headers: {

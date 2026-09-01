@@ -1712,6 +1712,10 @@ import {
 } from "../api/sessionExpired";
 import { ApiRequestError } from "../api/apiClient";
 
+const API_BASE_URL =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+    ?.VITE_API_BASE_URL || "";
+
 // ─── Master data types ────────────────────────────────────────────────────────
 
 export interface OrgBranch {
@@ -2854,7 +2858,7 @@ async function getClientBootstrap(
   }
 
   const res = await fetch(
-    `/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
+    `${API_BASE_URL}/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
     {
       cache: "no-store",
       headers: {

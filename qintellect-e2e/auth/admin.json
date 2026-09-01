@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://attendancepro.qintellecttechnologies.com",
+      "localStorage": [
+        {
+          "name": "support_access_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzYjQ3N2U2OC0zM2JjLTQxYTEtYjliZS01MDNjM2U3M2I4YTkiLCJlbWFpbCI6InN1cGVyYWRtaW5AcWludGVsbGVjdC5jb20iLCJyb2xlIjoic3VwZXJfYWRtaW4iLCJzaWQiOiJhYzYzOGZhMi1hNWY0LTQ4Y2MtYWY3MS0wYTJlNzgzZjcxZDMiLCJpYXQiOjE3ODgxNzczMjUsImV4cCI6MTc4ODIwNjEyNX0.lfQY6AF7LqSThJ9BViLtLmiSlQjWaCobUKghHkWTooY"
+        }
+      ]
+    }
+  ]
+}

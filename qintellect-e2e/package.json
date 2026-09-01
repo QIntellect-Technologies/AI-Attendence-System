@@ -1,0 +1,15 @@
+{
+  "name": "qintellect-e2e",
+  "private": true,
+  "scripts": {
+    "test:api": "playwright test --project=api",
+    "test:e2e": "playwright test --project=e2e-staff --project=e2e-admin",
+    "test:all": "playwright test",
+    "report": "playwright show-report",
+    "auth:staff": "playwright codegen --save-storage=auth/staff.json https://attendancepro.qintellecttechnologies.com",
+    "auth:admin": "playwright codegen --save-storage=auth/admin.json https://attendancepro.qintellecttechnologies.com"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}

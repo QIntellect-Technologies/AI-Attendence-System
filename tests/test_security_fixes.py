@@ -228,6 +228,22 @@ class TestRetentionPolicyFixes(unittest.TestCase):
                                 'updated_by must come from the session')
 
 
+class TestSpaFallbackApiRoutes(unittest.TestCase):
+    """Single-page app fallback must not swallow /v1/* API traffic."""
+
+    def test_spa_fallback_blocks_v1_routes(self):
+        for fn in ROUTE_FUNCS:
+            if fn.name != 'serve_spa':
+                continue
+            src = ast.get_source_segment(APP_SOURCE, fn)
+            self.assertIsNotNone(src, 'serve_spa source not found')
+            self.assertIn('path.startswith("api/")', src)
+            self.assertIn('path.startswith("v1/")', src)
+            break
+        else:
+            self.fail('serve_spa route not found')
+
+
 class TestNoRegressionAcrossAllRoutes(unittest.TestCase):
     """Whole-file sweep: nothing else slipped back to unauthenticated."""
 

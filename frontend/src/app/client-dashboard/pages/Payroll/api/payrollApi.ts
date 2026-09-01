@@ -300,9 +300,12 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 function normalizeBase(path: string): string {
-  if (API_BASE.endsWith("/api") && path.startsWith("/api/"))
-    return `${API_BASE}${path.slice(4)}`;
-  return `${API_BASE}${path}`;
+  if (API_BASE.endsWith("/api")) {
+    return path.startsWith("/api/")
+      ? `${API_BASE}${path.slice(4)}`
+      : `${API_BASE}${path}`;
+  }
+  return `${API_BASE}/api${path}`;
 }
 
 // Duplicated from leaveApi.ts rather than imported, matching that file's
