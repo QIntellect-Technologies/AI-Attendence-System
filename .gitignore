@@ -72,3 +72,9 @@ nuitka-crash-report.xml
 
 # Employee photos - do not commit
 static/staff_profile_photos/
+
+
+.pytest_cache/
+qintellect-e2e/node_modules/
+qintellect-e2e/playwright-report/
+qintellect-e2e/test-results/

@@ -389,7 +389,7 @@ export default function App() {
               key.
             </p>
             <label style={styles.label}>
-              Railway API URL
+              Dashboard API base URL
               <input
                 style={styles.input}
                 value={apiBaseUrl}

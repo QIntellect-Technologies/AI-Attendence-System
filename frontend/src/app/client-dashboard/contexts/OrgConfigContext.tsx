@@ -53,6 +53,10 @@
 // } from "../api/sessionExpired";
 // import { ApiRequestError } from "../api/apiClient";
 
+// const API_BASE_URL =
+//   (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+//     ?.VITE_API_BASE_URL || "";
+
 // // ─── Master data types ────────────────────────────────────────────────────────
 
 // export interface OrgBranch {
@@ -95,7 +99,14 @@
 //   rtspUrl: string;
 //   /** Absent/legacy rows are treated as "nvr" wherever this is read. */
 //   cameraType?: "nvr" | "dvr" | "ip_camera" | "webcam";
-//   status?: "Normal" | "Alert" | "Offline";
+//   /**
+//    * Live status, sourced from the local node's own heartbeat — see
+//    * support_db_nodes.get_camera_live_status() on the backend. "Not Synced"
+//    * means this camera has never appeared in a heartbeat yet (just added,
+//    * or its node has never connected), distinct from a camera that was
+//    * seen before and has since gone quiet ("Offline").
+//    */
+//   status?: "Normal" | "Alert" | "Offline" | "Not Synced";
 //   lastSeen?: string;
 //   streamPath?: string;
 // }
@@ -274,7 +285,7 @@
 //    * cameraToCctvDevice below.
 //    */
 //   location: string;
-//   status?: "Normal" | "Alert" | "Offline";
+//   status?: "Normal" | "Alert" | "Offline" | "Not Synced";
 //   lastSeen?: string;
 // }
 
@@ -432,13 +443,6 @@
 //   return null;
 // }
 
-// function seededNumber(key: string, range: number): number {
-//   if (range <= 0) return 0;
-//   let h = 0;
-//   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-//   return h % range;
-// }
-
 // // ─── CCTV helpers ────────────────────────────────────────────────────────────
 
 // export function buildStreamUrl(camera: OrgCamera): string {
@@ -456,28 +460,6 @@
 //   }));
 // }
 
-// const SEEDED_STATUSES: Array<CctvDevice["status"]> = [
-//   "Normal",
-//   "Normal",
-//   "Normal",
-//   "Normal",
-//   "Normal",
-//   "Normal",
-//   "Offline",
-//   "Offline",
-//   "Alert",
-// ];
-
-// const LAST_SEEN_OPTIONS = [
-//   "Just Now",
-//   "12s ago",
-//   "28s ago",
-//   "45s ago",
-//   "1m ago",
-//   "2m ago",
-//   "3m ago",
-// ];
-
 // /**
 //  * [Fix-3] cameraToCctvDevice
 //  *
@@ -490,6 +472,13 @@
 //  *   - `cameraName` = camera.name   (the human label, e.g. "Main Entrance")
 //  *   - `location`   = camera.location || camera.name
 //  *                    (physical placement preferred; label as fallback)
+//  *
+//  * status/lastSeen are passed through exactly as the backend sent them
+//  * (support_db_nodes.get_camera_live_status(), derived from the local
+//  * node's own heartbeat — see that function's docstring). No mock/seeded
+//  * fallback here: a camera the backend hasn't reported on is a real gap in
+//  * live data, and get_camera_live_status() already represents that
+//  * honestly as "Not Synced" rather than leaving status undefined.
 //  */
 
 // export function cameraToCctvDevice(
@@ -505,14 +494,8 @@
 //     cameraType: camera.cameraType ?? "nvr",
 //     cameraName: camera.name,
 //     location: camera.location || camera.name,
-//     status:
-//       camera.status ??
-//       SEEDED_STATUSES[seededNumber(camera.id, SEEDED_STATUSES.length)],
-//     lastSeen:
-//       camera.lastSeen ??
-//       LAST_SEEN_OPTIONS[
-//         seededNumber(camera.id + "_ls", LAST_SEEN_OPTIONS.length)
-//       ],
+//     status: camera.status,
+//     lastSeen: camera.lastSeen,
 //   };
 // }
 
@@ -653,7 +636,10 @@
 
 //   const status = value.status;
 //   const normalizedStatus =
-//     status === "Normal" || status === "Alert" || status === "Offline"
+//     status === "Normal" ||
+//     status === "Alert" ||
+//     status === "Offline" ||
+//     status === "Not Synced"
 //       ? status
 //       : undefined;
 
@@ -1213,7 +1199,7 @@
 //   }
 
 //   const res = await fetch(
-//     `/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
+//     `${API_BASE_URL}/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
 //     {
 //       cache: "no-store",
 //       headers: {
@@ -1996,6 +1982,19 @@ export interface OrgContextValue {
   organizationSlug: string | null;
   organizationName: string | null;
   isOrgReady: boolean;
+
+  // From get_client_bootstrap()'s access_status/requires_onboarding.
+  // TenantGate.tsx reads these to gate onboarding/suspended-org routing.
+  accessStatus: string | null;
+  /** @deprecated alias of accessStatus, kept because TenantGate reads either name */
+  organizationStatus: string | null;
+  requiresOnboarding: boolean;
+
+  // Set when the most recent bootstrap/config fetch itself failed (network
+  // error, 500, etc.) rather than having confirmed "no org for this
+  // account". null once a fetch has succeeded. TenantGate must treat this
+  // as "unknown, retry" -- never as "send to /onboarding".
+  orgLoadError: string | null;
 
   masterData: OrgMasterData;
   updateCfg: (patch: Partial<OrgConfig>) => void;
@@ -2914,6 +2913,16 @@ function getUserOrganizationId(
 
 const OrgConfigContext = createContext<OrgContextValue | null>(null);
 
+// Minimum gap between focus/visibilitychange-triggered silent refreshes —
+// see the listener below. Quick tab/window switching (including DevTools
+// stealing focus) can fire "focus" several times in a few seconds; without
+// a floor, every one of those re-fetches bootstrap and re-renders this
+// provider (isRefreshingOrgConfig -> success -> finally is 2-3 renders per
+// call even with React 18 batching). A genuinely stale tab is still caught
+// on the next focus event after the throttle window elapses, so this only
+// removes redundant fetches, not the "keep an open tab fresh" behavior.
+const FOCUS_REFRESH_THROTTLE_MS = 30_000;
+
 export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated } = useAuth() as {
     user: {
@@ -2960,6 +2969,29 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
   const [isRefreshingOrgConfig, setIsRefreshingOrgConfig] = useState(false);
   const refreshRequestIdRef = useRef(0);
+  // Last time refreshOrgConfig actually proceeded past the early-exit guards
+  // (auth/session checks below). Used only by the focus/visibilitychange
+  // listener further down to throttle silent refreshes — see its comment.
+  const lastRefreshAtRef = useRef(0);
+
+  // Bootstrap's own computed status fields (support_db_client_users.py's
+  // get_client_bootstrap() already returns access_status/accessStatus and
+  // requires_onboarding/requiresOnboarding) were previously read off `result`
+  // and then dropped -- TenantGate.tsx destructures accessStatus/
+  // organizationStatus/requiresOnboarding from useOrg() but this provider
+  // never actually put them on the context value, so the "org suspended ->
+  // BlockedTenant" and "org genuinely needs onboarding" gates were dead code.
+  const [accessStatus, setAccessStatus] = useState<string | null>(null);
+  const [requiresOnboarding, setRequiresOnboarding] = useState(false);
+
+  // Distinguishes "we asked and confirmed this account has no org" (a
+  // legitimate reason to send TenantGate to /onboarding) from "the bootstrap
+  // request itself failed" (a transient 500, a network blip -- NOT the same
+  // thing, and must never be treated the same as "no org"). Only the latter
+  // sets this. TenantGate shows a retry screen when this is set instead of
+  // silently routing an authenticated user with a perfectly good session
+  // into onboarding or a blank dashboard.
+  const [orgLoadError, setOrgLoadError] = useState<string | null>(null);
 
   const refreshOrgConfig = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -2979,6 +3011,7 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
       const requestId = ++refreshRequestIdRef.current;
       const isStale = () => requestId !== refreshRequestIdRef.current;
+      lastRefreshAtRef.current = Date.now();
 
       if (!isAuthenticated || !user?.id) {
         setOrganizationId(null);
@@ -3008,7 +3041,23 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
         const orgId = toStableId(result?.organization?.id);
 
+        // Got a real response from the server either way -- clear any
+        // previous load-failure state before branching on its content.
+        setOrgLoadError(null);
+        setAccessStatus(
+          typeof result?.access_status === "string"
+            ? result.access_status
+            : typeof result?.accessStatus === "string"
+              ? result.accessStatus
+              : null,
+        );
+        setRequiresOnboarding(
+          Boolean(result?.requires_onboarding ?? result?.requiresOnboarding),
+        );
+
         if (!result?.organization || !orgId || !result?.config) {
+          // A confirmed, legitimate "this account has no org (yet)" answer
+          // from the server -- distinct from the request failing outright.
           setOrganizationId(null);
           setOrganizationSlug(null);
           setOrganizationName(null);
@@ -3123,16 +3172,24 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
         // false-ready state that let TenantGate fall through to a real
         // page (onboarding/blocked) behind the "Session expired" dialog.
         if (isSessionExpiryHandled()) return;
-        // A silent background refresh failing must not nuke an already
-        // working session's config — only the initial hydration treats a
-        // failure as "this account has no org yet".
-        if (!opts?.silent) {
-          setOrganizationId(null);
-          setOrganizationSlug(null);
-          setOrganizationName(null);
-          setCfgRaw(DEFAULT_ORG_CONFIG);
-          clearLegacyOrgConfig();
-        }
+
+        // The bootstrap request itself failed (network error, or a real
+        // non-2xx/non-401 response) -- this is NOT the same thing as "this
+        // account has no org", and must never be treated as such. Doing so
+        // is what sent a perfectly valid, freshly-logged-in session straight
+        // to TenantGate's /onboarding redirect (organizationId got nulled
+        // out) whenever bootstrap merely hiccuped. Record it as a load
+        // error instead and leave whatever org state we already have (null
+        // on first load, or last-known-good on a later refresh) untouched
+        // so a transient failure can never blank an already-working
+        // dashboard, and so TenantGate can tell "still don't know" apart
+        // from "confirmed no org" and show a retry state rather than
+        // guessing.
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to load organization.";
+        setOrgLoadError(message);
       } finally {
         if (!isStale() && !isSessionExpiryHandled()) {
           setIsOrgReady(true);
@@ -3166,6 +3223,12 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
 
     function handleFocusOrVisible() {
       if (document.visibilityState === "hidden") return;
+      // Throttled — see FOCUS_REFRESH_THROTTLE_MS's comment above. Without
+      // this, quick tab/window switching (including DevTools stealing
+      // focus) re-fetches bootstrap and re-renders this provider on every
+      // single focus event, even seconds apart.
+      if (Date.now() - lastRefreshAtRef.current < FOCUS_REFRESH_THROTTLE_MS)
+        return;
       void refreshOrgConfig({ silent: true });
     }
 
@@ -3254,6 +3317,10 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
       organizationSlug,
       organizationName,
       isOrgReady,
+      accessStatus,
+      organizationStatus: accessStatus,
+      requiresOnboarding,
+      orgLoadError,
 
       masterData,
       updateCfg,
@@ -3272,6 +3339,9 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
       organizationSlug,
       organizationName,
       isOrgReady,
+      accessStatus,
+      requiresOnboarding,
+      orgLoadError,
       masterData,
       updateCfg,
       refreshOrgConfig,

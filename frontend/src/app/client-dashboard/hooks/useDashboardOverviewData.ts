@@ -15,6 +15,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrg, type CctvDevice } from "../contexts/OrgConfigContext";
 import { resolveTenantScope } from "../utils/tenantScope";
 
+// Same constant/pattern as OrgConfigContext.tsx's getClientBootstrap — the
+// API host is a different origin from the one this SPA is served from in
+// production (e.g. attendancepro.<domain> serving static files vs.
+// api.<domain> running Flask). A bare relative path like
+// `/api/v2/dashboard/overview` resolves against the SPA's own origin
+// instead, which has no such route and falls back to serving index.html —
+// a real 200 with an HTML body, not an error. This hook was previously the
+// one remaining call site still building a bare relative URL; every other
+// fetch in this codebase already prepends this.
+const API_BASE_URL =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+    ?.VITE_API_BASE_URL || "";
+
 export type { CctvDevice };
 
 type LooseRecord = Record<string, unknown>;
@@ -528,8 +541,23 @@ async function fetchSnapshot(
     headers: { Accept: "application/json", ...dashboardAuthHeaders() },
   })
     .then(async (res) => {
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || payload?.success === false) {
+      // A misrouted request (wrong host, proxy fallback, SPA catch-all
+      // serving index.html) still comes back as a real 200 with an HTML
+      // body. `.json().catch(() => ({}))` used to swallow that parse
+      // failure and hand back `{}`, and `{}.success === false` is
+      // `undefined === false` → false — so the failure was silently
+      // treated as "success, zero data" instead of surfacing as an
+      // error. Checking content-type first means a non-JSON response is
+      // always treated as a real failure, whatever body it happens to
+      // contain.
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        throw new Error(
+          `Dashboard overview returned a non-JSON response (${res.status}) — check that the API host is reachable from this deployment.`,
+        );
+      }
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || payload === null || payload?.success === false) {
         throw new Error(
           text(
             payload?.message ?? payload?.error,
@@ -595,7 +623,7 @@ export function useDashboardOverviewData({
     if (apiBranchId) params.set("branch_id", String(apiBranchId));
     if (normalizedPeopleType) params.set("people_type", normalizedPeopleType);
     if (normalizedTeamView) params.set("view", normalizedTeamView);
-    return `/api/v2/dashboard/overview?${params.toString()}`;
+    return `${API_BASE_URL}/api/v2/dashboard/overview?${params.toString()}`;
   }, [
     normalizedPeopleType,
     normalizedTeamView,

@@ -1962,6 +1962,7 @@ the backward-compatible facade that re-exports everything below.
 """
 
 from datetime import date, timedelta, datetime, timezone
+import concurrent.futures
 import json
 from math import radians, sin, cos, atan2, sqrt
 from typing import Optional, Any, Callable
@@ -1976,8 +1977,11 @@ import re
 from urllib.parse import urlparse
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
-
+from concurrency import gather_or_raise
 logger = get_logger(__name__)
+
+
+
 from support_db_core import _compute_org_status, _execute_supabase, _json_dict, _json_list, _org_access_allows_client, build_or_eq_filter
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
@@ -3107,31 +3111,44 @@ def _merge_operational_config(
     return merged
 
 def get_client_bootstrap(org_id: str) -> dict:
-    """Return all setup needed by Client Dashboard from Supabase.
-
-    Bootstrap is the page gate for Client Dashboard. It must be fast and must
-    never fail because optional billing/onboarding helper data is temporarily
-    unavailable. Org, branches, modules, and onboarding are fetched in parallel;
-    the final dashboard config is still derived locally and tenant-scoped.
+    """    Lookups run through concurrency.gather_or_raise(), which parallelises when
+    the host has threads to spare and runs sequentially when it does not.
+    `get_organization` is essential and re-raises; every other lookup degrades
+    to a safe default and is named in the returned 'degraded' list.
     """
     from support_db_branches import list_branches, list_org_modules
     from support_db_organizations import get_organization
     org_key = str(org_id)
 
-    import concurrent.futures
+    degraded: list[str] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        f_org = pool.submit(get_organization, org_key)
-        f_branches = pool.submit(list_branches, org_key)
-        f_modules = pool.submit(list_org_modules, org_key)
-        f_onboarding = pool.submit(get_client_onboarding_config, org_key)
-        f_module_people_types = pool.submit(list_org_branch_module_people_types, org_key)
+    
+    results, errors = gather_or_raise(
+        {
+            'org': lambda: get_organization(org_key),
+            'branches': lambda: list_branches(org_key),
+            'modules': lambda: list_org_modules(org_key),
+            'onboarding_config': lambda: get_client_onboarding_config(org_key),
+            'module_people_types': lambda: list_org_branch_module_people_types(org_key),
+        },
+        essential=('org',),
+    )
 
-        org = f_org.result()
-        branches = f_branches.result()
-        modules = f_modules.result()
-        onboarding_config = f_onboarding.result()
-        module_people_types_by_branch = f_module_people_types.result()
+    def _safe(key: str, default):
+        if key in errors:
+            logger.warning(
+                'Client bootstrap: %s failed for org=%s, falling back to default: %s',
+                key, org_key, errors[key],
+            )
+            degraded.append(key)
+            return default
+        return results[key]
+
+    org = results['org']
+    branches = _safe('branches', [])
+    modules = _safe('modules', [])
+    onboarding_config = _safe('onboarding_config', None)
+    module_people_types_by_branch = _safe('module_people_types', {})
 
     active_module_keys = [
         _map_module_for_client(m.get('module_name'))
@@ -3146,7 +3163,22 @@ def get_client_bootstrap(org_id: str) -> dict:
         logger.warning('Could not load latest invoice for org=%s during bootstrap: %s', org_key, exc)
 
     access_status = org.get('status') or _compute_org_status(org_key)
-    onboarding_completed = bool(onboarding_config and onboarding_config.get('completed_at'))
+    # A transient failure fetching onboarding_config is NOT the same as
+    # "this org needs onboarding" -- treating it that way redirects an
+    # established, already-onboarded org away from its own dashboard the
+    # moment this one lookup blips, which is a strictly worse outcome than
+    # the 500 this degrade-gracefully change was meant to avoid. Assume
+    # already-onboarded when the fetch itself failed (as opposed to
+    # succeeding with a row that has no completed_at yet, which is a real
+    # "not onboarded" signal and must still route there). A genuinely-new
+    # org that hits this rare blip lands on an emptier dashboard for one
+    # page load instead, self-corrects on the next silent refresh
+    # (OrgConfigContext.tsx's focus/visibility handler) -- a far cheaper
+    # failure mode than locking a paying customer out of their own data.
+    if 'onboarding_config' in degraded:
+        onboarding_completed = True
+    else:
+        onboarding_completed = bool(onboarding_config and onboarding_config.get('completed_at'))
     base_config = _build_client_config(org, branches, active_module_keys, module_people_types_by_branch=module_people_types_by_branch)
     config = _merge_operational_config(base_config, onboarding_config, branches, org_key)
 
@@ -3175,6 +3207,13 @@ def get_client_bootstrap(org_id: str) -> dict:
             'can_add_branch_beyond_limit': False,
         },
         'config': config,
+        # Empty in the normal case. Names any of the optional sub-fetches
+        # above that failed and fell back to a default for this call, so the
+        # frontend can (optionally) surface a "some settings may be stale"
+        # notice instead of silently pretending everything loaded, without
+        # turning a partial success into a hard failure the user has to
+        # retry from scratch.
+        'degraded': degraded,
     }
 
 def _branch_backend_id(raw_key: object, branches: list[dict]) -> Optional[str]:

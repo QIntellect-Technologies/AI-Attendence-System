@@ -1,3 +1,4 @@
+
 # """
 # Flask AI Attendance System
 # - Enrollment: Upload video, extract embeddings, store profile
@@ -1001,6 +1002,22 @@
 
 #     return jsonify({'error': 'organization_id must be a valid UUID'}), 400
 
+# def _live_tracking_camera_status(status: str | None) -> str:
+#     """Translate support_db_nodes.apply_camera_live_status()'s vocabulary
+#     (Normal/Offline/Not Synced — same words the Dashboard Overview CCTV
+#     Status widget renders as its badge text) into this endpoint's existing
+#     LiveTrackingCamera.status contract (Online/Offline/Unknown), which
+#     LiveCCTVTracking.tsx already type-checks and renders against.
+#     'Not Synced' maps to 'Unknown' — same meaning the frontend already
+#     documents for that value: "the camera has not reported recently enough
+#     to trust any of the fields below"."""
+#     if status == 'Normal':
+#         return 'Online'
+#     if status == 'Not Synced':
+#         return 'Unknown'
+#     return status or 'Unknown'
+
+
 # @app.route('/api/cctv/live-tracking', methods=['GET'])
 # @require_client_dashboard_auth
 # def api_cctv_live_tracking():
@@ -1078,6 +1095,15 @@
 #                 onboarding_config = f_onboarding.result() or {}
 #                 node_status = f_node_status.result()
 #                 detections_by_staff = f_detections.result() or {}
+
+#             # Per-camera live status (Normal/Offline/Not Synced), not the
+#             # node-wide is_node_offline flag computed below — a node can be
+#             # online while one specific camera is unplugged, and this page
+#             # must be able to show that distinction. Same helper
+#             # get_client_bootstrap() uses, so this page and the Dashboard
+#             # Overview CCTV Status widget can never disagree about the same
+#             # camera.
+#             raw_cameras = support_cp_db.apply_camera_live_status(raw_cameras, raw_org_id)
 
 #             # People-type scope comes from the normalized organizations row
 #             # (get_organization -> _attach_status), the same source the
@@ -1231,7 +1257,12 @@
 #                     'location': cam.get('location') or 'Unconfigured',
 #                     'branchId': cam.get('branch_id') or raw_branch_id,
 #                     'branchName': cam.get('branch_name') or 'Main Branch',
-#                     'status': cam.get('status') or ('Offline' if is_node_offline else 'Online'),
+#                     # Always set by apply_camera_live_status() above — never
+#                     # defaulted here. Translated to this endpoint's existing
+#                     # Online/Offline/Unknown contract (see
+#                     # _live_tracking_camera_status docstring).
+#                     'status': _live_tracking_camera_status(cam.get('status')),
+#                     'lastSeen': cam.get('lastSeen'),
 #                     'activeDetections': total_detections_by_camera.get(str(camera_id), 0),
 #                     'localNodeOffline': is_node_offline,
 #                     'lastHeartbeat': last_heartbeat,
@@ -6120,20 +6151,28 @@
 #                 'branchPerformance': [],
 #             }), 400
 
-#         people_type = request.args.get('people_type') or request.args.get('peopleType')
-#         if people_type and getattr(scope, 'org_id', None) and not _positive_int(scope.org_id):
-#             snapshot = support_cp_db.get_client_dashboard_overview(
-#                 org_id=str(scope.org_id),
-#                 branch_id=getattr(scope, 'branch_id', None),
-#                 days=request.args.get('days', 7, type=int),
-#                 people_type=people_type,
-#                 scope_ids=scope_ids,  # already resolved above via get_effective_scope_ids — was silently dropped
-#             )
-#         else:
-#             snapshot = get_fast_dashboard_overview(
-#                 scope,
-#                 dashboard_scope=dashboard_scope,
-#             )
+#         # Always the fast, cached, parallel-query path now — including for
+#         # people_type-filtered requests. It used to fall back to
+#         # support_cp_db.get_client_dashboard_overview() below whenever
+#         # people_type was set, because get_fast_dashboard_overview's cards
+#         # didn't apply people_type at all. That legacy function is
+#         # correct but not aggregate-first: it does a `.limit(100000)`
+#         # unpaginated client_staff select and a 500-row payroll-breakdown
+#         # computation, sequentially, with no caching benefit on a cold
+#         # request — the primary cause of multi-second Dashboard Overview
+#         # loads on orgs with thousands of staff. get_fast_summary /
+#         # get_fast_dashboard_overview now resolve people_type into the
+#         # same staff-id restriction team-scoping already uses (see
+#         # support_db_fast._people_type_staff_ids), so this route no
+#         # longer needs two implementations of the same snapshot. If a
+#         # correctness gap turns up between the two, fix it in the fast
+#         # path rather than re-adding this branch — see the payroll-page
+#         # consolidation precedent (_direct_payroll_page's docstring) for
+#         # why keeping two implementations in sync is the wrong trade.
+#         snapshot = get_fast_dashboard_overview(
+#             scope,
+#             dashboard_scope=dashboard_scope,
+#         )
 
 #         return jsonify({
 #             'success': True,
@@ -6430,7 +6469,7 @@
 #     @app.route('/', defaults={'path': ''})
 #     @app.route('/<path:path>')
 #     def serve_spa(path):
-#         if path.startswith("api/"):
+#         if path.startswith("api/") or path.startswith("v1/"):
 #             return jsonify({
 #                 "success": False,
 #                 "error": "API endpoint not found",
@@ -6512,6 +6551,8 @@
 #         )
 #     logger.info(f"Starting dev server on http://{host}:{port} (debug={debug_enabled})")
 #     app.run(debug=debug_enabled, host=host, port=port, use_reloader=False)
+
+
 
 """
 Flask AI Attendance System
@@ -7586,29 +7627,28 @@ def api_cctv_live_tracking():
             # (canceled) requests in the Network tab. get_client_bootstrap()
             # in support_db_client_users.py uses the same
             # ThreadPoolExecutor pattern for the same reason.
-            import concurrent.futures
+            from concurrency import gather_or_raise
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                f_cameras = pool.submit(
-                    support_cp_db.list_client_cameras, raw_org_id, raw_branch_id
-                )
-                f_org = pool.submit(support_cp_db.get_organization, raw_org_id)
-                f_onboarding = pool.submit(
-                    support_cp_db.get_client_onboarding_config, raw_org_id
-                )
-                f_node_status = pool.submit(
-                    support_cp_db.get_local_node_status, raw_org_id
-                )
-                f_detections = pool.submit(
-                    support_cp_db.get_today_detections_by_staff,
-                    raw_org_id, raw_branch_id,
-                )
+            _res, _err = gather_or_raise(
+                {
+                    'cameras': lambda: support_cp_db.list_client_cameras(
+                        raw_org_id, raw_branch_id),
+                    'org': lambda: support_cp_db.get_organization(raw_org_id),
+                    'onboarding': lambda: support_cp_db.get_client_onboarding_config(
+                        raw_org_id),
+                    'node_status': lambda: support_cp_db.get_local_node_status(
+                        raw_org_id),
+                    'detections': lambda: support_cp_db.get_today_detections_by_staff(
+                        raw_org_id, raw_branch_id),
+                },
+                essential=('cameras', 'org', 'onboarding', 'node_status', 'detections'),
+            )
 
-                raw_cameras = f_cameras.result() or []
-                org = f_org.result()
-                onboarding_config = f_onboarding.result() or {}
-                node_status = f_node_status.result()
-                detections_by_staff = f_detections.result() or {}
+            raw_cameras = _res['cameras'] or []
+            org = _res['org']
+            onboarding_config = _res['onboarding'] or {}
+            node_status = _res['node_status']
+            detections_by_staff = _res['detections'] or {}
 
             # Per-camera live status (Normal/Offline/Not Synced), not the
             # node-wide is_node_offline flag computed below — a node can be
@@ -7660,23 +7700,24 @@ def api_cctv_live_tracking():
             # parallel — most orgs only have one or two active people-types,
             # but this avoids paying for them one after another when there
             # are several.
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=max(1, len(scoped_people_types))
-            ) as pool:
-                staff_futures = {
-                    person_type: pool.submit(
-                        support_cp_db.list_client_staff,
-                        raw_org_id,
-                        branch_id=raw_branch_id,
-                        people_type=person_type,
-                        archived=False,
+            _staff_res, _staff_err = gather_or_raise(
+                {
+                    person_type: (
+                        lambda pt=person_type: support_cp_db.list_client_staff(
+                            raw_org_id,
+                            branch_id=raw_branch_id,
+                            people_type=pt,
+                            archived=False,
+                        )
                     )
                     for person_type in scoped_people_types
-                }
-                all_staff_by_type = {
-                    person_type: (future.result() or [])
-                    for person_type, future in staff_futures.items()
-                }
+                },
+                essential=tuple(scoped_people_types),
+            )
+            all_staff_by_type = {
+                person_type: (_staff_res[person_type] or [])
+                for person_type in scoped_people_types
+            }
 
             # Fetch fallback/manual attendance for every in-scope person in
             # ONE Supabase round trip instead of one call per person. The
@@ -8374,9 +8415,12 @@ def system_health():
             db.init_db()
         except:
             db_ok = False
+        # Report whether the model files are present, without loading them.
+        # Calling get_face_model() here would force a multi-hundred-MB load
+        # on every health probe.
         try:
-            get_face_model(MODELS_DIR, prefer_gpu=ENABLE_GPU)
-        except:
+            models_ok = (MODELS_DIR / 'models' / 'buffalo_l').exists()
+        except Exception:
             models_ok = False
         return jsonify({
             'status': 'healthy' if (db_ok and models_ok) else 'degraded',
@@ -12665,20 +12709,28 @@ def api_v2_dashboard_overview():
                 'branchPerformance': [],
             }), 400
 
-        people_type = request.args.get('people_type') or request.args.get('peopleType')
-        if people_type and getattr(scope, 'org_id', None) and not _positive_int(scope.org_id):
-            snapshot = support_cp_db.get_client_dashboard_overview(
-                org_id=str(scope.org_id),
-                branch_id=getattr(scope, 'branch_id', None),
-                days=request.args.get('days', 7, type=int),
-                people_type=people_type,
-                scope_ids=scope_ids,  # already resolved above via get_effective_scope_ids — was silently dropped
-            )
-        else:
-            snapshot = get_fast_dashboard_overview(
-                scope,
-                dashboard_scope=dashboard_scope,
-            )
+        # Always the fast, cached, parallel-query path now — including for
+        # people_type-filtered requests. It used to fall back to
+        # support_cp_db.get_client_dashboard_overview() below whenever
+        # people_type was set, because get_fast_dashboard_overview's cards
+        # didn't apply people_type at all. That legacy function is
+        # correct but not aggregate-first: it does a `.limit(100000)`
+        # unpaginated client_staff select and a 500-row payroll-breakdown
+        # computation, sequentially, with no caching benefit on a cold
+        # request — the primary cause of multi-second Dashboard Overview
+        # loads on orgs with thousands of staff. get_fast_summary /
+        # get_fast_dashboard_overview now resolve people_type into the
+        # same staff-id restriction team-scoping already uses (see
+        # support_db_fast._people_type_staff_ids), so this route no
+        # longer needs two implementations of the same snapshot. If a
+        # correctness gap turns up between the two, fix it in the fast
+        # path rather than re-adding this branch — see the payroll-page
+        # consolidation precedent (_direct_payroll_page's docstring) for
+        # why keeping two implementations in sync is the wrong trade.
+        snapshot = get_fast_dashboard_overview(
+            scope,
+            dashboard_scope=dashboard_scope,
+        )
 
         return jsonify({
             'success': True,
@@ -13023,9 +13075,14 @@ def _startup_init():
         logger.info("✓ Database initialized")
         refresh_embedding_cache()
 
-        logger.info("[*] Warming up AI models (InsightFace)...")
-        get_face_model(MODELS_DIR, prefer_gpu=ENABLE_GPU)
-        logger.info("✓ AI models loaded and warmed up successfully")
+        # Deliberately NOT warmed up here. get_face_model() is a lazy
+        # singleton, so the first face-recognition request loads it once and
+        # every later request reuses it. Loading at import made every
+        # Passenger respawn pay ~8s and several hundred MB of onnxruntime
+        # against the account-wide LVE thread/memory cap, which is what
+        # starved unrelated routes of threads. Non-AI routes (login,
+        # bootstrap, dashboard) never need the model at all.
+        logger.info("[*] AI models will load lazily on first use.")
     except Exception as e:
         logger.error(f"✗ Startup initialization failed: {e}")
     logger.info("="*60 + "\n")
