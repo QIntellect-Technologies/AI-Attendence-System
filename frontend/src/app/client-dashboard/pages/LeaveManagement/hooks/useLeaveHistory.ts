@@ -42,8 +42,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrg } from "../../../contexts/OrgConfigContext";
 import { resolveTenantScope } from "../../../utils/tenantScope";
 import { listStaffRecords } from "../../StaffManagement/api/staffApi";
+import { getLeavesTaken } from "../api/leaveApi";
 import type { User } from "../../../api/api";
-import type { LeaveTypeQuotas, LeaveTypeRules } from "../api/leaveApi";
+import type {
+  LeaveTypeQuotas,
+  LeaveTypeRules,
+  TakenLeaveRecord,
+} from "../api/leaveApi";
 import type { LeaveHistoryRow, PendingLeaveItem } from "../types/leave";
 
 export interface UseLeaveHistoryOptions {
@@ -165,6 +170,10 @@ export function useLeaveHistory({
   const [roster, setRoster] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [takenByStaffLoading, setTakenByStaffLoading] = useState(false);
+  const [takenByStaff, setTakenByStaff] = useState<
+    Map<string, { paid: number; unpaid: number }>
+  >(new Map());
   const mountedRef = useRef(true);
 
   const load = useCallback(
@@ -200,6 +209,16 @@ export function useLeaveHistory({
 
   const refresh = useCallback(() => load(true), [load]);
 
+  // Helper for logging warnings
+  const logger = useMemo(
+    () => ({
+      warning: (msg: string, err?: unknown) => {
+        console.warn(`[useLeaveHistory] ${msg}`, err);
+      },
+    }),
+    [],
+  );
+
   useEffect(() => {
     mountedRef.current = true;
     void load();
@@ -207,6 +226,51 @@ export function useLeaveHistory({
       mountedRef.current = false;
     };
   }, [load]);
+
+  // ── Load reconciled leave-taken data (attendance-reconciled) ──────────────
+  useEffect(() => {
+    if (!scope?.organizationId || !scope?.apiBranchId) {
+      setTakenByStaff(new Map());
+      return;
+    }
+
+    const loadTakenLeaves = async () => {
+      try {
+        setTakenByStaffLoading(true);
+        const takenData = await getLeavesTaken({
+          year,
+          branchId: scope.apiBranchId,
+          organizationId: scope.organizationId,
+        });
+
+        if (!mountedRef.current) return;
+
+        // Convert the API response to a Map keyed by staff ID
+        const map = new Map<string, { paid: number; unpaid: number }>();
+        for (const [staffId, record] of Object.entries(takenData)) {
+          map.set(staffId, {
+            paid: record.takenPaidLeaves,
+            unpaid: record.takenUnpaidLeaves,
+          });
+        }
+        setTakenByStaff(map);
+      } catch (err) {
+        // Fall back to empty map on error — the hook should still render
+        // with zero taken leaves rather than crashing the component.
+        if (mountedRef.current) {
+          logger.warning(
+            "Failed to fetch reconciled leave-taken data; using fallback",
+            err,
+          );
+          setTakenByStaff(new Map());
+        }
+      } finally {
+        if (mountedRef.current) setTakenByStaffLoading(false);
+      }
+    };
+
+    void loadTakenLeaves();
+  }, [year, scope?.organizationId, scope?.apiBranchId, logger]);
 
   // ── Which paid leave types actually have a configured quota ──────────────
   const paidTypesWithQuota = useMemo(
@@ -249,24 +313,17 @@ export function useLeaveHistory({
   const quotaConfigured =
     paidTypesWithQuota.length > 0 || unpaidTypesWithQuota.length > 0;
 
-  // ── Per-employee taken totals for the selected year ───────────────────────
-  const takenByStaff = useMemo(() => {
-    const map = new Map<string, { paid: number; unpaid: number }>();
-    for (const leave of leaves) {
-      if (leave.status !== "Approved") continue;
-      if (leaveYear(leave) !== year) continue;
-      const staffKey = leave.userId != null ? String(leave.userId) : null;
-      if (!staffKey) continue;
-
-      const bucket = resolveLeaveBucket(leave, leaveTypeRules);
-      if (!bucket) continue;
-
-      const entry = map.get(staffKey) ?? { paid: 0, unpaid: 0 };
-      entry[bucket] += leave.days;
-      map.set(staffKey, entry);
-    }
-    return map;
-  }, [leaves, leaveTypeRules, year]);
+  // ── Per-employee taken totals (attendance-reconciled, from backend) ───────
+  // The backend endpoint /api/leaves/taken returns leave days that count as
+  // "taken" only when BOTH conditions hold:
+  //   1. Approved leave request covers that date
+  //   2. Staff member was NOT present that date (no attendance row)
+  // This matches Payroll's reconciliation logic exactly, so both screens
+  // always show the same numbers. Previously this was calculated client-side
+  // without checking attendance, causing Leave History and Payroll to disagree.
+  //
+  // See: payroll_engine.reconcile_leave_against_attendance() — the same
+  // logic the backend uses for payroll computations.
 
   // NOTE — scope gap vs. the "Leaves" tab: useLeaveActions filters its
   // list to the branch's configured module people types (e.g. exclude
@@ -318,7 +375,13 @@ export function useLeaveHistory({
     quotaConfigured,
   ]);
 
-  return { rows, loading, error, quotaConfigured, refresh };
+  return {
+    rows,
+    loading: loading || takenByStaffLoading,
+    error,
+    quotaConfigured,
+    refresh,
+  };
 }
 
 export default useLeaveHistory;

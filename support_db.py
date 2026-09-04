@@ -1,5 +1,3 @@
-
-
 # """
 # support_db_attendance_dashboard.py
 # ───────────────────────────────────────────────────────────────────────────────
@@ -1502,78 +1500,15 @@
 #                 filtered_rows.append(row)
 #         rows = filtered_rows
 
-#     leave_type_rules: dict[str, str] = {}
-#     try:
-#         from support_db_payroll import get_payroll_policy
-#         policy = get_payroll_policy(org_key)
-#         raw_rules = policy.get('leaveTypeRules') if isinstance(policy, dict) else {}
-#         if isinstance(raw_rules, dict):
-#             leave_type_rules = {
-#                 str(k).strip().lower(): str(v).strip().lower()
-#                 for k, v in raw_rules.items()
-#                 if str(k).strip() and str(v).strip().lower() in {'paid', 'unpaid'}
-#             }
-#     except Exception:
-#         leave_type_rules = {}
+#     mapped_rows = [_map_client_leave(row, staff_by_id) for row in rows]
 
-#     attendance_ref_re = re.compile(r'attendance_id=([0-9a-f-]{8,})', re.IGNORECASE)
-#     linked_attendance_ids: set[str] = set()
-#     for row in rows:
-#         reason_text = str(row.get('reason') or '')
-#         match = attendance_ref_re.search(reason_text)
-#         if match:
-#             linked_attendance_ids.add(match.group(1))
-
-#     payroll_decision_by_attendance: dict[str, str] = {}
-#     if linked_attendance_ids:
-#         try:
-#             attendance_result = _execute_supabase(
-#                 'list_client_leave_requests.attendance_payroll_decisions',
-#                 lambda: (
-#                     get_supabase()
-#                     .table('attendance')
-#                     .select('id, check_out_payroll_decision')
-#                     .eq('org_id', org_key)
-#                     .in_('id', sorted(linked_attendance_ids))
-#                 ),
-#             )
-#             for row in (attendance_result.data or []):
-#                 attendance_id = _support_clean_text(row.get('id'))
-#                 decision = _support_clean_text(row.get('check_out_payroll_decision')).lower()
-#                 if attendance_id and decision:
-#                     payroll_decision_by_attendance[attendance_id] = decision
-#         except Exception:
-#             payroll_decision_by_attendance = {}
-
-#     mapped_rows: list[dict] = []
-#     for row in rows:
-#         mapped = _map_client_leave(row, staff_by_id)
-#         leave_type = _support_clean_text(mapped.get('leave_type') or mapped.get('type')).lower()
-
-#         reason_text = str(row.get('reason') or '')
-#         match = attendance_ref_re.search(reason_text)
-#         attendance_id = match.group(1) if match else ''
-#         payroll_decision = payroll_decision_by_attendance.get(attendance_id, '') if attendance_id else ''
-#         is_attendance_adjustment = attendance_id != '' or leave_type == 'attendance_adjustment'
-
-#         if payroll_decision == 'exclude':
-#             leave_compensation = 'excluded'
-#         elif payroll_decision == 'include':
-#             leave_compensation = 'unpaid'
-#         elif is_attendance_adjustment:
-#             # Attendance-adjusted leave rows are payroll-linked exceptions.
-#             # With no explicit exclude decision, payroll includes them.
-#             leave_compensation = 'unpaid'
-#         else:
-#             leave_compensation = leave_type_rules.get(leave_type, 'not_configured')
-
-#         mapped['leave_compensation'] = leave_compensation
-#         mapped['leaveCompensation'] = leave_compensation
-#         mapped['leave_payroll_decision'] = payroll_decision or None
-#         mapped['leavePayrollDecision'] = payroll_decision or None
-#         mapped_rows.append(mapped)
-
-#     return mapped_rows
+#     # Attaches leave_compensation/leavePayrollDecision using each row's OWN
+#     # branch's leaveTypeRules (org default, overridden per-branch) -- see
+#     # annotate_leave_payroll_treatment's docstring. Single shared
+#     # implementation with support_db_attendance_dashboard.list_client_leave_
+#     # requests so the two never drift on "is this leave type paid" again.
+#     from support_db_payroll import annotate_leave_payroll_treatment
+#     return annotate_leave_payroll_treatment(org_key, mapped_rows)
 
 
 # def _leave_request_bucket(row: dict, leave_type_rules: dict) -> Optional[str]:
@@ -1730,7 +1665,6 @@
 
 
 
-
 """
 support_db_attendance_dashboard.py
 ───────────────────────────────────────────────────────────────────────────────
@@ -1757,7 +1691,11 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _execute_supabase
+from support_db_core import (
+    _compute_org_status,
+    _execute_supabase,
+    _org_access_allows_client,
+)
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -1772,6 +1710,89 @@ from support_db_attendance_gate import (
 from support_db_attendance_settings import list_pending_manual_instructions_for_branch
 from support_db_time_utils import is_missing_table_or_column as _table_missing
 import support_db_attendance_exceptions as _attendance_exceptions
+from support_db_client_users import (
+    _normalize_camera_type,
+    _generate_temp_password,
+    authenticate_client_user,
+    authenticate_client_staff,
+    authenticate_client_staff_for_dashboard,
+    change_own_dashboard_password,
+    get_client_bootstrap,
+    get_client_onboarding_config,
+    get_client_user_basic,
+    get_client_user_session_by_id,
+    save_client_onboarding_config,
+    update_client_user_profile,
+    validate_strong_password,
+)
+from support_db_staff import (
+    _client_staff_safe,
+    _client_staff_has_people_type_column,
+    _normalize_people_type,
+    _resolve_shift_map,
+    archive_client_staff,
+    create_client_staff,
+    delete_client_staff,
+    get_employee_retention_policy,
+    get_client_staff_member,
+    list_client_staff,
+    restore_client_staff,
+    update_client_staff,
+    update_client_staff_photo,
+    update_employee_retention_policy,
+)
+from support_db_attendance_mobile import (
+    evaluate_field_geofence,
+    get_client_staff_attendance_today,
+    mark_client_staff_attendance,
+    mark_field_staff_attendance,
+    record_field_geo_alert,
+)
+from support_db_branches import create_client_branch_install_token, list_branches
+from support_db_organizations import get_organization
+from support_db_dashboard_summary import (
+    get_client_dashboard_overview,
+    get_tenant_fast_summary,
+)
+from support_db_internal import get_camera_recognition_status, import_embeddings_cloud_mode
+from support_db_nodes import (
+    activate_node_with_install_token,
+    apply_camera_live_status,
+    get_local_node_status,
+    get_node_by_api_key,
+    get_node_config,
+    get_org_recognition_embeddings,
+    get_recent_fallback_attendance_bulk,
+    node_heartbeat,
+    push_node_attendance,
+    push_node_embeddings,
+    record_cloud_camera_attendance,
+)
+from support_db_payroll import (
+    create_client_leave_request,
+    create_client_overtime_request,
+    delete_client_leave_request,
+    get_approved_leaves_for_payroll_period,
+    get_approved_overtime_hours_for_payroll_period,
+    get_client_branch_summary,
+    get_client_leave_owned_by_org,
+    get_client_overtime_owned_by_org,
+    get_client_payroll_page,
+    get_leave_type_allocations,
+    get_leave_type_rules,
+    get_local_node_overtime_hours_for_payroll_period,
+    get_paid_payroll_periods,
+    get_payroll_policy,
+    get_staff_attendance_for_payroll_period,
+    list_client_overtime_requests,
+    mark_payroll_paid,
+    mark_payroll_pending,
+    resolve_effective_allowances,
+    resolve_effective_ot_rate,
+    save_payroll_policy,
+    update_client_leave_status,
+    update_client_overtime_status,
+)
 from zoneinfo import ZoneInfo, available_timezones
 from core.vertical_templates import (
     list_vertical_templates as _list_vertical_templates,
@@ -3244,57 +3265,6 @@ def list_client_leave_requests(
     return annotate_leave_payroll_treatment(org_key, mapped_rows)
 
 
-def _leave_request_bucket(row: dict, leave_type_rules: dict) -> Optional[str]:
-    """'paid' / 'unpaid' / None for a single mapped leave row, mirroring
-    resolveLeaveBucket in the dashboard's useLeaveHistory.ts exactly: the
-    *current* leaveTypeRules classification wins; only when this row's
-    leave_type isn't in that map at all (e.g. a type since removed from
-    Payroll Rules) does it fall back to the row's own already-computed
-    leave_compensation snapshot. Kept as one function so the mobile
-    summary below and any future caller can't each drift into their own
-    slightly different fallback order."""
-    leave_type = str(row.get('leave_type') or '').strip()
-    rule = leave_type_rules.get(leave_type)
-    if rule in ('paid', 'unpaid'):
-        return rule
-    compensation = row.get('leave_compensation')
-    if compensation in ('paid', 'unpaid'):
-        return compensation
-    return None
-
-
-def _leave_request_days(row: dict) -> float:
-    """Same whole-day count _map_client_leave already computed for this
-    row (max(1, end-start+1), half_day_period not factored in) -- reused
-    as-is rather than recomputed, so a half-day leave counts the same way
-    here as it already does on the Leave Management/History tab. See
-    _map_client_leave's docstring-equivalent comment on `days` for why
-    that's the existing convention (leave_requests has no stored `days`
-    column, and half_day_period only ever shortens which half of a single
-    day is covered, not the day count itself)."""
-    try:
-        return float(row.get('days') or 1)
-    except (TypeError, ValueError):
-        return 1.0
-
-
-def _leave_request_overlaps_month(row: dict, month_start: date, month_end: date) -> bool:
-    try:
-        start = date.fromisoformat(str(row.get('start_date')))
-        end = date.fromisoformat(str(row.get('end_date') or row.get('start_date')))
-    except (TypeError, ValueError):
-        return False
-    return start <= month_end and end >= month_start
-
-
-def _leave_request_in_year(row: dict, year: int) -> bool:
-    # Same basis as the dashboard's leaveYear() in leave.utils.ts: the
-    # request counts toward the year its start_date falls in, not any
-    # year an end_date might spill into.
-    start = str(row.get('start_date') or '')
-    return start[:4].isdigit() and int(start[:4]) == year
-
-
 def get_client_staff_leave_summary(
     org_id: str,
     staff_id: str,
@@ -3307,39 +3277,59 @@ def get_client_staff_leave_summary(
     """Own-leave summary for the mobile Leave screen -- annual quota/taken/
     remaining (paid + unpaid), or a given month's taken-only figures.
 
-    Deliberately reuses list_client_leave_requests + get_leave_type_allocations
-    (the exact same two calls the dashboard's Leave History tab makes via
-    GET /api/leaves and GET /api/leaves/types) rather than issuing a new
-    Supabase query -- this can't disagree with what the same employee's row
-    already shows on the Client Dashboard, because it's the same data read
-    through the same functions.
+    Quota/total/remaining still come from get_leave_type_allocations (same
+    call the dashboard's Leave History tab makes via GET /api/leaves/types)
+    -- there is no attendance dimension to a configured quota, only to how
+    much of it has actually been used.
+
+    "Taken", however, is delegated entirely to
+    support_db_payroll.get_client_staff_leave_taken -- the SAME function
+    (same two Supabase reads, same reconcile_leave_against_attendance
+    reconciliation) the Payroll page's per-staff deduction math runs. A day
+    only counts as taken when both hold: an approved leave request covers
+    it, AND the staff member has no attendance row for it (wasn't present).
+    Approving a leave request alone no longer marks a day as taken if the
+    employee still showed up that day -- this mobile summary previously
+    summed every approved request's day-count unconditionally, which could
+    disagree with what Payroll actually deducted for the same staff member.
 
     period='year': returns totalLeaves/totalPaidLeaves/totalUnpaidLeaves
     (from leaveTypeQuotas, summed by leaveTypeRules bucket), quotaConfigured
     (False when no paid/unpaid type has a quota entry at all -- caller must
     render that as "not configured", never as 0), takenPaidLeaves/
-    takenUnpaidLeaves for `year` (status='approved' only, same as
-    useLeaveHistory's takenByStaff), and remainingPaidLeaves/
+    takenUnpaidLeaves for the whole `year`, and remainingPaidLeaves/
     remainingUnpaidLeaves/remainingLeaves -- NOT clamped at 0, matching the
     dashboard table's deliberate choice to surface a policy overage rather
     than hide it.
 
     period='month': returns only takenPaidLeaves/takenUnpaidLeaves/
-    takenThisMonth for the given [month_start, month_end] range (any
-    approved leave whose [start_date, end_date] overlaps the month) -- no
+    takenThisMonth for the given [month_start, month_end] range -- no
     total/remaining keys at all, since there is no monthly quota concept
     anywhere in this schema for those to mean anything.
     """
-    # Deferred import: support_db_payroll.py only ever imports from this
+    # Deferred imports: support_db_payroll.py only ever imports from this
     # module locally too (_map_client_leave, at lines 1260/1379/1394) --
     # a top-level import here in the other direction would reintroduce
     # the exact circular dependency that convention already avoids.
-    from support_db_payroll import get_leave_type_allocations
+    from support_db_payroll import get_leave_type_allocations, get_client_staff_leave_taken
 
     allocations = get_leave_type_allocations(org_id, branch_id=branch_id)
     leave_type_rules = allocations['leaveTypeRules']
     leave_type_quotas = allocations['leaveTypeQuotas']
 
+    if period == 'month':
+        if month_start is None or month_end is None:
+            raise ValueError("month_start/month_end are required for period='month'")
+        taken = get_client_staff_leave_taken(
+            org_id, staff_id, branch_id, month_start, month_end, leave_type_rules,
+        )
+        return {
+            'takenPaidLeaves': taken['takenPaidLeaves'],
+            'takenUnpaidLeaves': taken['takenUnpaidLeaves'],
+            'takenThisMonth': round(taken['takenPaidLeaves'] + taken['takenUnpaidLeaves'], 1),
+        }
+
+    # period == 'year'
     paid_types = [t for t, rule in leave_type_rules.items() if rule == 'paid']
     unpaid_types = [t for t, rule in leave_type_rules.items() if rule == 'unpaid']
     total_paid = sum(leave_type_quotas.get(t, 0) for t in paid_types)
@@ -3347,40 +3337,11 @@ def get_client_staff_leave_summary(
     quota_configured = any(t in leave_type_quotas for t in paid_types) or \
         any(t in leave_type_quotas for t in unpaid_types)
 
-    rows = list_client_leave_requests(org_id=org_id, branch_id=branch_id, user_id=staff_id, status='approved')
-
-    if period == 'month':
-        if month_start is None or month_end is None:
-            raise ValueError("month_start/month_end are required for period='month'")
-        taken_paid = 0.0
-        taken_unpaid = 0.0
-        for row in rows:
-            if not _leave_request_overlaps_month(row, month_start, month_end):
-                continue
-            bucket = _leave_request_bucket(row, leave_type_rules)
-            days = _leave_request_days(row)
-            if bucket == 'paid':
-                taken_paid += days
-            elif bucket == 'unpaid':
-                taken_unpaid += days
-        return {
-            'takenPaidLeaves': round(taken_paid, 1),
-            'takenUnpaidLeaves': round(taken_unpaid, 1),
-            'takenThisMonth': round(taken_paid + taken_unpaid, 1),
-        }
-
-    # period == 'year'
-    taken_paid = 0.0
-    taken_unpaid = 0.0
-    for row in rows:
-        if not _leave_request_in_year(row, year):
-            continue
-        bucket = _leave_request_bucket(row, leave_type_rules)
-        days = _leave_request_days(row)
-        if bucket == 'paid':
-            taken_paid += days
-        elif bucket == 'unpaid':
-            taken_unpaid += days
+    taken = get_client_staff_leave_taken(
+        org_id, staff_id, branch_id, date(year, 1, 1), date(year, 12, 31), leave_type_rules,
+    )
+    taken_paid = taken['takenPaidLeaves']
+    taken_unpaid = taken['takenUnpaidLeaves']
 
     total_leaves = total_paid + total_unpaid
     return {
@@ -3388,10 +3349,10 @@ def get_client_staff_leave_summary(
         'quotaConfigured': quota_configured,
         'totalLeaves': total_leaves,
         'totalPaidLeaves': total_paid,
-        'takenPaidLeaves': round(taken_paid, 1),
-        'remainingPaidLeaves': total_paid - round(taken_paid, 1),
+        'takenPaidLeaves': taken_paid,
+        'remainingPaidLeaves': total_paid - taken_paid,
         'totalUnpaidLeaves': total_unpaid,
-        'takenUnpaidLeaves': round(taken_unpaid, 1),
-        'remainingUnpaidLeaves': total_unpaid - round(taken_unpaid, 1),
+        'takenUnpaidLeaves': taken_unpaid,
+        'remainingUnpaidLeaves': total_unpaid - taken_unpaid,
         'remainingLeaves': total_leaves - round(taken_paid + taken_unpaid, 1),
     }

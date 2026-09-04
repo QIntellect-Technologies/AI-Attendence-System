@@ -860,9 +860,12 @@ export interface DetectionParams extends ScopeParams {
   cameraIds?: string[];
 }
 
-const API_BASE = (
+const configuredApiBase = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || "/api"
 ).replace(/\/$/, "");
+const API_BASE = configuredApiBase.endsWith("/api")
+  ? configuredApiBase
+  : `${configuredApiBase}/api`;
 
 // Same storage key as apiClient.ts's AUTH_TOKEN_STORAGE_KEY — deliberately
 // duplicated as a plain string constant rather than imported, matching
@@ -926,7 +929,7 @@ async function requestJson<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_BASE}/api${path}`, {
+  const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     signal,
     credentials: "same-origin",

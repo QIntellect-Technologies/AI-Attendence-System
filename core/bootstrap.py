@@ -29,7 +29,10 @@ def register_cuda_dll_dirs() -> None:
             module = __import__(f"nvidia.{name}", fromlist=[name])
         except ImportError:
             continue
-        dll_dir = Path(module.__file__).resolve().parent / "bin"
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            continue
+        dll_dir = Path(module_file).resolve().parent / "bin"
         if dll_dir.is_dir():
             os.add_dll_directory(str(dll_dir))
             registered.append(name)

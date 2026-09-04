@@ -3737,6 +3737,144 @@ def get_approved_leaves_for_payroll_period(
         })
     return grouped
 
+
+def get_client_staff_leave_taken(
+    org_id: str,
+    staff_id: str,
+    branch_id: str,
+    period_start: date,
+    period_end: date,
+    leave_type_rules: dict,
+) -> dict:
+    """Single source of truth for 'how many leave days has this staff
+    member taken', for any [period_start, period_end] window.
+
+    A day only counts as taken when BOTH hold: (1) an approved leave
+    request covers that date, and (2) the staff member was not present
+    that date (no attendance row — see reconcile_leave_against_attendance
+    for why presence always wins). This is exactly what payroll already
+    computes per staff during a payroll run; this function runs the same
+    two reads (get_approved_leaves_for_payroll_period,
+    get_staff_attendance_for_payroll_period) and the same reconciliation
+    (payroll_engine.reconcile_leave_against_attendance) for one staff
+    member outside of a payroll run, so the mobile Leave screen and the
+    Payroll page can never disagree about what "taken" means.
+
+    Callers: support_db.get_client_staff_leave_summary (mobile Leave
+    screen's stat cards). Not used by the payroll page itself, which
+    already fetches attendance/leave batched across a whole branch and
+    calls reconcile_leave_against_attendance directly inside
+    payroll_engine.compute_payroll_breakdown — recomputing that per staff
+    member here would be a redundant Supabase round-trip per row.
+    """
+    from payroll_engine import reconcile_leave_against_attendance, is_unpaid_leave_type
+
+    p_start_iso, p_end_iso = period_start.isoformat(), period_end.isoformat()
+
+    leaves_by_staff = get_approved_leaves_for_payroll_period(
+        org_id, branch_id, p_start_iso, p_end_iso, staff_ids=[staff_id],
+    )
+    attendance_by_staff = get_staff_attendance_for_payroll_period(
+        org_id, branch_id, p_start_iso, p_end_iso, staff_ids=[staff_id],
+    )
+
+    leave_rows = leaves_by_staff.get(staff_id, [])
+    # Same "any check-in counts as was-here" convention payroll_engine
+    # uses immediately before calling reconcile_leave_against_attendance.
+    attendance_dates = {r['date'] for r in attendance_by_staff.get(staff_id, []) if r.get('date')}
+
+    adjusted_rows, conflict_days = reconcile_leave_against_attendance(leave_rows, attendance_dates)
+
+    taken_paid = 0.0
+    taken_unpaid = 0.0
+    for row in adjusted_rows:
+        leave_type = row.get('leaveType') or ''
+        days = row.get('days') or 0.0
+        if is_unpaid_leave_type(leave_type, leave_type_rules):
+            taken_unpaid += days
+        else:
+            taken_paid += days
+
+    return {
+        'takenPaidLeaves': round(taken_paid, 1),
+        'takenUnpaidLeaves': round(taken_unpaid, 1),
+        'attendanceLeaveConflictDays': round(conflict_days, 1),
+    }
+
+
+def get_client_staff_leave_taken_bulk(
+    org_id: str,
+    branch_id: str,
+    period_start: date,
+    period_end: date,
+    leave_type_rules: dict,
+) -> dict[str, dict]:
+    """Bulk reconciliation of taken leaves for ALL active staff in a branch
+    during a period. Returns the same data get_client_staff_leave_taken
+    returns (takenPaidLeaves, takenUnpaidLeaves, attendanceLeaveConflictDays)
+    per staff_id.
+
+    This is the counterpart to the Leave History page's per-staff requirements —
+    fetch leaves and attendance in bulk (not per-staff), then reconcile all at
+    once. Much more efficient than calling get_client_staff_leave_taken in a
+    loop, same efficiency as the Payroll page's batch compute path.
+
+    Returns:
+      {
+        staff_id: {
+          'takenPaidLeaves': float,
+          'takenUnpaidLeaves': float,
+          'attendanceLeaveConflictDays': float,
+        },
+        ...
+      }
+    """
+    from payroll_engine import reconcile_leave_against_attendance, is_unpaid_leave_type
+
+    p_start_iso, p_end_iso = period_start.isoformat(), period_end.isoformat()
+
+    # Fetch all leaves and attendance for the entire branch in one batch
+    leaves_by_staff = get_approved_leaves_for_payroll_period(
+        org_id, branch_id, p_start_iso, p_end_iso, staff_ids=None,
+    )
+    attendance_by_staff = get_staff_attendance_for_payroll_period(
+        org_id, branch_id, p_start_iso, p_end_iso, staff_ids=None,
+    )
+
+    result: dict[str, dict] = {}
+
+    # Reconcile for every staff member with either leaves or attendance
+    all_staff_ids = set(leaves_by_staff.keys()) | set(attendance_by_staff.keys())
+
+    for staff_id in all_staff_ids:
+        leave_rows = leaves_by_staff.get(staff_id, [])
+        attendance_dates = {
+            r['date'] for r in attendance_by_staff.get(staff_id, []) if r.get('date')
+        }
+
+        adjusted_rows, conflict_days = reconcile_leave_against_attendance(
+            leave_rows, attendance_dates
+        )
+
+        taken_paid = 0.0
+        taken_unpaid = 0.0
+        for row in adjusted_rows:
+            leave_type = row.get('leaveType') or ''
+            days = row.get('days') or 0.0
+            if is_unpaid_leave_type(leave_type, leave_type_rules):
+                taken_unpaid += days
+            else:
+                taken_paid += days
+
+        result[staff_id] = {
+            'takenPaidLeaves': round(taken_paid, 1),
+            'takenUnpaidLeaves': round(taken_unpaid, 1),
+            'attendanceLeaveConflictDays': round(conflict_days, 1),
+        }
+
+    return result
+
+
 def get_approved_overtime_hours_for_payroll_period(
     org_id: str,
     branch_id: str | list[str] | tuple[str, ...],

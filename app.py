@@ -1,4 +1,5 @@
 
+
 # """
 # Flask AI Attendance System
 # - Enrollment: Upload video, extract embeddings, store profile
@@ -1072,29 +1073,28 @@
 #             # (canceled) requests in the Network tab. get_client_bootstrap()
 #             # in support_db_client_users.py uses the same
 #             # ThreadPoolExecutor pattern for the same reason.
-#             import concurrent.futures
+#             from concurrency import gather_or_raise
 
-#             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-#                 f_cameras = pool.submit(
-#                     support_cp_db.list_client_cameras, raw_org_id, raw_branch_id
-#                 )
-#                 f_org = pool.submit(support_cp_db.get_organization, raw_org_id)
-#                 f_onboarding = pool.submit(
-#                     support_cp_db.get_client_onboarding_config, raw_org_id
-#                 )
-#                 f_node_status = pool.submit(
-#                     support_cp_db.get_local_node_status, raw_org_id
-#                 )
-#                 f_detections = pool.submit(
-#                     support_cp_db.get_today_detections_by_staff,
-#                     raw_org_id, raw_branch_id,
-#                 )
+#             _res, _err = gather_or_raise(
+#                 {
+#                     'cameras': lambda: support_cp_db.list_client_cameras(
+#                         raw_org_id, raw_branch_id),
+#                     'org': lambda: support_cp_db.get_organization(raw_org_id),
+#                     'onboarding': lambda: support_cp_db.get_client_onboarding_config(
+#                         raw_org_id),
+#                     'node_status': lambda: support_cp_db.get_local_node_status(
+#                         raw_org_id),
+#                     'detections': lambda: support_cp_db.get_today_detections_by_staff(
+#                         raw_org_id, raw_branch_id),
+#                 },
+#                 essential=('cameras', 'org', 'onboarding', 'node_status', 'detections'),
+#             )
 
-#                 raw_cameras = f_cameras.result() or []
-#                 org = f_org.result()
-#                 onboarding_config = f_onboarding.result() or {}
-#                 node_status = f_node_status.result()
-#                 detections_by_staff = f_detections.result() or {}
+#             raw_cameras = _res['cameras'] or []
+#             org = _res['org']
+#             onboarding_config = _res['onboarding'] or {}
+#             node_status = _res['node_status']
+#             detections_by_staff = _res['detections'] or {}
 
 #             # Per-camera live status (Normal/Offline/Not Synced), not the
 #             # node-wide is_node_offline flag computed below — a node can be
@@ -1146,23 +1146,24 @@
 #             # parallel — most orgs only have one or two active people-types,
 #             # but this avoids paying for them one after another when there
 #             # are several.
-#             with concurrent.futures.ThreadPoolExecutor(
-#                 max_workers=max(1, len(scoped_people_types))
-#             ) as pool:
-#                 staff_futures = {
-#                     person_type: pool.submit(
-#                         support_cp_db.list_client_staff,
-#                         raw_org_id,
-#                         branch_id=raw_branch_id,
-#                         people_type=person_type,
-#                         archived=False,
+#             _staff_res, _staff_err = gather_or_raise(
+#                 {
+#                     person_type: (
+#                         lambda pt=person_type: support_cp_db.list_client_staff(
+#                             raw_org_id,
+#                             branch_id=raw_branch_id,
+#                             people_type=pt,
+#                             archived=False,
+#                         )
 #                     )
 #                     for person_type in scoped_people_types
-#                 }
-#                 all_staff_by_type = {
-#                     person_type: (future.result() or [])
-#                     for person_type, future in staff_futures.items()
-#                 }
+#                 },
+#                 essential=tuple(scoped_people_types),
+#             )
+#             all_staff_by_type = {
+#                 person_type: (_staff_res[person_type] or [])
+#                 for person_type in scoped_people_types
+#             }
 
 #             # Fetch fallback/manual attendance for every in-scope person in
 #             # ONE Supabase round trip instead of one call per person. The
@@ -1860,9 +1861,12 @@
 #             db.init_db()
 #         except:
 #             db_ok = False
+#         # Report whether the model files are present, without loading them.
+#         # Calling get_face_model() here would force a multi-hundred-MB load
+#         # on every health probe.
 #         try:
-#             get_face_model(MODELS_DIR, prefer_gpu=ENABLE_GPU)
-#         except:
+#             models_ok = (MODELS_DIR / 'models' / 'buffalo_l').exists()
+#         except Exception:
 #             models_ok = False
 #         return jsonify({
 #             'status': 'healthy' if (db_ok and models_ok) else 'degraded',
@@ -6517,9 +6521,14 @@
 #         logger.info("✓ Database initialized")
 #         refresh_embedding_cache()
 
-#         logger.info("[*] Warming up AI models (InsightFace)...")
-#         get_face_model(MODELS_DIR, prefer_gpu=ENABLE_GPU)
-#         logger.info("✓ AI models loaded and warmed up successfully")
+#         # Deliberately NOT warmed up here. get_face_model() is a lazy
+#         # singleton, so the first face-recognition request loads it once and
+#         # every later request reuses it. Loading at import made every
+#         # Passenger respawn pay ~8s and several hundred MB of onnxruntime
+#         # against the account-wide LVE thread/memory cap, which is what
+#         # starved unrelated routes of threads. Non-AI routes (login,
+#         # bootstrap, dashboard) never need the model at all.
+#         logger.info("[*] AI models will load lazily on first use.")
 #     except Exception as e:
 #         logger.error(f"✗ Startup initialization failed: {e}")
 #     logger.info("="*60 + "\n")
@@ -6683,6 +6692,7 @@ app.register_blueprint(internal_bp)
 from support_routes import support_bp
 from tenant_routes import tenant_bp
 import support_db as support_cp_db
+import support_db_payroll
 from supabase_client import get_supabase
 from support_db_fast import (
     FastScope,
@@ -10303,6 +10313,7 @@ def api_staff_photo(staff_id):
         photos_dir.mkdir(parents=True, exist_ok=True)
         safe_ext = 'jpg' if ext == 'jpeg' else ext
         filename = secure_filename(f"staff_{str(staff_id).replace('-', '_')}.{safe_ext}")
+        photo.save(str(photos_dir / filename))
 
         # Store an API URL, not a /static-style URL and never a browser blob URL.
         cache_buster = int(datetime.now(timezone.utc).timestamp())
@@ -10856,6 +10867,93 @@ def api_get_leave_types():
     except Exception as exc:
         logger.exception('Leave type rules lookup failed for org=%s', org_id)
         return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/leaves/taken', methods=['GET'])
+@require_client_dashboard_auth
+def api_get_leaves_taken_reconciled():
+    """Reconciled leave-taken counts per staff member for the Leave History
+    page. Matches payroll's logic: a leave day only counts as taken if the
+    staff member has an approved leave request AND was not present that day
+    (any attendance record overrides the leave).
+
+    Query parameters:
+      year (int, required): Calendar year to aggregate (e.g. 2024)
+      branch_id (str, optional): Branch UUID; if omitted, uses dashboard user's branch_id
+      organization_id (str, optional): Matched against session token (never trusted from query)
+
+    Returns per-staff breakdown:
+      {
+        staff_id: {
+          'takenPaidLeaves': float,
+          'takenUnpaidLeaves': float,
+          'attendanceLeaveConflictDays': float
+        },
+        ...
+      }
+    """
+    dashboard_user = g.dashboard_user
+    org_id = str(dashboard_user.get('org_id') or '').strip()
+    
+    # Resolve branch_id: same admin-aware pattern as /api/leaves and /api/attendance/today
+    raw_branch_id = request.args.get('branch_id') or request.args.get('branchId')
+    if not dashboard_user.get('is_admin'):
+        raw_branch_id = dashboard_user.get('branch_id') or raw_branch_id
+
+    try:
+        year = int(request.args.get('year') or '')
+    except (TypeError, ValueError):
+        return jsonify({
+            'success': False,
+            'error': 'year must be a valid integer (e.g. 2024)',
+        }), 400
+
+    if not org_id:
+        return jsonify({'success': False, 'error': 'organization_id is required'}), 400
+
+    if not raw_branch_id:
+        return jsonify({'success': False, 'error': 'branch_id is required'}), 400
+
+    # Supabase/UUID organizations only — the Leave History page is a Support
+    # Dashboard feature, and legacy numeric orgs don't run it.
+    if _positive_int(org_id):
+        return jsonify({
+            'success': False,
+            'error': 'Reconciled leave taken is only supported for Supabase organizations',
+        }), 400
+
+    try:
+        from datetime import date as date_class
+
+        # Compute the period for the calendar year
+        period_start = date_class(year, 1, 1)
+        period_end = date_class(year, 12, 31)
+
+        # Get effective leave type rules (org + branch override)
+        leave_policy = support_cp_db.get_payroll_policy(org_id, raw_branch_id)
+        leave_type_rules = leave_policy.get('leaveTypeRules', {})
+
+        # Bulk reconcile taken leaves for all staff in the branch/period
+        taken_by_staff = support_db_payroll.get_client_staff_leave_taken_bulk(
+            org_id=org_id,
+            branch_id=raw_branch_id,
+            period_start=period_start,
+            period_end=period_end,
+            leave_type_rules=leave_type_rules,
+        )
+
+        return jsonify({
+            'success': True,
+            'year': year,
+            'branch_id': raw_branch_id,
+            'taken_by_staff': taken_by_staff,
+        }), 200
+
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc), 'message': str(exc)}), 400
+    except Exception as exc:
+        logger.exception('Reconciled leave taken lookup failed for org=%s branch=%s year=%d', org_id, raw_branch_id, year)
+        return jsonify({'success': False, 'error': str(exc), 'message': str(exc)}), 500
 
 
 @app.route('/api/leaves', methods=['POST'])

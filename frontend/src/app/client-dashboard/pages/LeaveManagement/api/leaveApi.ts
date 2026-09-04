@@ -433,7 +433,10 @@ export type LeaveTypeQuotas = Record<string, number>;
 export async function getLeaveTypeAllocations(params: {
   organizationId: number | string;
   branchId?: number | string | null;
-}): Promise<{ leaveTypeRules: LeaveTypeRules; leaveTypeQuotas: LeaveTypeQuotas }> {
+}): Promise<{
+  leaveTypeRules: LeaveTypeRules;
+  leaveTypeQuotas: LeaveTypeQuotas;
+}> {
   const response = await leaveJson<{
     leaveTypeRules?: LeaveTypeRules;
     leaveTypeQuotas?: LeaveTypeQuotas;
@@ -512,4 +515,39 @@ export async function deleteLeaveRequest(
       body: JSON.stringify({ organization_id: orgId }),
     },
   );
+}
+
+export interface TakenLeaveRecord {
+  takenPaidLeaves: number;
+  takenUnpaidLeaves: number;
+  attendanceLeaveConflictDays: number;
+}
+
+export type TakenLeavesByStaff = Record<string, TakenLeaveRecord>;
+
+export async function getLeavesTaken(params: {
+  year: number;
+  branchId?: string | number | null;
+  organizationId?: string | number | null;
+}): Promise<TakenLeavesByStaff> {
+  const query = new URLSearchParams();
+  query.append("year", String(params.year));
+  if (params.branchId) query.append("branch_id", String(params.branchId));
+  if (params.organizationId)
+    query.append("organization_id", String(params.organizationId));
+
+  const url = `/api/leaves/taken?${query.toString()}`;
+  const response = await leaveJson<{
+    success: boolean;
+    taken_by_staff: TakenLeavesByStaff;
+    error?: string;
+  }>(url, { method: "GET" });
+
+  if (!response.success) {
+    throw new Error(
+      response.error || "Failed to fetch reconciled taken leaves",
+    );
+  }
+
+  return response.taken_by_staff || {};
 }

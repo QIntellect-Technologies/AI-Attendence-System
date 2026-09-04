@@ -521,6 +521,23 @@ def _client_staff_safe(
         duty_start = row.get('duty_start') or '09:00'
         duty_end = row.get('duty_end') or '17:00'
 
+    profile_image_url = row.get('profile_image_url') or ''
+    profile_image_name = row.get('profile_image_name') or ''
+    if (
+        str(profile_image_url).startswith('/api/staff/')
+        and profile_image_name
+        and not os.path.isfile(
+            os.path.join(
+                os.path.dirname(__file__),
+                'static',
+                'staff_profile_photos',
+                os.path.basename(str(profile_image_name)),
+            )
+        )
+    ):
+        profile_image_url = ''
+        profile_image_name = ''
+
     return {
         'id': row.get('id'),
         'user_id': row.get('id'),
@@ -590,13 +607,13 @@ def _client_staff_safe(
         'dutyStart': duty_start,
         'duty_end': duty_end,
         'dutyEnd': duty_end,
-        'profile_image_url': row.get('profile_image_url') or '',
-        'profileImageUrl': row.get('profile_image_url') or '',
-        'avatarUrl': row.get('profile_image_url') or '',
-        'photo_url': row.get('profile_image_url') or '',
-        'photoUrl': row.get('profile_image_url') or '',
-        'profile_image_name': row.get('profile_image_name') or '',
-        'profileImageName': row.get('profile_image_name') or '',
+        'profile_image_url': profile_image_url,
+        'profileImageUrl': profile_image_url,
+        'avatarUrl': profile_image_url,
+        'photo_url': profile_image_url,
+        'photoUrl': profile_image_url,
+        'profile_image_name': profile_image_name,
+        'profileImageName': profile_image_name,
         'attendance_enabled': bool(row.get('attendance_enabled', True)),
         'attendanceEnabled': bool(row.get('attendance_enabled', True)),
         'is_face_verified': bool(row.get('is_face_verified', False)),
