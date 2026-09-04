@@ -1749,7 +1749,7 @@ from support_db_attendance_mobile import (
     record_field_geo_alert,
 )
 from support_db_branches import create_client_branch_install_token, list_branches
-from support_db_organizations import get_organization
+from support_db_organizations import get_organization, list_organizations
 from support_db_dashboard_summary import (
     get_client_dashboard_overview,
     get_tenant_fast_summary,
@@ -1800,6 +1800,12 @@ from core.vertical_templates import (
     build_vertical_config,
     get_vertical_template,
 )
+
+
+def list_vertical_templates():
+    """Support Dashboard template dropdown options."""
+    return _list_vertical_templates()
+
 
 def _dashboard_day_window_utc(date_value: str | None = None) -> tuple[str, str, str]:
     """Return UTC start/end ISO strings for one dashboard attendance day."""
