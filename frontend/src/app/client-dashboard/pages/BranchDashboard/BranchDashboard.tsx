@@ -14,7 +14,6 @@
 import React from "react";
 import { Navigate, Outlet, useParams } from "react-router-dom";
 import { useOrg } from "../../contexts/OrgConfigContext";
-import DashboardHeader from "../../components/ui/DashboardHeader";
 import BranchOverviewTab from "./BranchOverviewTab";
 
 type BranchRouteParams = {
@@ -36,12 +35,7 @@ const BranchDashboard: React.FC = () => {
     return <Navigate to="/admin/branches" replace />;
   }
 
-  return (
-    <>
-      <DashboardHeader />
-      <Outlet />
-    </>
-  );
+  return <Outlet />;
 };
 
 export const BranchOverviewPage: React.FC = () => {

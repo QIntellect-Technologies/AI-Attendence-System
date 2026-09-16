@@ -1,39 +1,19 @@
-/**
+﻿/**
  * BranchOverviewTab.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Branch-scoped Overview tab.
- *
- * Backend-connected sources:
- * - Attendance/payroll/summary values come from one overview summary request.
- * - PendingLeavesCard may still load its own detailed leave list, but stat
- *   values do not wait for it.
- *
- * Tenant-safety notes:
- * - branchId is intentionally UUID/string-safe. It must remain opaque from the
- *   route through dashboard data hooks so Supabase branch UUIDs are not cast to
- *   Number or reduced to NaN.
- *
- * FIX (this revision): isDashboardModuleVisible takes `user` (the full
- * ModuleAccessUser, so accountAllowsModule can also check user.role), not a
- * bare accountModuleKeys string[] — a string[] alone can't tell a staff
- * account from an admin one, which is exactly the distinction FIX #2 exists
- * to preserve. Passing accountModuleKeys here would have silently disabled
- * the staff per-account restriction for every card on this tab. See
- * moduleAccess.ts's DashboardModuleVisibilityArgs for the authoritative
- * signature.
  */
 
-import React, { useState } from "react";
-import { RefreshCcw, TrendingUp, UserCheck, Users, UserX } from "lucide-react";
-import RefreshButton from "../../components/ui/RefreshButton";
-import SegmentedControl from "../../components/ui/SegmentedControl";
+import React, { useMemo, useState } from "react";
+import { TrendingUp, UserCheck, Users, UserX } from "lucide-react";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
-import usePeopleTypeSelector from "../../hooks/usepeopletypeselector ";
-import useManagerTeamView from "../../hooks/useManagerTeamView";
 import { useOrg, useOrgMasterData } from "../../contexts/OrgConfigContext";
 import { useAuth } from "../../contexts/useAuth";
 import { T } from "../../components/ui/theme";
-import PeopleTypeSelector from "../../components/ui/PeopleTypeSelector";
+import PeopleTypeSelector, {
+  type PeopleTypeOption,
+} from "../../components/ui/PeopleTypeSelector";
+import RefreshButton from "../../components/ui/RefreshButton";
 import {
   resolveActivePeopleTypes,
   resolvePeopleRenderingModel,
@@ -60,41 +40,6 @@ interface BranchOverviewTabProps {
   branchId: BranchOverviewBranchId;
 }
 
-type Refreshable = {
-  refetch?: () => Promise<unknown> | unknown;
-  reload?: () => Promise<unknown> | unknown;
-  refresh?: () => Promise<unknown> | unknown;
-};
-
-async function runRefresh(...sources: Refreshable[]): Promise<void> {
-  const jobs = sources
-    .map((source) => source.refetch ?? source.reload ?? source.refresh)
-    .filter(
-      (fn): fn is () => Promise<unknown> | unknown => typeof fn === "function",
-    )
-    .map((fn) => Promise.resolve(fn()));
-
-  if (jobs.length) {
-    await Promise.allSettled(jobs);
-  }
-}
-
-// Module-visibility logic (org purchase + per-account restriction + per
-// people-type/per-branch gating) now lives in utils/moduleAccess.ts as one
-// shared resolver — see isDashboardModuleVisible import above. This mirrors
-// DashboardTabBar.tsx's userAllowedModules contract exactly (byte-for-byte
-// "can this account see module X"), plus adds the people-type dimension
-// that file doesn't need.
-
-function hasRealShiftData(
-  shifts: Array<{ staffCount?: number; members?: unknown[] }>,
-): boolean {
-  return shifts.some(
-    (shift) =>
-      Number(shift.staffCount || 0) > 0 || (shift.members || []).length > 0,
-  );
-}
-
 const gridAuto = (minWidth = 260): React.CSSProperties => ({
   display: "grid",
   gridTemplateColumns: `repeat(auto-fit, minmax(${minWidth}px, 1fr))`,
@@ -112,29 +57,45 @@ const equalSummaryWidgetGrid = (minWidth = 300): React.CSSProperties => ({
 });
 
 const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
-  const { cfg } = useOrg();
+  const { cfg, visibleBranches } = useOrg();
   const masterData = useOrgMasterData();
   const { user } = useAuth();
+  const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
+    null,
+  );
   const enabledModules = activeModulesFromConfig(masterData.modules);
   const hasPurchasedModule = enabledModules.length > 0;
 
-  // ── People type: single vs. selectable ─────────────────────────────────
   const activePeopleTypes = resolveActivePeopleTypes(cfg);
-  const peopleTypeOptions = activePeopleTypes.map((type) => ({
-    value: type,
-    label: resolvePeopleRenderingModel(cfg, type).personPlural,
-  }));
-  const peopleTypeSelector = usePeopleTypeSelector(peopleTypeOptions);
-  const selectedPeopleType =
-    activePeopleTypes.length === 1
-      ? activePeopleTypes[0]
-      : peopleTypeSelector.selected;
+  const defaultType =
+    activePeopleTypes.length > 0 ? activePeopleTypes[0] : undefined;
+  const effectivePeopleType =
+    selectedPeopleType ?? defaultType ?? activePeopleTypes[0] ?? null;
   const peopleModel = resolvePeopleRenderingModel(
     cfg,
-    selectedPeopleType ?? undefined,
+    effectivePeopleType ?? undefined,
   );
 
-  // ── Module cards: org purchase + account restriction + this people type ─
+  useMemo(() => {
+    if (!activePeopleTypes.length) return;
+    if (!selectedPeopleType && defaultType) {
+      setSelectedPeopleType(defaultType);
+    }
+    if (selectedPeopleType && !activePeopleTypes.includes(selectedPeopleType)) {
+      setSelectedPeopleType(defaultType ?? activePeopleTypes[0]);
+    }
+  }, [activePeopleTypes, defaultType, selectedPeopleType]);
+
+  const peopleTypeOptions = useMemo<PeopleTypeOption[]>(
+    () =>
+      activePeopleTypes.map((type) => ({
+        value: type,
+        label:
+          peopleModel.peopleType === type ? peopleModel.personPlural : type,
+      })),
+    [activePeopleTypes, peopleModel.personPlural, peopleModel.peopleType],
+  );
+
   const moduleVisibleFor = (
     moduleKey: Parameters<typeof isDashboardModuleVisible>[0]["moduleKey"],
   ) =>
@@ -144,7 +105,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       enabledModules,
       user,
       moduleKey,
-      peopleType: selectedPeopleType,
+      peopleType: effectivePeopleType ?? undefined,
       branchId,
     });
 
@@ -156,17 +117,24 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     peopleModel.supportsPayroll && moduleVisibleFor("payroll");
   const showCctvModule = moduleVisibleFor("cctv");
 
-  // ── Manager portal: My Team / Whole Branch ──────────────────────────────
-  const teamView = useManagerTeamView();
-
   const data = useDashboardOverviewData({
     scope: "branch",
     branchId,
-    peopleType: selectedPeopleType,
-    teamView: teamView.eligible ? teamView.teamView : null,
+    peopleType: effectivePeopleType ?? undefined,
+    teamView: null,
   });
 
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const activeBranch =
+    visibleBranches.find((branch) => String(branch.id) === String(branchId)) ??
+    cfg.branches.find((branch) => String(branch.id) === String(branchId));
+  const branchLocation = activeBranch?.city || activeBranch?.location || "";
+  const formattedToday = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
   const isInitialLoading = Boolean(data.loading && !data.error);
   const statValue = (value: number | string): number | string =>
     isInitialLoading ? "—" : value;
@@ -176,24 +144,22 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
   const showCctvDashboard = showCctvModule && cctvItems.length > 0;
   const showPeopleCountCard = showPeopleModule || showAttendanceModule;
   const showShiftDistribution =
-    showAttendanceModule &&
-    peopleModel.supportsShift &&
-    (hasRealShiftData(data.shiftDistribution) || !peopleModel.isStudent);
-  const totalPeopleTitle =
-    selectedPeopleType || activePeopleTypes.length <= 1
-      ? peopleModel.statsTotalLabel
-      : "Total Attendance People";
-
-  const handleRefresh = async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-
-    try {
-      await runRefresh(data as Refreshable);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+    showAttendanceModule && peopleModel.supportsShift;
+  const totalPeopleTitle = peopleModel.statsTotalLabel;
+  const headerActions = (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      {activePeopleTypes.length > 1 && (
+        <PeopleTypeSelector
+          options={peopleTypeOptions}
+          value={effectivePeopleType ?? defaultType ?? activePeopleTypes[0]}
+          onChange={(value) => setSelectedPeopleType(value)}
+          ariaLabel="People type"
+          minWidth={150}
+        />
+      )}
+      <RefreshButton variant="secondary" size="md" onClick={() => undefined} />
+    </div>
+  );
 
   return (
     <div
@@ -203,81 +169,73 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       }}
     >
       <div
-        className="branch-overview-header"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          marginBottom: 10,
+        }}
+      >
+        <div>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 20,
+              fontWeight: 800,
+              color: T.head,
+              letterSpacing: "-0.5px",
+            }}
+          >
+            {activeBranch?.name ?? "Main Branch"}
+          </h2>
+          {branchLocation && (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 12,
+                color: T.muted,
+                lineHeight: 1.4,
+              }}
+            >
+              {branchLocation}
+            </div>
+          )}
+        </div>
+        {headerActions}
+      </div>
+
+      <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          marginBottom: 22,
+          gap: 12,
+          marginBottom: 18,
         }}
       >
-        <div className="branch-overview-header__title">
-          <h2
+        <div>
+          <h3
             style={{
-              fontSize: 22,
-              fontWeight: 700,
+              margin: 0,
+              fontSize: 18,
+              fontWeight: 800,
               color: T.head,
               letterSpacing: "-0.4px",
-              margin: 0,
-              fontFamily: "'DM Sans', sans-serif",
             }}
           >
-            {showAttendanceModule ? "Attendance Overview" : "Branch Overview"}
-          </h2>
-
-          <p
+            Attendance Overview
+          </h3>
+          <div
             style={{
+              marginTop: 4,
               fontSize: 12,
               color: T.muted,
-              marginTop: 2,
-              fontFamily: "'DM Sans', sans-serif",
+              lineHeight: 1.45,
             }}
           >
-            {data.branchName}
-            {data.branchCity ? ` · ${data.branchCity}` : ""} ·{" "}
-            {new Date().toLocaleDateString("en-US", {
-              weekday: "long",
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-            })}
-          </p>
-        </div>
-
-        <div
-          className="branch-overview-header__controls"
-          style={{ display: "flex", alignItems: "center", gap: 10 }}
-        >
-          {peopleTypeOptions.length > 1 && (
-            <PeopleTypeSelector
-              ariaLabel="Select people type"
-              options={peopleTypeOptions}
-              value={selectedPeopleType ?? peopleTypeOptions[0].value}
-              onChange={peopleTypeSelector.setSelected}
-              minWidth={160}
-            />
-          )}
-
-          {teamView.eligible && !teamView.locked && (
-            <SegmentedControl
-              ariaLabel="My team or whole branch"
-              size="sm"
-              options={[
-                { value: "team", label: "My Team" },
-                { value: "branch", label: "Whole Branch" },
-              ]}
-              value={teamView.teamView}
-              onChange={teamView.setTeamView}
-            />
-          )}
-
-          <RefreshButton
-            size="md"
-            variant="secondary"
-            loading={isRefreshing}
-            onClick={handleRefresh}
-            ariaLabel="Refresh overview"
-          />
+            {formattedToday}
+          </div>
         </div>
       </div>
 

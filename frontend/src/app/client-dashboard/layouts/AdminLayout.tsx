@@ -528,20 +528,36 @@ export default function AdminLayout() {
       scope: isStaffDashboard ? BRANCH_SCOPE : GLOBAL_SCOPE,
     }) as NavModule[];
 
+    const filteredModules = isStaffDashboard
+      ? resolvedModules
+      : resolvedModules.filter((module) => {
+          if (module.key === "branches") return visibleBranches.length > 1;
+          return true;
+        });
+
     if (!isStaffDashboard) {
       const branchesModule = MODULE_REGISTRY.find(
         (module) => module.key === "branches",
       );
       if (
         branchesModule &&
-        !resolvedModules.some((module) => module.key === "branches")
+        visibleBranches.length > 1 &&
+        !filteredModules.some((module) => module.key === "branches")
       ) {
-        return [branchesModule as unknown as NavModule, ...resolvedModules];
+        return [branchesModule as unknown as NavModule, ...filteredModules];
       }
+      return filteredModules;
     }
 
-    return resolvedModules;
-  }, [user, cfg.modules, cfg.bizType, isStaffDashboard, isOrgReady]);
+    return filteredModules;
+  }, [
+    user,
+    cfg.modules,
+    cfg.bizType,
+    isStaffDashboard,
+    isOrgReady,
+    visibleBranches,
+  ]);
 
   const peopleRenderingModel = useMemo(
     () =>

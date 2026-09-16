@@ -2893,52 +2893,159 @@ def _shift_distribution_for_branch(
         support_db._normalize_people_type(people_type) if people_type else None
     )
 
-    shifts_query = (
-        sb.table("shifts")
-        .select("id,name,check_in_time,check_out_time")
-        .eq("org_id", org_id)
-        .eq("branch_id", branch_id)
-        .eq("is_active", True)
-        .order("check_in_time")
-    )
-    if normalized_people_type:
-        shifts_query = shifts_query.eq("people_type", normalized_people_type)
-    shift_rows = shifts_query.execute().data or []
+    def branch_shifts_query(include_people_type: bool = False) -> Any:
+        columns = "id,name,check_in_time,check_out_time,is_active"
+        if include_people_type:
+            columns += ",people_type"
+        return (
+            sb.table("shifts")
+            .select(columns)
+            .eq("org_id", org_id)
+            .eq("branch_id", branch_id)
+            .order("check_in_time")
+        )
+
+    shifts_query = branch_shifts_query(include_people_type=True)
+    shift_filter_fallback = False
+    try:
+        filtered_query = shifts_query
+        if normalized_people_type:
+            filtered_query = filtered_query.eq("people_type", normalized_people_type)
+        shift_rows = filtered_query.execute().data or []
+    except Exception as exc:
+        # Older Supabase schemas may not expose people_type on shifts yet.
+        # Keep the dashboard Supabase-backed and use the branch's active rows.
+        logger.warning(
+            "shift distribution people_type filter failed for org=%s branch=%s; "
+            "retrying branch shifts without the filter: %s",
+            org_id,
+            branch_id,
+            exc,
+        )
+        shift_filter_fallback = True
+        shift_rows = branch_shifts_query().execute().data or []
+
+    if normalized_people_type and not shift_rows:
+        # Existing shift rows created before per-people-type shift support may
+        # have a null or legacy people_type. Do not hide configured shifts.
+        shift_filter_fallback = True
+        shift_rows = branch_shifts_query().execute().data or []
+
+    shift_rows = [row for row in shift_rows if row.get("is_active") is not False]
     if not shift_rows:
         return []
 
     counts: dict[str, int] = {}
+    members_by_shift: dict[str, list[dict]] = {}
     if scope_ids is None or scope_ids:
+        staff_columns = (
+            "id,name,position,department_name,shift_id_ref,people_type"
+        )
         staff_query = (
             sb.table("client_staff")
-            .select("shift_id_ref")
+            .select(staff_columns)
             .eq("org_id", org_id)
             .eq("branch_id", branch_id)
             .eq("is_archived", False)
         )
-        if normalized_people_type and support_db._client_staff_has_people_type_column():
+        if (
+            normalized_people_type
+            and not shift_filter_fallback
+            and support_db._client_staff_has_people_type_column()
+        ):
             staff_query = staff_query.eq("people_type", normalized_people_type)
         if scope_ids is not None:
             staff_query = staff_query.in_("id", list(scope_ids))
-        for row in staff_query.execute().data or []:
+        try:
+            staff_rows = staff_query.execute().data or []
+        except Exception as exc:
+            logger.warning(
+                "shift distribution staff detail query failed for org=%s branch=%s; "
+                "retrying with core staff columns: %s",
+                org_id,
+                branch_id,
+                exc,
+            )
+            staff_query = (
+                sb.table("client_staff")
+                .select("id,name,position,shift_id_ref")
+                .eq("org_id", org_id)
+                .eq("branch_id", branch_id)
+                .eq("is_archived", False)
+            )
+            if scope_ids is not None:
+                staff_query = staff_query.in_("id", list(scope_ids))
+            staff_rows = staff_query.execute().data or []
+
+        for row in staff_rows:
             shift_id = row.get("shift_id_ref")
             if shift_id:
-                counts[str(shift_id)] = counts.get(str(shift_id), 0) + 1
+                shift_key = str(shift_id)
+                counts[shift_key] = counts.get(shift_key, 0) + 1
+                members_by_shift.setdefault(shift_key, []).append(
+                    {
+                        "id": str(row.get("id") or ""),
+                        "name": row.get("name") or "Unknown staff",
+                        "department": row.get("department_name") or "General",
+                        "position": row.get("position") or "Staff",
+                        "branchId": branch_id,
+                        "branchName": "",
+                    }
+                )
     # else: scope_ids == frozenset() — a team-scoped manager with zero
     # direct reports. counts stays empty, every shift correctly shows 0.
 
-    return [
-        {
-            "key": str(row["id"]),
-            "label": row.get("name") or "Shift",
-            "time": _format_shift_time(row.get("check_in_time"), row.get("check_out_time")),
-            "staffCount": counts.get(str(row["id"]), 0),
-            "departments": [],
-            "branches": [],
-            "members": [],
-        }
-        for row in shift_rows
-    ]
+    branch_name = branch_id
+    try:
+        branch_result = (
+            sb.table("branches")
+            .select("id,name")
+            .eq("id", branch_id)
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
+        )
+        if branch_result.data:
+            branch_name = branch_result.data[0].get("name") or branch_id
+    except Exception:
+        pass
+
+    result = []
+    for row in shift_rows:
+        shift_key = str(row["id"])
+        members = members_by_shift.get(shift_key, [])
+        departments_by_name: dict[str, dict] = {}
+        for member in members:
+            department_name = str(member["department"])
+            department = departments_by_name.setdefault(
+                department_name,
+                {"name": department_name, "count": 0, "members": []},
+            )
+            department["count"] += 1
+            department["members"].append(member)
+
+        departments = list(departments_by_name.values())
+        result.append(
+            {
+                "key": shift_key,
+                "label": row.get("name") or "Shift",
+                "time": _format_shift_time(
+                    row.get("check_in_time"), row.get("check_out_time")
+                ),
+                "staffCount": counts.get(shift_key, 0),
+                "departments": departments,
+                "branches": [
+                    {
+                        "branchId": branch_id,
+                        "branchName": branch_name,
+                        "staffCount": counts.get(shift_key, 0),
+                        "departments": departments,
+                    }
+                ],
+                "members": members,
+            }
+        )
+    return result
 
 
 def _merge_shift_distributions(per_branch: list[list[dict]]) -> list[dict]:
@@ -3157,12 +3264,19 @@ def get_fast_dashboard_overview(scope: FastScope, dashboard_scope: str = "global
         rpc_started = time.monotonic()
         try:
             rpc_data = _rpc("get_tenant_dashboard_overview", payload)
-            if isinstance(rpc_data, dict):
+            rpc_shifts = (
+                rpc_data.get("shiftDistribution")
+                if isinstance(rpc_data, dict)
+                else None
+            )
+            if rpc_shifts is None and isinstance(rpc_data, dict):
+                rpc_shifts = rpc_data.get("shift_distribution")
+            if isinstance(rpc_data, dict) and isinstance(rpc_shifts, list) and rpc_shifts:
                 _cache.set(key, rpc_data, ttl_seconds)
                 return ok(rpc_data, cached=False)
             logger.warning(
                 "get_fast_dashboard_overview: RPC get_tenant_dashboard_overview "
-                "returned non-dict (%s) after %.2fs for org=%s branch=%s; "
+                "returned an incomplete payload (%s) after %.2fs for org=%s branch=%s; "
                 "falling back to direct query",
                 type(rpc_data).__name__, time.monotonic() - rpc_started, scope.org_id, scope.branch_id,
             )
@@ -3197,7 +3311,34 @@ def get_fast_dashboard_overview(scope: FastScope, dashboard_scope: str = "global
     try:
         sb = get_supabase_client()
         if scope.org_id:
-            branch_rows = sb.table("branches").select("id,name,location,city,created_at").eq("org_id", scope.org_id).order("created_at").execute().data or []
+            try:
+                branch_rows = (
+                    sb.table("branches")
+                    .select("id,name,location,city,created_at")
+                    .eq("org_id", scope.org_id)
+                    .order("created_at")
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as exc:
+                # Some Supabase tenants do not have the optional city column.
+                # Keep the overview and shift queries alive using location.
+                logger.warning(
+                    "dashboard overview: branches.city unavailable for org=%s; "
+                    "retrying branch lookup without city: %s",
+                    scope.org_id,
+                    exc,
+                )
+                branch_rows = (
+                    sb.table("branches")
+                    .select("id,name,location,created_at")
+                    .eq("org_id", scope.org_id)
+                    .order("created_at")
+                    .execute()
+                    .data
+                    or []
+                )
             if total_branches <= 0:
                 total_branches = len(branch_rows)
             resolved_branch = _resolve_branch_id(sb, scope.org_id, scope.branch_id)

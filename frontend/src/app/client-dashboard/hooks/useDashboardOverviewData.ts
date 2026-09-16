@@ -79,7 +79,7 @@ export interface ShiftDepartmentGroup {
 }
 
 export interface ShiftBranchGroup {
-  branchId: number;
+  branchId: number | string;
   branchName: string;
   city?: string;
   staffCount: number;
@@ -279,6 +279,74 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function normalizeShiftDistribution(value: unknown): ShiftDistributionItem[] {
+  const rows = asArray<LooseRecord>(value);
+
+  const normalizeMember = (
+    member: LooseRecord,
+    index: number,
+  ): ShiftMemberItem => ({
+    id: text(member.id, `member-${index}`),
+    name: text(member.name, "Unknown staff"),
+    department: text(member.department ?? member.department_name, "General"),
+    position: text(member.position ?? member.role_name, "Staff"),
+    branchId: (member.branchId ?? member.branch_id ?? 0) as number,
+    branchName: text(member.branchName ?? member.branch_name),
+  });
+
+  return rows.map((row, index) => {
+    const departments = asArray<LooseRecord>(
+      row.departments ?? row.department_breakdown ?? row.departmentBreakdown,
+    ).map((department, departmentIndex) => ({
+      name: text(department.name ?? department.department, "General"),
+      count: numberValue(department.count ?? department.staff_count),
+      members: asArray<LooseRecord>(department.members).map(
+        (member, memberIndex) =>
+          normalizeMember(member, departmentIndex * 1000 + memberIndex),
+      ),
+    }));
+    const branches = asArray<LooseRecord>(
+      row.branches ?? row.branch_breakdown ?? row.branchBreakdown,
+    ).map((branch) => ({
+      branchId: (branch.branchId ?? branch.branch_id ?? branch.id ?? "") as
+        | number
+        | string,
+      branchName: text(branch.branchName ?? branch.branch_name ?? branch.name),
+      city: text(branch.city ?? branch.location),
+      staffCount: numberValue(
+        branch.staffCount ?? branch.staff_count ?? branch.count,
+      ),
+      departments: asArray<LooseRecord>(
+        branch.departments ?? branch.department_breakdown,
+      ).map((department, departmentIndex) => ({
+        name: text(department.name ?? department.department, "General"),
+        count: numberValue(department.count ?? department.staff_count),
+        members: asArray<LooseRecord>(department.members).map(
+          (member, memberIndex) =>
+            normalizeMember(member, departmentIndex * 1000 + memberIndex),
+        ),
+      })),
+    }));
+
+    return {
+      key: text(row.key ?? row.id, `shift-${index}`),
+      label: text(row.label ?? row.name, "Shift"),
+      time: text(
+        row.time ?? row.shift_time ?? row.shiftTime,
+        "--:-- · Flexible",
+      ),
+      staffCount: numberValue(
+        row.staffCount ?? row.staff_count ?? row.count ?? row.total,
+      ),
+      departments,
+      branches,
+      members: asArray<LooseRecord>(row.members ?? row.staff).map(
+        normalizeMember,
+      ),
+    };
+  });
+}
+
 function toLooseRecords(value: readonly unknown[]): LooseRecord[] {
   return value.filter(isRecord);
 }
@@ -457,11 +525,19 @@ function normalizeSnapshot(
     },
     staff: asArray<LooseRecord>(raw.staff),
     liveLog: asArray<DashboardLiveLogItem>(raw.liveLog ?? raw.live_log),
-    shiftDistribution: asArray<ShiftDistributionItem>(
-      raw.shiftDistribution ?? raw.shift_distribution,
+    shiftDistribution: normalizeShiftDistribution(
+      raw.shiftDistribution ??
+        raw.shift_distribution ??
+        (isRecord(raw.cards)
+          ? (raw.cards.shiftDistribution ?? raw.cards.shift_distribution)
+          : undefined),
     ).length
-      ? asArray<ShiftDistributionItem>(
-          raw.shiftDistribution ?? raw.shift_distribution,
+      ? normalizeShiftDistribution(
+          raw.shiftDistribution ??
+            raw.shift_distribution ??
+            (isRecord(raw.cards)
+              ? (raw.cards.shiftDistribution ?? raw.cards.shift_distribution)
+              : undefined),
         )
       : fallback.shiftDistribution,
     todayStatus: asArray<TodayStatusItem>(raw.todayStatus ?? raw.today_status)

@@ -25,9 +25,9 @@
  *   org status, and attendance mode.
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ChevronLeft, Download, Loader2 } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { T } from "./theme";
 import { Badge } from "./DashboardComponents";
 import { BranchSelector } from "./BranchSelector";
@@ -35,7 +35,6 @@ import { useOrg } from "../../contexts/OrgConfigContext";
 import { useModule } from "../../contexts/ModuleContext";
 import { useAuth } from "../../contexts/useAuth";
 import { useBranchSelector } from "../../hooks/useBranchSelector";
-import { downloadClientNodeInstaller } from "../../pages/Branches/api/clientNodeInstallerApi";
 
 type BranchRouteParams = {
   branchId?: string;
@@ -103,7 +102,9 @@ function isLocalAttendanceMode(cfg: ConfigLike): boolean {
  * previous list here also allowed trial/launched, so a trial org saw an
  * enabled button that the server always rejected.
  */
-function isOrgAllowedForInstaller(user: AuthUserLike | null | undefined): boolean {
+function isOrgAllowedForInstaller(
+  user: AuthUserLike | null | undefined,
+): boolean {
   const status = normalizeKey(
     user?.organizationStatus ?? user?.organization_status ?? "active",
   );
@@ -190,8 +191,6 @@ export const DashboardHeader: React.FC = () => {
   const modules = useModule();
   const { user } = useAuth() as { user?: AuthUserLike | null };
   const { branchId: branchIdParam } = useParams<BranchRouteParams>();
-  const [isDownloadingInstaller, setIsDownloadingInstaller] = useState(false);
-  const [installerError, setInstallerError] = useState<string | null>(null);
 
   const routeBranchId = String(branchIdParam ?? "").trim();
   const safeCfg = cfg as ConfigLike;
@@ -293,8 +292,7 @@ export const DashboardHeader: React.FC = () => {
     // The module stores hydrate in the background, so an empty store means
     // "not loaded yet", not "this branch has nobody". Reporting a hard 0
     // during that window is worse than reporting nothing.
-    const hasLoaded =
-      !modules.loading && modules.staff.allItems.length > 0;
+    const hasLoaded = !modules.loading && modules.staff.allItems.length > 0;
 
     return { staffCount, attendanceRate, hasLoaded };
   }, [
@@ -306,21 +304,6 @@ export const DashboardHeader: React.FC = () => {
 
   if (!activeBranch) return null;
 
-  const userId = resolveUserId(user);
-  const backendBranchId = resolveBackendBranchId(activeBranch);
-  const shouldShowSingleBranchInstaller =
-    isSingleBranchOrg && isLocalAttendanceMode(safeCfg);
-
-  const disabledReason = installerDisabledReason({
-    cfg: safeCfg,
-    branch: activeBranch,
-    user,
-    userId,
-  });
-
-  const installerDisabled =
-    Boolean(disabledReason) || isDownloadingInstaller || !backendBranchId;
-
   const branchLocation = activeBranch.city || activeBranch.location || "";
   const subtitle = [
     branchStats.hasLoaded
@@ -330,31 +313,6 @@ export const DashboardHeader: React.FC = () => {
   ]
     .filter(Boolean)
     .join(" · ");
-
-  const handleDownloadInstaller = async (): Promise<void> => {
-    if (installerDisabled || !backendBranchId) return;
-
-    setInstallerError(null);
-    setIsDownloadingInstaller(true);
-
-    try {
-      await downloadClientNodeInstaller({
-        branchId: backendBranchId,
-        userId,
-        nodeLabel: `${activeBranch.name || "Branch"} Attendance Node`,
-        ttlDays: 7,
-        packageType: "exe",
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to download branch installer.";
-      setInstallerError(message);
-    } finally {
-      setIsDownloadingInstaller(false);
-    }
-  };
 
   return (
     <div style={{ marginBottom: 20 }}>
@@ -412,29 +370,6 @@ export const DashboardHeader: React.FC = () => {
             flexWrap: "wrap",
           }}
         >
-          {shouldShowSingleBranchInstaller && (
-            <button
-              type="button"
-              onClick={() => void handleDownloadInstaller()}
-              disabled={installerDisabled}
-              title={
-                disabledReason ?? "Download Windows attendance node installer"
-              }
-              aria-label="Download branch attendance node installer"
-              style={iconButtonStyle(installerDisabled)}
-            >
-              {isDownloadingInstaller ? (
-                <Loader2
-                  size={14}
-                  style={{ animation: "spin .8s linear infinite" }}
-                />
-              ) : (
-                <Download size={14} />
-              )}
-              {isDownloadingInstaller ? "Preparing…" : "Installer"}
-            </button>
-          )}
-
           {!isSingleBranchOrg && (
             <BranchSelector
               branches={branchSelector.selectorBranches}
@@ -457,25 +392,6 @@ export const DashboardHeader: React.FC = () => {
         <p style={{ fontSize: 12, color: T.muted, margin: 0 }}>{subtitle}</p>
         <Badge variant="teal">Branch dashboard</Badge>
       </div>
-
-      {installerError && (
-        <div
-          role="alert"
-          style={{
-            marginTop: 10,
-            border: "1px solid #fecdd3",
-            background: "#fff1f2",
-            color: "#be123c",
-            borderRadius: 10,
-            padding: "9px 11px",
-            fontSize: 12,
-            fontWeight: 700,
-            lineHeight: 1.45,
-          }}
-        >
-          {installerError}
-        </div>
-      )}
     </div>
   );
 };

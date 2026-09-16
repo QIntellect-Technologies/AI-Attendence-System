@@ -366,6 +366,7 @@ def run_offline_detection_sweep() -> dict:
         sb.table('organizations')
         .select('id, node_offline_threshold_seconds, attendance_mode')
         .eq('attendance_mode', 'local')
+        .eq('client_category', 'saas')
         .is_('deleted_at', 'null')
         .execute()
     )
