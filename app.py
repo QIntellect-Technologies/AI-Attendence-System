@@ -6912,10 +6912,25 @@ def _parse_tenant_id(value):
     return text
 
 
-@app.route('/')
 def index():
-    """Serve the dashboard UI."""
+    """Serve the dashboard UI.
+
+    Registered as the '/' route only when no production React build is
+    present (see the `if not os.path.isdir(FRONTEND_DIST)` guard below).
+    When frontend/dist DOES exist — every Railway/Docker deployment, per
+    the Dockerfile — the SPA catch-all route (`serve_spa`, registered
+    further down once FRONTEND_DIST is confirmed to exist) is the sole
+    owner of '/'. Previously both routes were registered unconditionally,
+    which didn't error (different endpoint names) but left two rules
+    bound to the same path with the first-registered one silently always
+    winning — dead, confusing code once a build was present, since that
+    build is present in every real deployment.
+    """
     return render_template('index.html')
+
+
+if not os.path.isdir(FRONTEND_DIST):
+    app.add_url_rule('/', 'index', index)
 
 
 @app.route('/camera')
@@ -13127,6 +13142,9 @@ def api_v2_clear_fast_cache():
     return jsonify({'success': True}), 200
 
 # If a React production build exists at frontend/dist, serve it as a single-page app (SPA) fallback.
+# This is the sole owner of '/' whenever FRONTEND_DIST exists — index()
+# above is only registered for '/' in the opposite case. See index()'s
+# docstring for why.
 if os.path.isdir(FRONTEND_DIST):
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
