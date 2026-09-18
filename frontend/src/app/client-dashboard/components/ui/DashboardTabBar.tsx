@@ -161,7 +161,7 @@ function LoadingModuleHint() {
 
 export const DashboardTabBar: React.FC = () => {
   const location = useLocation();
-  const { cfg, isOrgReady } = useOrg();
+  const { cfg, isOrgReady, selectedPeopleType } = useOrg();
   const { user: rawUser } = useAuth() as { user?: AuthUser | null };
 
   const user = rawUser ?? null;
@@ -177,8 +177,11 @@ export const DashboardTabBar: React.FC = () => {
 
   const peopleModel = useMemo(
     () =>
-      resolvePeopleRenderingModel(cfg as unknown as Record<string, unknown>),
-    [cfg],
+      resolvePeopleRenderingModel(
+        cfg as unknown as Record<string, unknown>,
+        selectedPeopleType,
+      ),
+    [cfg, selectedPeopleType],
   );
 
   const routeBranchId = useMemo(() => {
@@ -200,21 +203,21 @@ export const DashboardTabBar: React.FC = () => {
       const moduleTabs =
         ownBranchNumber && safeModuleKeys.length > 0
           ? getEnabledModules({
-              scope: "branch",
-              bizType: cfg.bizType ?? undefined,
-              enabledKeys: safeModuleKeys,
-            })
-              .filter((module) => !isBranchesModule(module.key, module.label))
-              .map((module) => ({
-                id: module.key,
-                label: moduleDisplayLabel(
-                  module.key,
-                  module.label,
-                  peopleModel.pageTitle,
-                ),
-                Icon: module.Icon,
-                to: module.branchPath(ownBranchNumber),
-              }))
+            scope: "branch",
+            bizType: cfg.bizType ?? undefined,
+            enabledKeys: safeModuleKeys,
+          })
+            .filter((module) => !isBranchesModule(module.key, module.label))
+            .map((module) => ({
+              id: module.key,
+              label: moduleDisplayLabel(
+                module.key,
+                module.label,
+                peopleModel.pageTitle,
+              ),
+              Icon: module.Icon,
+              to: module.branchPath(ownBranchNumber),
+            }))
           : [];
 
       return [
@@ -232,21 +235,21 @@ export const DashboardTabBar: React.FC = () => {
       const moduleTabs =
         safeModuleKeys.length > 0
           ? getEnabledModules({
-              scope: "global",
-              bizType: cfg.bizType ?? undefined,
-              enabledKeys: safeModuleKeys,
-            })
-              .filter((module) => !isBranchesModule(module.key, module.label))
-              .map((module) => ({
-                id: module.key,
-                label: moduleDisplayLabel(
-                  module.key,
-                  module.label,
-                  peopleModel.pageTitle,
-                ),
-                Icon: module.Icon,
-                to: module.fullPath,
-              }))
+            scope: "global",
+            bizType: cfg.bizType ?? undefined,
+            enabledKeys: safeModuleKeys,
+          })
+            .filter((module) => !isBranchesModule(module.key, module.label))
+            .map((module) => ({
+              id: module.key,
+              label: moduleDisplayLabel(
+                module.key,
+                module.label,
+                peopleModel.pageTitle,
+              ),
+              Icon: module.Icon,
+              to: module.fullPath,
+            }))
           : [];
 
       return [
@@ -272,21 +275,21 @@ export const DashboardTabBar: React.FC = () => {
     const moduleTabs =
       routeBranchNumber && safeModuleKeys.length > 0
         ? getEnabledModules({
-            scope: "branch",
-            bizType: cfg.bizType ?? undefined,
-            enabledKeys: safeModuleKeys,
-          })
-            .filter((module) => !isBranchesModule(module.key, module.label))
-            .map((module) => ({
-              id: module.key,
-              label: moduleDisplayLabel(
-                module.key,
-                module.label,
-                peopleModel.pageTitle,
-              ),
-              Icon: module.Icon,
-              to: module.branchPath(routeBranchNumber),
-            }))
+          scope: "branch",
+          bizType: cfg.bizType ?? undefined,
+          enabledKeys: safeModuleKeys,
+        })
+          .filter((module) => !isBranchesModule(module.key, module.label))
+          .map((module) => ({
+            id: module.key,
+            label: moduleDisplayLabel(
+              module.key,
+              module.label,
+              peopleModel.pageTitle,
+            ),
+            Icon: module.Icon,
+            to: module.branchPath(routeBranchNumber),
+          }))
         : [];
 
     return [

@@ -1140,6 +1140,8 @@ export type StaffPayload = Partial<User> & {
   teacherCode?: string | null;
   status?: StaffStatus;
   benefits?: string[];
+  designation_id?: string | null;
+  designationId?: string | null;
 
   shift_id?: string | null;
   shift_label?: string | null;

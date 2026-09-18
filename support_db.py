@@ -1695,6 +1695,7 @@ from support_db_core import (
     _compute_org_status,
     _execute_supabase,
     _org_access_allows_client,
+    get_internal_user_by_id,
 )
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
@@ -1717,11 +1718,15 @@ from support_db_client_users import (
     authenticate_client_staff,
     authenticate_client_staff_for_dashboard,
     change_own_dashboard_password,
+    create_client_invite,
     get_client_bootstrap,
     get_client_onboarding_config,
     get_client_user_basic,
     get_client_user_session_by_id,
+    list_branch_module_people_types,
+    list_org_branch_module_people_types,
     save_client_onboarding_config,
+    set_branch_module_people_types,
     update_client_user_profile,
     validate_strong_password,
 )
@@ -1748,25 +1753,73 @@ from support_db_attendance_mobile import (
     mark_field_staff_attendance,
     record_field_geo_alert,
 )
-from support_db_branches import create_client_branch_install_token, list_branches
-from support_db_organizations import get_organization, list_organizations
+from support_db_branches import (
+    create_branch,
+    create_client_branch_install_token,
+    drop_organization_branches_for_limit,
+    list_branches,
+    list_org_modules,
+    set_org_modules,
+    toggle_module,
+    update_branch,
+)
+from support_db_billing import (
+    create_invoice,
+    get_subscription,
+    issue_org_license,
+    list_invoices,
+    list_org_licenses,
+    mark_invoice_paid,
+    reset_org_license_activation,
+    revoke_org_license,
+    upsert_subscription,
+)
+from support_db_organizations import (
+    archive_organization,
+    create_organization,
+    get_organization,
+    list_organizations,
+    permanently_delete_organization,
+    request_organization_delete,
+    restore_organization,
+    update_organization,
+    update_organization_retention_policy,
+    update_organization_staff_type_scope,
+    update_organization_template,
+)
 from support_db_dashboard_summary import (
     get_client_dashboard_overview,
     get_tenant_fast_summary,
 )
-from support_db_internal import get_camera_recognition_status, import_embeddings_cloud_mode
+from support_db_internal import (
+    create_internal_user,
+    get_camera_recognition_status,
+    import_embeddings_cloud_mode,
+    list_internal_users_page,
+    list_support_branches_page,
+    list_support_invoices_page,
+    list_support_module_entitlements_page,
+    list_support_node_health_page,
+    reset_internal_user_password,
+    run_offline_detection_sweep,
+    update_internal_user,
+)
 from support_db_nodes import (
     activate_node_with_install_token,
     apply_camera_live_status,
+    create_branch_install_token,
+    get_camera_live_status,
     get_local_node_status,
     get_node_by_api_key,
     get_node_config,
+    get_node_health,
     get_org_recognition_embeddings,
     get_recent_fallback_attendance_bulk,
     node_heartbeat,
     push_node_attendance,
     push_node_embeddings,
     record_cloud_camera_attendance,
+    set_fallback,
 )
 from support_db_payroll import (
     create_client_leave_request,

@@ -37,25 +37,25 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
 
   const externalCode = asString(
     raw.personCode ??
-      raw.person_code ??
-      raw.registrationNumber ??
-      raw.registration_number ??
-      raw.studentId ??
-      raw.student_id ??
-      raw.rollNo ??
-      raw.roll_no ??
-      raw.admissionNo ??
-      raw.admission_no ??
-      raw.employeeId ??
-      raw.employee_id ??
-      raw.employeeNumber ??
-      raw.employee_number ??
-      raw.workerId ??
-      raw.worker_id ??
-      raw.teacherCode ??
-      raw.teacher_code ??
-      raw.code ??
-      raw.empId,
+    raw.person_code ??
+    raw.registrationNumber ??
+    raw.registration_number ??
+    raw.studentId ??
+    raw.student_id ??
+    raw.rollNo ??
+    raw.roll_no ??
+    raw.admissionNo ??
+    raw.admission_no ??
+    raw.employeeId ??
+    raw.employee_id ??
+    raw.employeeNumber ??
+    raw.employee_number ??
+    raw.workerId ??
+    raw.worker_id ??
+    raw.teacherCode ??
+    raw.teacher_code ??
+    raw.code ??
+    raw.empId,
     "",
   );
 
@@ -100,6 +100,9 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
     branchName: asString(raw.branchName ?? raw.branch_name, ""),
 
     department: asString(raw.department ?? raw.dept, "Unassigned"),
+    departmentId: (raw.departmentId ?? raw.department_id ?? null) as string | null,
+    designationId: (raw.designationId ?? raw.designation_id ?? null) as string | null,
+    designationName: asString(raw.designationName ?? raw.designation_name, ""),
     role: roleName,
     position: roleName,
     accountRole: asString(
@@ -184,9 +187,9 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
     fatherCnic: asString(raw.fatherCnic ?? raw.father_cnic, ""),
     fatherPhone: asString(
       raw.fatherPhone ??
-        raw.father_phone ??
-        raw.father_number ??
-        raw.fatherNumber,
+      raw.father_phone ??
+      raw.father_number ??
+      raw.fatherNumber,
       "",
     ),
   };

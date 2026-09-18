@@ -4,7 +4,7 @@
  * Super Admin / Global dashboard overview.
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Users,
   UserCheck,
@@ -21,6 +21,11 @@ import { useBranchSelector } from "../../hooks/useBranchSelector";
 import { useOrg, useOrgMasterData } from "../../contexts/OrgConfigContext";
 import { useAuth } from "../../contexts/useAuth";
 import { T } from "../../components/ui/theme";
+import { BranchSelector } from "../../components/ui/BranchSelector";
+import PeopleTypeSelector, {
+  type PeopleTypeOption,
+} from "../../components/ui/PeopleTypeSelector";
+import RefreshButton from "../../components/ui/RefreshButton";
 import {
   resolveActivePeopleTypes,
   resolvePeopleRenderingModel,
@@ -88,12 +93,43 @@ const DashboardOverviewTab: React.FC = () => {
     | number
     | undefined;
 
+  const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
+    null,
+  );
   const activePeopleTypes = resolveActivePeopleTypes(cfg);
-  const selectedPeopleType =
+  const defaultPeopleType =
     activePeopleTypes.length > 0 ? activePeopleTypes[0] : undefined;
+  const effectivePeopleType =
+    selectedPeopleType ?? defaultPeopleType ?? activePeopleTypes[0] ?? null;
   const peopleModel = resolvePeopleRenderingModel(
     cfg,
-    selectedPeopleType ?? undefined,
+    effectivePeopleType ?? undefined,
+  );
+
+  // Keep the selection in sync with what's actually available: pick a
+  // default once types load, and fall back if the previously selected type
+  // drops out of the active set (e.g. after a module/config change).
+  useMemo(() => {
+    if (!activePeopleTypes.length) return;
+    if (!selectedPeopleType && defaultPeopleType) {
+      setSelectedPeopleType(defaultPeopleType);
+    }
+    if (
+      selectedPeopleType &&
+      !activePeopleTypes.includes(selectedPeopleType)
+    ) {
+      setSelectedPeopleType(defaultPeopleType ?? activePeopleTypes[0]);
+    }
+  }, [activePeopleTypes, defaultPeopleType, selectedPeopleType]);
+
+  const peopleTypeOptions = useMemo<PeopleTypeOption[]>(
+    () =>
+      activePeopleTypes.map((type) => ({
+        value: type,
+        label:
+          peopleModel.peopleType === type ? peopleModel.personPlural : type,
+      })),
+    [activePeopleTypes, peopleModel.personPlural, peopleModel.peopleType],
   );
 
   const moduleVisibleFor = (
@@ -134,7 +170,7 @@ const DashboardOverviewTab: React.FC = () => {
   const showCctvDashboard = showCctvModule && cctvItems.length > 0;
   const showPeopleCountCard = showPeopleModule || showAttendanceModule;
   const showShiftDistribution =
-    showAttendanceModule &&
+    showPeopleModule &&
     peopleModel.supportsShift &&
     (hasRealShiftData(data.shiftDistribution) || !peopleModel.isStudent);
   const totalPeopleTitle = peopleModel.statsTotalLabel;
@@ -142,8 +178,44 @@ const DashboardOverviewTab: React.FC = () => {
     ? "Across all branches"
     : "In this branch";
 
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await data.refresh?.();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   return (
     <div style={{ fontFamily: "'DM Sans', sans-serif", width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: T.head, letterSpacing: "-0.5px" }}>
+          Attendance Overview
+        </h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {branch.hasMultipleBranches && (
+            <BranchSelector branches={branch.selectorBranches} selected={branch.selected} onChange={branch.onChange} />
+          )}
+          {activePeopleTypes.length > 1 && (
+            <PeopleTypeSelector
+              options={peopleTypeOptions}
+              value={effectivePeopleType ?? defaultPeopleType ?? activePeopleTypes[0]}
+              onChange={(value) => setSelectedPeopleType(value)}
+              ariaLabel="People type"
+              minWidth={150}
+            />
+          )}
+
+          <RefreshButton
+            size="md"
+            loading={isRefreshing}
+            onClick={handleRefresh}
+            ariaLabel="Refresh dashboard overview"
+          />
+        </div>
+      </div>
       <div style={gridAuto(220)}>
         <StatCard
           title={isAllBranches ? "Total Branches" : "Branch"}
@@ -242,24 +314,17 @@ const DashboardOverviewTab: React.FC = () => {
         </div>
       )}
 
-      {showAttendanceModule && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-            gridAutoRows: "480px",
-            gap: 14,
-            marginBottom: 20,
-            alignItems: "stretch",
-          }}
-        >
+      {(showAttendanceModule || showShiftDistribution) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "480px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
           {showShiftDistribution && (
             <ShiftDistributionCard shifts={data.shiftDistribution} />
           )}
-          <TodayStatusCard
-            data={data.todayStatus}
-            presentToday={data.stats.presentToday}
-          />
+          {showAttendanceModule && (
+            <TodayStatusCard
+              data={data.todayStatus}
+              presentToday={data.stats.presentToday}
+            />
+          )}
         </div>
       )}
 

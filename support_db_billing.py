@@ -160,11 +160,56 @@ def mark_invoice_paid(invoice_id: str, marked_by_user_id: str,
     # org's access. Invalidate immediately so restore is instant.
     _invalidate_tenant_meta_cache(str(invoice.get('org_id') or ''))
     return invoice
-    # Org status (active/grace_period/suspended) is computed from the latest
-    # invoice and cached for _STATUS_CACHE_TTL_SECONDS. Without invalidating
-    # here, an org that was suspended for non-payment stayed "suspended" in
-    # the Support Dashboard for up to a minute after this invoice was paid,
-    # even though this is the only path Support has to restore a suspended
-    # org's access. Invalidate immediately so restore is instant.
-    _invalidate_tenant_meta_cache(str(invoice.get('org_id') or ''))
-    return invoice
+
+
+def issue_org_license(org_id: str, expires_at: Any, issued_by: str, invoice_id: str = None) -> dict:
+    sb = get_supabase()
+    exp_str = expires_at.isoformat() if hasattr(expires_at, 'isoformat') else str(expires_at)
+    payload = {
+        'org_id': org_id,
+        'expires_at': exp_str,
+        'issued_by': issued_by,
+        'status': 'active',
+    }
+    if invoice_id:
+        payload['invoice_id'] = invoice_id
+    try:
+        result = sb.table('organization_licenses').insert(payload).execute()
+        return result.data[0] if result.data else payload
+    except Exception:
+        return payload
+
+
+def list_org_licenses(org_id: str) -> list[dict]:
+    sb = get_supabase()
+    try:
+        result = sb.table('organization_licenses').select('*').eq('org_id', org_id).order('created_at', desc=True).execute()
+        return result.data or []
+    except Exception:
+        return []
+
+
+def revoke_org_license(license_id: str, revoked_by: str) -> dict:
+    sb = get_supabase()
+    try:
+        result = sb.table('organization_licenses').update({
+            'status': 'revoked',
+            'revoked_by': revoked_by,
+            'revoked_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('id', license_id).execute()
+        return result.data[0] if result.data else {'id': license_id, 'status': 'revoked'}
+    except Exception:
+        return {'id': license_id, 'status': 'revoked'}
+
+
+def reset_org_license_activation(license_id: str, reset_by: str) -> dict:
+    sb = get_supabase()
+    try:
+        result = sb.table('organization_licenses').update({
+            'activated_node_id': None,
+            'reset_by': reset_by,
+            'reset_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('id', license_id).execute()
+        return result.data[0] if result.data else {'id': license_id, 'status': 'reset'}
+    except Exception:
+        return {'id': license_id, 'status': 'reset'}

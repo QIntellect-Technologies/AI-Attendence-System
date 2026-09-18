@@ -471,6 +471,7 @@ export default function AdminLayout() {
     organizationId,
     isOrgReady,
     visibleBranches: orgVisibleBranches,
+    selectedPeopleType,
   } = useOrg();
 
   // Mobile sidebar toggle
@@ -561,8 +562,11 @@ export default function AdminLayout() {
 
   const peopleRenderingModel = useMemo(
     () =>
-      resolvePeopleRenderingModel(cfg as unknown as Record<string, unknown>),
-    [cfg],
+      resolvePeopleRenderingModel(
+        cfg as unknown as Record<string, unknown>,
+        selectedPeopleType,
+      ),
+    [cfg, selectedPeopleType],
   );
 
   // Build sidebar groups
@@ -830,7 +834,13 @@ export default function AdminLayout() {
               <button
                 type="button"
                 aria-label="Settings"
-                onClick={() => navigate("/admin/settings")}
+                onClick={() =>
+                  navigate(
+                    activeBranchId
+                      ? `/admin/branch/${activeBranchId}/settings`
+                      : "/admin/settings",
+                  )
+                }
                 style={{
                   width: 38,
                   height: 38,

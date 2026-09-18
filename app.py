@@ -9280,6 +9280,12 @@ def api_client_onboarding_complete():
             user_id=str(user_id),
             org_id=str(org_id),
             config=config,
+            account_type=str(g.dashboard_user.get('account_type') or 'client_user'),
+            caller_branch_id=(
+                str(g.dashboard_user.get('branch_id'))
+                if g.dashboard_user.get('branch_id')
+                else None
+            ),
         )
         return jsonify({
             'success': True,

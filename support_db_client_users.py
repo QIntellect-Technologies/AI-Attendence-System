@@ -2816,15 +2816,10 @@ def _find_active_client_staff_row(
     if not clean_identifier or not password:
         return None
 
-    # build_or_eq_filter quotes the value per PostgREST's own escaping rule
-    # instead of interpolating it raw into the `.or_()` string. This lookup
-    # runs with no org_id filter (see docstring above), so an unescaped
-    # comma/paren in `identifier` here was a genuine filter-injection risk
-    # (an attacker-controlled identifier could append its own OR clause),
-    # not just a WAF-trip -- the highest-value place in the codebase to get
-    # this right. It never trims/alters the identifier itself, so the
-    # "typed back in exactly as stored" contract above is unaffected.
-    clause = build_or_eq_filter(clean_identifier, ['email', 'phone'])
+    is_email_identifier = '@' in clean_identifier
+    lookup_column = 'email' if is_email_identifier else 'phone'
+
+    clause = build_or_eq_filter(clean_identifier, [lookup_column])
     if not clause:
         return None
 
@@ -2836,7 +2831,9 @@ def _find_active_client_staff_row(
 
     rows = result.data or []
     if not rows:
-        return None
+        if is_email_identifier:
+            raise ValueError('No email found. Try logging in with your phone number instead.')
+        raise ValueError('No account found with this phone number. Try logging in with your email instead.')
 
     if len(rows) > 1:
         # Two active staff rows sharing one email/phone is a data problem,
@@ -3471,6 +3468,7 @@ def _sync_local_node_camera_config(
     branch_cameras through /api/local-node/config. This function keeps those
     tables in sync whenever onboarding is completed.
     """
+    sb = get_supabase()
     synced_branches = 0
     synced_cameras = 0
 
@@ -3554,43 +3552,163 @@ def _extract_company_profile(config: dict, org: dict) -> dict:
         'logoFileName': profile.get('logoFileName') or '',
     }
 
-def save_client_onboarding_config(user_id: str, org_id: str, config: dict) -> dict:
+def _restrict_config_to_branch(
+    config: dict,
+    branches: list[dict],
+    allowed_backend_branch_id: str,
+) -> dict:
+    """Strip any branch-keyed data outside a client_staff caller's own branch.
+
+    Settings.tsx (and any direct API caller) sends departments/roles/cameras/
+    network keyed by branch. The UI only ever shows a staff account their own
+    branch's tab, so in practice the payload already contains just that one
+    key -- but nothing server-side enforced it, which meant a staff account
+    calling this endpoint directly (Postman, devtools) with another branch's
+    key in the payload would silently overwrite that branch's departments,
+    cameras, or network config too. Anything keyed to a branch other than the
+    caller's own (by UUID or by ordinal UI id -- both resolve through
+    _branch_backend_id) is dropped here before normalization ever sees it.
+    Unrecognized/malformed keys are also dropped rather than raising, since
+    _normalize_branch_keyed_config already rejects those explicitly later.
     """
-    Complete invited-client onboarding.
+    restricted = dict(config)
+
+    for bucket_name in ('departments', 'roles', 'cameras'):
+        bucket = restricted.get(bucket_name)
+        if isinstance(bucket, dict):
+            restricted[bucket_name] = {
+                raw_key: raw_value
+                for raw_key, raw_value in bucket.items()
+                if _branch_backend_id(raw_key, branches) == allowed_backend_branch_id
+            }
+
+    for network_key in ('network', 'networkConfig'):
+        network_value = restricted.get(network_key)
+        if not isinstance(network_value, dict):
+            continue
+
+        # Direct branch-keyed object: {"<branch>": {...}}.
+        if any(isinstance(v, dict) for v in network_value.values()):
+            restricted[network_key] = {
+                raw_key: raw_value
+                for raw_key, raw_value in network_value.items()
+                if (
+                    not isinstance(raw_value, dict)
+                    or _branch_backend_id(raw_key, branches) == allowed_backend_branch_id
+                )
+            }
+            network_value = restricted[network_key]
+
+        # Nested branch-keyed containers some forms use.
+        for container_key in ('byBranch', 'branches', 'branchConfigs', 'networkByBranch', 'configs'):
+            nested = network_value.get(container_key) if isinstance(network_value, dict) else None
+            if isinstance(nested, dict):
+                network_value[container_key] = {
+                    raw_key: raw_value
+                    for raw_key, raw_value in nested.items()
+                    if _branch_backend_id(raw_key, branches) == allowed_backend_branch_id
+                }
+        # A flat network object (no branch keys at all) applies org-wide in
+        # _branch_network_from_config and is left as-is -- it carries no
+        # branch key to check, and _sync_local_node_camera_config only ever
+        # writes it against branches that already have camera/network data
+        # for them in this same restricted payload.
+
+    return restricted
+
+
+def save_client_onboarding_config(
+    user_id: str,
+    org_id: str,
+    config: dict,
+    account_type: str = 'client_user',
+    caller_branch_id: Optional[str] = None,
+) -> dict:
+    """
+    Complete invited-client onboarding, or save Settings changes.
 
     This does NOT create a new organization or new commercial branches/modules.
     It saves only operational configuration against the organization created by
     QIntellect Support Dashboard.
+
+    account_type ('client_user' | 'client_staff') comes from the caller's
+    verified dashboard JWT (see require_client_dashboard_auth), never from the
+    request body. client_users are the org-owner/admin table this endpoint was
+    originally built for; client_staff is a staff row granted dashboard access
+    (e.g. module access without admin) -- it lives in a different table with a
+    different identity/status shape, so it branches at the three points below
+    rather than being force-fit through the client_users lookup.
     """
     from support_db_branches import list_branches
     from support_db_organizations import get_organization
-    from support_db_staff import _normalize_people_type
+    from support_db_staff import _normalize_people_type, get_client_staff_member
     if not isinstance(config, dict):
         raise ValueError('config must be an object')
+    if account_type not in ('client_user', 'client_staff'):
+        raise ValueError('account_type must be client_user or client_staff')
 
     sb = get_supabase()
     org = get_organization(str(org_id))
 
-    user_result = (
-        sb.table('client_users')
-        .select('id, org_id, email, full_name, role, is_active, must_change_password, onboarding_completed_at')
-        .eq('id', str(user_id))
-        .limit(1)
-        .execute()
-    )
+    is_staff_caller = account_type == 'client_staff'
 
-    if not user_result.data:
-        raise ValueError('Client user not found')
+    if is_staff_caller:
+        staff_result = (
+            sb.table('client_staff')
+            .select('id, org_id, branch_id, status, is_archived')
+            .eq('id', str(user_id))
+            .limit(1)
+            .execute()
+        )
 
-    client_user = user_result.data[0]
+        if not staff_result.data:
+            raise ValueError('Client user not found')
 
-    if not client_user.get('is_active'):
-        raise ValueError('Client user is inactive')
+        client_user = staff_result.data[0]
 
-    if str(client_user.get('org_id')) != str(org_id):
-        raise ValueError('Client user does not belong to this organization')
+        if client_user.get('is_archived') or str(client_user.get('status') or '').strip().lower() == 'inactive':
+            raise ValueError('Client user is inactive')
+
+        if str(client_user.get('org_id')) != str(org_id):
+            raise ValueError('Client user does not belong to this organization')
+    else:
+        user_result = (
+            sb.table('client_users')
+            .select('id, org_id, email, full_name, role, is_active, must_change_password, onboarding_completed_at')
+            .eq('id', str(user_id))
+            .limit(1)
+            .execute()
+        )
+
+        if not user_result.data:
+            raise ValueError('Client user not found')
+
+        client_user = user_result.data[0]
+
+        if not client_user.get('is_active'):
+            raise ValueError('Client user is inactive')
+
+        if str(client_user.get('org_id')) != str(org_id):
+            raise ValueError('Client user does not belong to this organization')
 
     support_branches = list_branches(str(org_id))
+
+    # A client_staff caller may only touch their own branch's departments/
+    # roles/cameras/network -- see _restrict_config_to_branch's docstring.
+    # caller_branch_id comes from the JWT (g.dashboard_user.branch_id), never
+    # from the request body. No caller_branch_id on a staff token (shouldn't
+    # happen -- mint_dashboard_token always sets it from the staff row) means
+    # no branch is trusted, so every branch-keyed bucket is stripped rather
+    # than left unrestricted.
+    if is_staff_caller:
+        allowed_backend_branch_id = (
+            _branch_backend_id(caller_branch_id, support_branches) if caller_branch_id else None
+        )
+        config = _restrict_config_to_branch(
+            config,
+            support_branches,
+            allowed_backend_branch_id or '',
+        )
 
     # Normalize incoming branch-keyed operational config to real Supabase branch
     # UUIDs. This accepts both current dashboard UI branch ids (1, 2, 3) and
@@ -3667,11 +3785,17 @@ def save_client_onboarding_config(user_id: str, org_id: str, config: dict) -> di
         updated_at=now,
     )
 
-    sb.table('client_users').update({
-        'onboarding_completed_at': now,
-    }).eq('id', str(user_id)).execute()
+    if is_staff_caller:
+        # onboarding_completed_at is an admin-only concept (client_users has
+        # the column, client_staff doesn't) -- a staff account saving
+        # Settings hasn't "completed onboarding", so there's nothing to stamp.
+        session_user = get_client_staff_member(str(user_id))
+    else:
+        sb.table('client_users').update({
+            'onboarding_completed_at': now,
+        }).eq('id', str(user_id)).execute()
+        session_user = get_client_user_session_by_id(str(user_id))
 
-    session_user = get_client_user_session_by_id(str(user_id))
     bootstrap = get_client_bootstrap(str(org_id))
 
     return {

@@ -194,7 +194,7 @@ export function staffColumnText(
     return member.department || "—";
   }
   if (column.key === "section" || column.key === "designation") {
-    return member.role || member.position || "—";
+    return member.designationName || member.role || member.position || "—";
   }
   if (column.key === "shift") return shiftText(member);
   if (column.key === "salary")

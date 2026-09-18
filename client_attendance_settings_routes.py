@@ -21,7 +21,52 @@ client_attendance_settings_bp = Blueprint(
 )
 
 
+# ─── Designations (owned by a department) ──────────────────────────────────
+
+@client_attendance_settings_bp.route("/departments/<department_id>/designations", methods=["GET"])
+@require_client_dashboard_auth
+def list_designations(department_id):
+    def _run():
+        include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
+        return ok({"designations": settings_db.list_designations(
+            dashboard_org_id(), department_id, include_inactive=include_inactive
+        )})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/departments/<department_id>/designations", methods=["POST"])
+@require_client_dashboard_auth
+def create_designation(department_id):
+    def _run():
+        return ok({"designation": settings_db.create_designation(
+            dashboard_org_id(), department_id, request.get_json(silent=True) or {}
+        )}, 201)
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/designations/<designation_id>", methods=["PATCH"])
+@require_client_dashboard_auth
+def update_designation(designation_id):
+    def _run():
+        return ok({"designation": settings_db.update_designation(
+            dashboard_org_id(), designation_id, request.get_json(silent=True) or {}
+        )})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/designations/<designation_id>", methods=["DELETE"])
+@require_client_dashboard_auth
+def deactivate_designation(designation_id):
+    def _run():
+        settings_db.delete_designation(dashboard_org_id(), designation_id)
+        return ok({"status": "inactive"})
+    return handle(_run)
+
+
+
+
 # ─── Departments ────────────────────────────────────────────────────────────
+
 
 @client_attendance_settings_bp.route("/branches/<branch_id>/departments", methods=["GET"])
 @require_client_dashboard_auth
@@ -31,7 +76,6 @@ def list_departments(branch_id):
         include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
         departments = settings_db.list_departments(org_id, branch_id, include_inactive=include_inactive)
         return ok({"departments": departments})
-
     return handle(_run)
 
 
@@ -79,6 +123,97 @@ def assign_staff_department(staff_id):
         staff = settings_db.assign_staff_department(org_id, staff_id, payload.get("department_id"))
         return ok({"staff": staff})
 
+    return handle(_run)
+
+
+
+# ─── Classes ────────────────────────────────────────────────────────────────
+
+@client_attendance_settings_bp.route("/branches/<branch_id>/classes", methods=["GET"])
+@require_client_dashboard_auth
+def list_classes(branch_id):
+    def _run():
+        org_id = dashboard_org_id()
+        include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
+        return ok({"classes": settings_db.list_classes(org_id, branch_id, include_inactive=include_inactive)})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/branches/<branch_id>/classes", methods=["POST"])
+@require_client_dashboard_auth
+def create_class(branch_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        return ok({"class": settings_db.create_class(dashboard_org_id(), branch_id, payload)}, 201)
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/classes/<class_id>", methods=["PATCH"])
+@require_client_dashboard_auth
+def update_class(class_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        return ok({"class": settings_db.update_class(dashboard_org_id(), class_id, payload)})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/classes/<class_id>", methods=["DELETE"])
+@require_client_dashboard_auth
+def delete_class(class_id):
+    def _run():
+        settings_db.delete_class(dashboard_org_id(), class_id)
+        return ok({"deleted": True})
+    return handle(_run)
+
+
+# ─── Sections (owned by a class) ────────────────────────────────────────────
+
+@client_attendance_settings_bp.route("/classes/<class_id>/sections", methods=["GET"])
+@require_client_dashboard_auth
+def list_sections(class_id):
+    def _run():
+        include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
+        return ok({"sections": settings_db.list_sections(dashboard_org_id(), class_id, include_inactive=include_inactive)})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/classes/<class_id>/sections", methods=["POST"])
+@require_client_dashboard_auth
+def create_section(class_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        return ok({"section": settings_db.create_section(dashboard_org_id(), class_id, payload)}, 201)
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/sections/<section_id>", methods=["PATCH"])
+@require_client_dashboard_auth
+def update_section(section_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        return ok({"section": settings_db.update_section(dashboard_org_id(), section_id, payload)})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/sections/<section_id>", methods=["DELETE"])
+@require_client_dashboard_auth
+def deactivate_section(section_id):
+    def _run():
+        settings_db.delete_section(dashboard_org_id(), section_id)
+        return ok({"status": "inactive"})
+    return handle(_run)
+
+
+@client_attendance_settings_bp.route("/students/<student_id>/class", methods=["PATCH"])
+@require_client_dashboard_auth
+def assign_student_class(student_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        org_id = dashboard_org_id()
+        student = settings_db.assign_student_class(
+            org_id, student_id, payload.get("class_id"), payload.get("section_id")
+        )
+        return ok({"student": student})
     return handle(_run)
 
 

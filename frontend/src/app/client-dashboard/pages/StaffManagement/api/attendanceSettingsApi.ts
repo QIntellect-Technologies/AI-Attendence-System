@@ -99,7 +99,10 @@ async function clientJson<T>(
     const message =
       data?.message || data?.error || `Request failed: ${res.status}`;
     if (res.status === 409 && Array.isArray(data?.conflicts)) {
-      throw new ShiftConflictApiError(message, toShiftConflicts(data.conflicts));
+      throw new ShiftConflictApiError(
+        message,
+        toShiftConflicts(data.conflicts),
+      );
     }
     throw new Error(message);
   }
@@ -120,6 +123,70 @@ function qs(
 }
 
 // ─── Departments ────────────────────────────────────────────────────────────
+
+
+
+export interface DepartmentDesignationRecord {
+  id: string;
+  org_id: string;
+  department_id: string;
+  designation_id: string;
+  status: "active" | "inactive" | string;
+  designation?: DesignationRecord;
+  [key: string]: unknown;
+}
+
+export interface DesignationRecord {
+  id: string;
+  name: string;
+  code?: string | null;
+  organization_id?: string | number;
+  org_id?: string;
+  department_id: string; // now required — owned by exactly one department
+  status?: "active" | "inactive" | string;
+  [key: string]: unknown;
+}
+
+
+export async function listDesignations(
+  departmentId: string,
+  organizationId: number | string,
+  includeInactive = false,
+): Promise<DesignationRecord[]> {
+  const res = await clientJson<{ designations: DesignationRecord[] }>(
+    `/api/client/departments/${encodeURIComponent(departmentId)}/designations${qs({
+      organization_id: organizationId,
+      include_inactive: includeInactive ? "true" : undefined,
+    })}`,
+  );
+  return res.designations ?? [];
+}
+
+export async function createDesignation(
+  departmentId: string,
+  organizationId: number | string,
+  payload: { name: string; code?: string | null },
+): Promise<DesignationRecord> {
+  const res = await clientJson<{ designation: DesignationRecord }>(
+    `/api/client/departments/${encodeURIComponent(departmentId)}/designations`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ...payload, organization_id: organizationId }),
+    },
+  );
+  return res.designation;
+}
+
+export async function deleteDesignation(
+  designationId: string,
+  organizationId: number | string,
+): Promise<void> {
+  await clientJson<{ status: string }>(
+    `/api/client/designations/${encodeURIComponent(designationId)}`,
+    { method: "DELETE", body: JSON.stringify({ organization_id: organizationId }) },
+  );
+}
+
 
 export interface DepartmentRecord {
   id: string;
@@ -150,7 +217,7 @@ export async function listBranchDepartments(
 export async function createDepartment(
   branchId: number | string,
   organizationId: number | string,
-  payload: { name: string; [key: string]: unknown },
+  payload: { name: string;[key: string]: unknown },
 ): Promise<DepartmentRecord> {
   const res = await clientJson<{ department: DepartmentRecord }>(
     `/api/client/branches/${encodeURIComponent(String(branchId))}/departments`,
@@ -211,6 +278,125 @@ export async function assignStaffDepartment(
     },
   );
   return res.staff;
+}
+
+
+// ─── Classes ────────────────────────────────────────────────────────────────
+
+export interface ClassRecord {
+  id: string;
+  name: string;
+  code?: string | null;
+  branch_id: string;
+  organization_id?: string | number;
+  status?: "active" | "inactive" | string;
+  [key: string]: unknown;
+}
+
+export async function listBranchClasses(
+  branchId: string,
+  organizationId: number | string,
+  includeInactive = false,
+): Promise<ClassRecord[]> {
+  const res = await clientJson<{ classes: ClassRecord[] }>(
+    `/api/client/branches/${encodeURIComponent(branchId)}/classes${qs({
+      organization_id: organizationId,
+      include_inactive: includeInactive ? "true" : undefined,
+    })}`,
+  );
+  return res.classes ?? [];
+}
+
+export async function createClass(
+  branchId: string,
+  organizationId: number | string,
+  payload: { name: string; code?: string | null },
+): Promise<ClassRecord> {
+  const res = await clientJson<{ class: ClassRecord }>(
+    `/api/client/branches/${encodeURIComponent(branchId)}/classes`,
+    { method: "POST", body: JSON.stringify({ ...payload, organization_id: organizationId }) },
+  );
+  return res.class;
+}
+
+export async function updateClass(
+  classId: string,
+  organizationId: number | string,
+  payload: Record<string, unknown>,
+): Promise<ClassRecord> {
+  const res = await clientJson<{ class: ClassRecord }>(
+    `/api/client/classes/${encodeURIComponent(classId)}`,
+    { method: "PATCH", body: JSON.stringify({ ...payload, organization_id: organizationId }) },
+  );
+  return res.class;
+}
+
+export async function deleteClass(classId: string, organizationId: number | string): Promise<void> {
+  await clientJson<{ deleted: boolean }>(
+    `/api/client/classes/${encodeURIComponent(classId)}`,
+    { method: "DELETE", body: JSON.stringify({ organization_id: organizationId }) },
+  );
+}
+
+// ─── Sections (owned by a class) ────────────────────────────────────────────
+
+export interface SectionRecord {
+  id: string;
+  name: string;
+  code?: string | null;
+  class_id: string;
+  organization_id?: string | number;
+  status?: "active" | "inactive" | string;
+  [key: string]: unknown;
+}
+
+export async function listSections(
+  classId: string,
+  organizationId: number | string,
+  includeInactive = false,
+): Promise<SectionRecord[]> {
+  const res = await clientJson<{ sections: SectionRecord[] }>(
+    `/api/client/classes/${encodeURIComponent(classId)}/sections${qs({
+      organization_id: organizationId,
+      include_inactive: includeInactive ? "true" : undefined,
+    })}`,
+  );
+  return res.sections ?? [];
+}
+
+export async function createSection(
+  classId: string,
+  organizationId: number | string,
+  payload: { name: string; code?: string | null },
+): Promise<SectionRecord> {
+  const res = await clientJson<{ section: SectionRecord }>(
+    `/api/client/classes/${encodeURIComponent(classId)}/sections`,
+    { method: "POST", body: JSON.stringify({ ...payload, organization_id: organizationId }) },
+  );
+  return res.section;
+}
+
+export async function deleteSection(sectionId: string, organizationId: number | string): Promise<void> {
+  await clientJson<{ status: string }>(
+    `/api/client/sections/${encodeURIComponent(sectionId)}`,
+    { method: "DELETE", body: JSON.stringify({ organization_id: organizationId }) },
+  );
+}
+
+export async function assignStudentClass(
+  studentId: number | string,
+  classId: string | null,
+  sectionId: string | null,
+  organizationId: number | string,
+): Promise<Record<string, unknown>> {
+  const res = await clientJson<{ student: Record<string, unknown> }>(
+    `/api/client/students/${encodeURIComponent(String(studentId))}/class`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ class_id: classId, section_id: sectionId, organization_id: organizationId }),
+    },
+  );
+  return res.student;
 }
 
 // ─── Shifts ─────────────────────────────────────────────────────────────────

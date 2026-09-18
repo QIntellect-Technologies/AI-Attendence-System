@@ -426,11 +426,42 @@ def _resolve_shift_map(org_id: str | None, shift_ids: set) -> dict[str, dict]:
         for row in (result.data or [])
     }
 
+
+def _resolve_department_map(org_id: str | None, department_ids: set) -> dict[str, dict]:
+    ids = sorted({str(d) for d in department_ids if d})
+    if not ids or not org_id:
+        return {}
+    sb = get_supabase()
+    try:
+        result = (
+            sb.table('departments').select('id, name')
+            .eq('org_id', str(org_id)).in_('id', ids).execute()
+        )
+    except Exception:
+        return {}
+    return {str(r['id']): {'name': r.get('name') or ''} for r in (result.data or [])}
+
+def _resolve_designation_map(org_id: str | None, designation_ids: set) -> dict[str, dict]:
+    ids = sorted({str(d) for d in designation_ids if d})
+    if not ids or not org_id:
+        return {}
+    sb = get_supabase()
+    try:
+        result = (
+            sb.table('designations').select('id, name')
+            .eq('org_id', str(org_id)).in_('id', ids).execute()
+        )
+    except Exception:
+        return {}
+    return {str(r['id']): {'name': r.get('name') or ''} for r in (result.data or [])}
+
 def _client_staff_safe(
     row: dict,
     org_id: str | None = None,
     branch_indexes: tuple[list[dict], dict[str, int], dict[str, dict]] | None = None,
     shifts_by_id: dict[str, dict] | None = None,
+    departments_by_id: dict[str, dict] | None = None,
+    designations_by_id: dict[str, dict] | None = None,
 ) -> dict:
     """Serialize one client_staff row for the Client Dashboard.
 
@@ -521,6 +552,25 @@ def _client_staff_safe(
         duty_start = row.get('duty_start') or '09:00'
         duty_end = row.get('duty_end') or '17:00'
 
+    
+    department_id = row.get('department_id')
+    if department_id:
+        resolved_department = (departments_by_id or {}).get(str(department_id)) \
+            if departments_by_id is not None \
+            else _resolve_department_map(org_id, {department_id}).get(str(department_id))
+        department_display = (resolved_department or {}).get('name') or row.get('department_name') or ''
+    else:
+        department_display = row.get('department_name') or ''
+
+    designation_id = row.get('designation_id')
+    if designation_id:
+        resolved_designation = (designations_by_id or {}).get(str(designation_id)) \
+            if designations_by_id is not None \
+            else _resolve_designation_map(org_id, {designation_id}).get(str(designation_id))
+        designation_display = (resolved_designation or {}).get('name') or role_name
+    else:
+        designation_display = role_name
+    
     profile_image_url = row.get('profile_image_url') or ''
     profile_image_name = row.get('profile_image_name') or ''
     if (
@@ -555,10 +605,17 @@ def _client_staff_safe(
         'peopleType': people_type,
         'person_type': people_type,
         'personType': people_type,
-        'department': row.get('department_name') or '',
-        'dept': row.get('department_name') or '',
+        'department': department_display,
+        'department_name': department_display,
+        'dept': department_display,
+        'department_id': row.get('department_id'),
+        'departmentId': row.get('department_id'),
         'position': role_name,
         'designation': role_name,
+        'designation_name': designation_display,
+        'designationName': designation_display,
+        'designation_id': row.get('designation_id'),
+        'designationId': row.get('designation_id'),
         'salary': float(row.get('salary') or 0),
         'benefits': benefits,
         'join_date': row.get('join_date') or '',
@@ -736,8 +793,10 @@ def list_client_staff(org_id: str, branch_id: Any = None, role: str | None = 'st
     result = _execute_supabase('list_client_staff', _staff_query)
     rows = result.data or []
     shifts_by_id = _resolve_shift_map(org_key, {r.get('shift_id_ref') for r in rows})
+    departments_by_id = _resolve_department_map(org_key, {r.get('department_id') for r in rows})
+    designations_by_id = _resolve_designation_map(org_key, {r.get('designation_id') for r in rows})
     return [
-        _client_staff_safe(row, org_key, branch_indexes, shifts_by_id)
+        _client_staff_safe(row, org_key, branch_indexes, shifts_by_id, departments_by_id, designations_by_id)
         for row in rows
     ]
 
@@ -894,6 +953,7 @@ def create_client_staff(
         'password_hash': password_hash,
         'role': account_role,
         'department_name': str(payload.get('department') or payload.get('department_name') or '').strip() or None,
+        'designation_id': payload.get('designation_id') or None,
         'role_name': role_name,
         'position': role_name,
         'status': status,
@@ -1014,6 +1074,7 @@ def update_client_staff(
         'phone': 'phone',
         'department': 'department_name',
         'department_name': 'department_name',
+        'designation_id': 'designation_id',
         'position': 'position',
         'role_name': 'role_name',
         'salary': 'salary',

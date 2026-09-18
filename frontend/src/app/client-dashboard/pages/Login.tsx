@@ -224,7 +224,7 @@ const Login: React.FC = () => {
               {success
                 ? loginRequiresOnboarding
                   ? "Continue setup"
-                  : "Welcome back! 👋"
+                  : "Welcome back!"
                 : storedUserNeedsOnboarding
                   ? "Organization setup pending"
                   : "Sign in to your account"}
@@ -393,12 +393,12 @@ const Login: React.FC = () => {
             style={{ display: "flex", flexDirection: "column", gap: 16 }}
           >
             <div className="auth-fade" style={{ animationDelay: "0.18s" }}>
-              <AuthLabel>Work Email</AuthLabel>
+              <AuthLabel>Email or Phone Number</AuthLabel>
               <AuthInput
-                type="email"
+                type="text"
                 value={email}
                 required
-                placeholder="name@company.com"
+                placeholder="name@company.com or phone number"
                 leftIcon={<Mail size={16} color={A.textMuted} />}
                 maxLength={254}
                 onChange={(e) => {

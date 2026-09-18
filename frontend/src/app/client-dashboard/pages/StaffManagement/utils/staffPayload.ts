@@ -51,6 +51,7 @@ export const buildStaffApiPayload = (
         ? data.personCode
         : undefined,
     department: data.department,
+    designation_id: data.designationId || null,
     position: data.role,
     salary: data.salary,
     benefits: data.benefits,

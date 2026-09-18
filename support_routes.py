@@ -7,6 +7,7 @@ Keep only Flask route handlers in this file. Supabase query/business logic stays
 in support_db.py.
 """
 
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g, send_file
 from support_auth import require_support_auth, require_capability, login_internal_user, logout_internal_user
 import support_db as db
@@ -878,5 +879,71 @@ def reset_internal_user_password_page(user_id):
         import session_registry
         session_registry.invalidate_session("internal_user", str(user_id), reason="password_changed")
         return _ok({"internal_user": user})
+
+    return _handle(_run)
+
+
+@support_bp.route("/organizations/<org_id>/license", methods=["POST"])
+@require_capability("licenses:write")
+def issue_org_license_route(org_id):
+    """Issue a new signed license token for an org's on-prem install.
+    Supersedes any previously-active license for this org."""
+    def _run():
+        payload = request.get_json(silent=True) or {}
+
+        raw_expires_at = payload.get("expires_at")
+        if not raw_expires_at:
+            return _err("expires_at is required", 400)
+        try:
+            clean_str = str(raw_expires_at).strip().replace("Z", "+00:00")
+            expires_at = datetime.fromisoformat(clean_str)
+        except ValueError:
+            return _err("expires_at must be an ISO-8601 datetime", 400)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        license_row = db.issue_org_license(
+            org_id=org_id,
+            expires_at=expires_at,
+            issued_by=g.support_user["id"],
+            invoice_id=payload.get("invoice_id"),
+        )
+        return _ok({"license": license_row}, 201)
+
+    return _handle(_run)
+
+
+@support_bp.route("/organizations/<org_id>/licenses", methods=["GET"])
+@require_capability("licenses:read")
+def list_org_licenses_route(org_id):
+    def _run():
+        return _ok({"licenses": db.list_org_licenses(org_id)})
+
+    return _handle(_run)
+
+
+@support_bp.route("/licenses/<license_id>/revoke", methods=["PATCH"])
+@require_capability("licenses:write")
+def revoke_org_license_route(license_id):
+    def _run():
+        license_row = db.revoke_org_license(
+            license_id=license_id,
+            revoked_by=g.support_user["id"],
+        )
+        return _ok({"license": license_row})
+
+    return _handle(_run)
+
+
+@support_bp.route("/licenses/<license_id>/reset-activation", methods=["POST"])
+@require_capability("licenses:write")
+def reset_org_license_activation_route(license_id):
+    """Reset machine binding for a license so it can be activated on a new machine."""
+    def _run():
+        license_row = db.reset_org_license_activation(
+            license_id=license_id,
+            reset_by=g.support_user["id"],
+        )
+        return _ok({"license": license_row, "message": "License activation reset successfully."})
 
     return _handle(_run)

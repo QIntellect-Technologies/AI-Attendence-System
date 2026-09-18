@@ -127,7 +127,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
   const activeBranch =
     visibleBranches.find((branch) => String(branch.id) === String(branchId)) ??
     cfg.branches.find((branch) => String(branch.id) === String(branchId));
-  const branchLocation = activeBranch?.city || activeBranch?.location || "";
+  const branchLocation = activeBranch?.city || "";
   const formattedToday = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
@@ -143,8 +143,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
   const cctvItems = data.cctvStatus.filter((item) => Boolean(item?.id));
   const showCctvDashboard = showCctvModule && cctvItems.length > 0;
   const showPeopleCountCard = showPeopleModule || showAttendanceModule;
-  const showShiftDistribution =
-    showAttendanceModule && peopleModel.supportsShift;
+  const showShiftDistribution = showPeopleModule && peopleModel.supportsShift;
   const totalPeopleTitle = peopleModel.statsTotalLabel;
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -286,24 +285,17 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
         </div>
       )}
 
-      {showAttendanceModule && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-            gridAutoRows: "480px",
-            gap: 14,
-            marginBottom: 20,
-            alignItems: "stretch",
-          }}
-        >
+      {(showAttendanceModule || showShiftDistribution) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "480px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
           {showShiftDistribution && (
             <ShiftDistributionCard shifts={data.shiftDistribution} />
           )}
-          <TodayStatusCard
-            data={data.todayStatus}
-            presentToday={data.stats.presentToday}
-          />
+          {showAttendanceModule && (
+            <TodayStatusCard
+              data={data.todayStatus}
+              presentToday={data.stats.presentToday}
+            />
+          )}
         </div>
       )}
 
