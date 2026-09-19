@@ -332,6 +332,7 @@ export interface MarkInvoicePaidPayload {
 export type NodeStatus = "online" | "offline" | "never_connected" | string;
 
 export interface NodeHealth {
+  id: string;
   branch_id: string;
   branch_name: string;
   node_id: string | null;

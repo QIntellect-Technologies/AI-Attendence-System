@@ -21,6 +21,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Building2,
+  Camera,
   CheckCircle2,
   KeyRound,
   Loader2,
@@ -68,6 +69,7 @@ import type {
   UpdateBranchPayload,
 } from "../../packages/shared-types/src/organization";
 import InstallTokenModal from "../../components/InstallTokenModal";
+import CameraAssignmentModal from "../../components/CameraAssignmentModal";
 import {
   getModulePeopleTypesForBranch,
   normalizePeopleType,
@@ -165,13 +167,13 @@ function statusChip(status?: string) {
     : ["pending", "grace_period"].includes(normalized)
       ? T.amber
       : [
-            "inactive",
-            "suspended",
-            "overdue",
-            "offline",
-            "failed",
-            "error",
-          ].includes(normalized)
+        "inactive",
+        "suspended",
+        "overdue",
+        "offline",
+        "failed",
+        "error",
+      ].includes(normalized)
         ? T.red
         : T.textMuted;
   const bg =
@@ -466,9 +468,9 @@ function OverviewTab({
     PeopleType[]
   >(
     org.attendance_people_types ||
-      org.vertical_config?.attendance_people_types ||
-      org.enabled_people_types ||
-      [],
+    org.vertical_config?.attendance_people_types ||
+    org.enabled_people_types ||
+    [],
   );
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [pendingProfilePayload, setPendingProfilePayload] =
@@ -530,9 +532,9 @@ function OverviewTab({
     setBusinessType(org.business_type || "company");
     setAttendancePeopleTypes(
       org.attendance_people_types ||
-        org.vertical_config?.attendance_people_types ||
-        org.enabled_people_types ||
-        [],
+      org.vertical_config?.attendance_people_types ||
+      org.enabled_people_types ||
+      [],
     );
   }, [org]);
 
@@ -546,10 +548,10 @@ function OverviewTab({
   const selectedDropCount = dropSelection.length;
   const requiredDropCount = pendingProfilePayload?.max_branches
     ? Math.max(
-        0,
-        dropCandidateBranches.length -
-          Number(pendingProfilePayload.max_branches),
-      )
+      0,
+      dropCandidateBranches.length -
+      Number(pendingProfilePayload.max_branches),
+    )
     : 0;
 
   const saveProfile = async () => {
@@ -958,9 +960,9 @@ function OverviewTab({
                   setBusinessType(org.business_type || "company");
                   setAttendancePeopleTypes(
                     org.attendance_people_types ||
-                      org.vertical_config?.attendance_people_types ||
-                      org.enabled_people_types ||
-                      [],
+                    org.vertical_config?.attendance_people_types ||
+                    org.enabled_people_types ||
+                    [],
                   );
                   setIsEditingTemplate(false);
                 }}
@@ -1165,7 +1167,7 @@ function OverviewTab({
         ) : (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {(Array.isArray(org.enabled_staff_types) &&
-            org.enabled_staff_types.length
+              org.enabled_staff_types.length
               ? org.enabled_staff_types
               : ["office", "field"]
             ).map((type) => (
@@ -1293,9 +1295,9 @@ function ModulesTab({
         ?.enabled_people_types,
     )
       ? (
-          (org?.vertical_config as Record<string, unknown> | null)
-            ?.enabled_people_types as unknown[]
-        ).filter(Boolean)
+        (org?.vertical_config as Record<string, unknown> | null)
+          ?.enabled_people_types as unknown[]
+      ).filter(Boolean)
       : [];
     const combined = [...fromOrg, ...fromVertical]
       .map((value) => normalizePeopleType(value))
@@ -1595,6 +1597,8 @@ function BranchesTab({
   const [generatingBranchId, setGeneratingBranchId] = useState<string | null>(
     null,
   );
+  const [cameraAssignmentBranch, setCameraAssignmentBranch] =
+    useState<Branch | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [editingBranchId, setEditingBranchId] = useState<string | null>(null);
   const [savingBranchId, setSavingBranchId] = useState<string | null>(null);
@@ -1808,8 +1812,8 @@ function BranchesTab({
                 style={{
                   display: "grid",
                   gridTemplateColumns: localAttendance
-                    ? "1fr 1fr 150px 110px auto auto"
-                    : "1fr 1fr 160px 120px auto",
+                    ? "1fr 1fr 150px 110px auto auto auto"
+                    : "1fr 1fr 160px 120px auto auto",
                   gap: 10,
                   alignItems: "center",
                   padding: 12,
@@ -1847,6 +1851,15 @@ function BranchesTab({
                     {generating ? "Generating…" : "Install Token"}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setCameraAssignmentBranch(branch)}
+                  disabled={Boolean(editingBranchId)}
+                  style={secondaryButton()}
+                  title="Assign this branch's cameras to a node"
+                >
+                  <Camera size={14} /> Cameras
+                </button>
                 <button
                   type="button"
                   onClick={() => startEditBranch(branch)}
@@ -1960,6 +1973,14 @@ function BranchesTab({
         )}
       </SectionCard>
       {token && <InstallTokenModal token={token} onClose={clear} />}
+      {cameraAssignmentBranch && (
+        <CameraAssignmentModal
+          orgId={org.id}
+          branchId={cameraAssignmentBranch.id}
+          branchName={cameraAssignmentBranch.name}
+          onClose={() => setCameraAssignmentBranch(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2184,7 +2205,7 @@ function MonitoringTab({ state }: { state: LoadState<NodeHealth[]> }) {
       <div style={{ display: "grid", gap: 10 }}>
         {state.data.map((node) => (
           <div
-            key={node.branch_id}
+            key={node.id}
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 120px 1fr 140px",
@@ -2732,9 +2753,9 @@ function DataAccessTab({
               color: T.red,
               opacity:
                 !isSuperAdmin ||
-                isSaving ||
-                isDeleted ||
-                confirmName.trim() !== org.name
+                  isSaving ||
+                  isDeleted ||
+                  confirmName.trim() !== org.name
                   ? 0.55
                   : 1,
             }}

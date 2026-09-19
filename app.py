@@ -7662,7 +7662,7 @@ def api_cctv_live_tracking():
                     'onboarding': lambda: support_cp_db.get_client_onboarding_config(
                         raw_org_id),
                     'node_status': lambda: support_cp_db.get_local_node_status(
-                        raw_org_id),
+                        raw_org_id, raw_branch_id),
                     'detections': lambda: support_cp_db.get_today_detections_by_staff(
                         raw_org_id, raw_branch_id),
                 },

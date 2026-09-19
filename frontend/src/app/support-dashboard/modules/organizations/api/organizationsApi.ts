@@ -616,6 +616,7 @@ export const invoicesApi = {
 } as const;
 
 export interface NodeHealth {
+  id: string;
   branch_id: string;
   branch_name: string;
   node_id: string | null;
