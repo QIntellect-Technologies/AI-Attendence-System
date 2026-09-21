@@ -1589,6 +1589,79 @@ def assign_student_class(org_id: str, staff_id: str, class_id: str | None, secti
         raise ValueError("Student not found in this organization")
     return result.data[0]
 
+
+def _normalize_name(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def sync_student_class_from_names(org_id: str, student_row: dict) -> dict:
+    """The Student form saves a class and section as plain names
+    (client_staff.department_name = class name, position = section name),
+    never as ids. Resolve those names inside the student's own branch and
+    persist the real class_id/section_id through assign_student_class, which
+    is what the Trainer CSV export and the per-camera recognition gate read.
+    A name that matches no active class/section leaves the existing ids as
+    they are. Section names repeat across classes, so a section is only ever
+    looked up inside the matched class."""
+    class_name = _normalize_name(student_row.get("department_name"))
+    if not class_name:
+        return student_row
+    matched_class = next(
+        (
+            item
+            for item in list_classes(org_id, str(student_row.get("branch_id") or ""))
+            if _normalize_name(item.get("name")) == class_name
+        ),
+        None,
+    )
+    if not matched_class:
+        return student_row
+    section_name = _normalize_name(student_row.get("position") or student_row.get("role_name"))
+    matched_section = None
+    if section_name:
+        matched_section = next(
+            (
+                item
+                for item in list_sections(org_id, str(matched_class["id"]))
+                if _normalize_name(item.get("name")) == section_name
+            ),
+            None,
+        )
+    return assign_student_class(
+        org_id,
+        str(student_row["id"]),
+        str(matched_class["id"]),
+        str(matched_section["id"]) if matched_section else None,
+    )
+
+
+def backfill_student_class_ids(org_id: str) -> dict:
+    """One-off: give every existing student that has a class name but no
+    class_id its real ids. Safe to re-run; returns counts for the log."""
+    sb = get_supabase()
+    rows = (
+        sb.table("client_staff")
+        .select("*")
+        .eq("org_id", str(org_id))
+        .eq("people_type", "student")
+        .is_("class_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    linked, unmatched, failed = 0, 0, 0
+    for row in rows:
+        try:
+            updated = sync_student_class_from_names(org_id, row)
+        except Exception:
+            failed += 1
+            continue
+        if updated.get("class_id"):
+            linked += 1
+        else:
+            unmatched += 1
+    return {"checked": len(rows), "linked": linked, "unmatched": unmatched, "failed": failed}
+
 # ─── Staff department assignment (staff tier) ──────────────────────────────
 
 

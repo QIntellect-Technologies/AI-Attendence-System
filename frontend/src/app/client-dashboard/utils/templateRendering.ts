@@ -1,3 +1,5 @@
+import { readShiftEnabledPeopleTypes, resolveSupportsShift } from "./shiftSupport";
+
 export type PeopleFamily = "student" | "workforce";
 
 export interface TemplateConfigLike {
@@ -649,21 +651,21 @@ export function resolvePeopleRenderingModel(
     "leaveManagement",
     "leave_management",
   ]);
-  // Respect explicit per-people-type shift enablement when provided via
-  // `shiftEnabledPeopleTypes` (onboarding/config). If that list exists, use
-  // it to decide shift support for the current people type. Otherwise fall
-  // back to the legacy feature flag or `!isStudent` heuristic.
-  const shiftList = normalizePeopleTypeList(
-    (config as Record<string, unknown>).shiftEnabledPeopleTypes ??
-      (config as Record<string, unknown>).shift_enabled_people_types ??
-      verticalConfig.shiftEnabledPeopleTypes ??
-      verticalConfig.shift_enabled_people_types,
+  // Per-people-type shift enablement (Settings -> Shift Scheduling). A saved
+  // list is authoritative even when empty ("no type uses shifts"); only a
+  // never-configured org falls back to the legacy flag / `!isStudent` default.
+  const shiftList = readShiftEnabledPeopleTypes(
+    (config as Record<string, unknown>).shiftEnabledPeopleTypes,
+    (config as Record<string, unknown>).shift_enabled_people_types,
+    verticalConfig.shiftEnabledPeopleTypes,
+    verticalConfig.shift_enabled_people_types,
   );
 
-  const supportsShift =
-    shiftList.length > 0
-      ? shiftList.includes(peopleType)
-      : (explicitShift ?? !isStudent);
+  const supportsShift = resolveSupportsShift(
+    shiftList,
+    peopleType,
+    explicitShift ?? !isStudent,
+  );
   const supportsPayroll = explicitPayroll ?? !isStudent;
   const supportsLeave = explicitLeave ?? !isStudent;
 

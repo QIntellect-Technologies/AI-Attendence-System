@@ -15,6 +15,9 @@ class EnrollmentPerson:
     group: str = ""
     subgroup: str = ""
     branch: str = ""
+    department_id: str = ""
+    class_id: str = ""
+    section_id: str = ""
     profile_image_file_name: str = ""
     extra: dict[str, str] = field(default_factory=dict)
 

@@ -36,7 +36,17 @@ def _build_cache(branch_id: str) -> None:
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in local_db.get_all_embeddings(branch_id):
         key = (row["people_type"], row["person_code"])
-        entry = grouped.setdefault(key, {"vectors": [], "full_name": row.get("full_name")})
+        entry = grouped.setdefault(key, {
+            "vectors": [],
+            "full_name": row.get("full_name"),
+            # Every embedding row for one person is written by the same
+            # upsert_person_embeddings call (see local_db.py), so these are
+            # identical across all of that person's rows — safe to take
+            # from whichever row sets up the entry first.
+            "department_id": row.get("department_id") or "",
+            "class_id": row.get("class_id") or "",
+            "section_id": row.get("section_id") or "",
+        })
         entry["vectors"].append(np.asarray(row["embedding"], dtype=np.float32))
 
     candidates: dict[str, list[np.ndarray]] = {}
@@ -46,7 +56,14 @@ def _build_cache(branch_id: str) -> None:
             continue
         key = f"{people_type}::{person_code}"
         candidates[key] = entry["vectors"]
-        meta[key] = {"people_type": people_type, "person_code": person_code, "full_name": entry["full_name"]}
+        meta[key] = {
+            "people_type": people_type,
+            "person_code": person_code,
+            "full_name": entry["full_name"],
+            "department_id": entry["department_id"],
+            "class_id": entry["class_id"],
+            "section_id": entry["section_id"],
+        }
 
     _cached_branch_id = branch_id
     _cached_candidates = candidates
@@ -143,4 +160,7 @@ def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str,
         "person_code": info["person_code"],
         "staff_name": info["full_name"],
         "confidence": float(similarity),
+        "department_id": info["department_id"],
+        "class_id": info["class_id"],
+        "section_id": info["section_id"],
     }

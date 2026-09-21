@@ -23,6 +23,7 @@ import hashlib
 import uuid
 import os
 from supabase_client import get_supabase, reset_supabase_client
+from support_db_camera_assignments import list_camera_context_assignments
 from logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -721,14 +722,42 @@ def get_recent_fallback_attendance_bulk(
         logger.warning(f'Could not get bulk fallback attendance for {org_id}: {e}')
         return {}
 
-def _local_node_camera_view(row: dict) -> dict:
+def _group_context_assignments_by_camera(assignments: list[dict]) -> dict[str, dict[str, list[str]]]:
+    """camera_context_assignments rows (camera_id, context_type, plus
+    whichever *_id field matches context_type) -> {camera_id: {department_ids,
+    class_ids, section_ids}}. One pass over one branch-wide query, so
+    get_node_config never does a per-camera round trip for this."""
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for row in assignments:
+        camera_id = str(row.get('camera_id') or '')
+        if not camera_id:
+            continue
+        context_type = row.get('context_type')
+        target_id = row.get(f'{context_type}_id')
+        if not target_id:
+            continue
+        entry = grouped.setdefault(camera_id, {'department_ids': [], 'class_ids': [], 'section_ids': []})
+        entry[f'{context_type}_ids'].append(str(target_id))
+    return grouped
+
+
+def _local_node_camera_view(row: dict, context_by_camera: dict[str, dict[str, list[str]]] | None = None) -> dict:
     """Shape one branch_cameras row into the payload local_node.camera_config
     .normalize_camera() expects (id/camera_id, camera_name/name, rtsp_url/
     rtspUrl). Single conversion point so get_node_config and any future
-    node-facing camera read stay identical in shape."""
+    node-facing camera read stay identical in shape.
+
+    department_ids/class_ids/section_ids: this camera's business-context
+    tags (see support_db_camera_assignments.py's camera_context_assignments
+    table) — which department/class/section a recognition on this camera
+    should be attributed to, and (on the node side) which enrolled people it
+    should even consider matching. Empty lists mean "no tag on this camera",
+    which the node treats as "recognize everyone" — the same as today,
+    before this field existed."""
     camera_id = str(row.get('id'))
     name = row.get('camera_name') or 'Camera'
     rtsp_url = row.get('rtsp_url') or ''
+    context = (context_by_camera or {}).get(camera_id) or {'department_ids': [], 'class_ids': [], 'section_ids': []}
     return {
         'id': camera_id,
         'camera_id': camera_id,
@@ -741,6 +770,9 @@ def _local_node_camera_view(row: dict) -> dict:
         'rtsp_url': rtsp_url,
         'rtspUrl': rtsp_url,
         'enabled': bool(row.get('enabled', True)),
+        'department_ids': context['department_ids'],
+        'class_ids': context['class_ids'],
+        'section_ids': context['section_ids'],
     }
 
 def _branch_is_single_node_unassigned(org_id: str, branch_id: str, requesting_node_id: str) -> bool:
@@ -812,7 +844,23 @@ def get_node_config(node_api_key: str) -> dict:
             .order('channel')
         ),
     )
-    cameras = [_local_node_camera_view(row) for row in (cameras_result.data or [])]
+    # Business-context tags (department/class/section) for every camera on
+    # this branch, fetched once — see _group_context_assignments_by_camera
+    # and _local_node_camera_view. Failure here must never take down the
+    # whole config sync over a feature that's additive; an empty mapping
+    # just means every camera reports "no tag", same as before this existed.
+    try:
+        context_assignments = list_camera_context_assignments(str(node['org_id']), str(node['branch_id']))
+    except Exception:
+        logger.warning(
+            'get_node_config: camera context assignment fetch failed for branch=%s — '
+            'returning cameras with no context tags rather than failing the sync',
+            str(node['branch_id']), exc_info=True,
+        )
+        context_assignments = []
+    context_by_camera = _group_context_assignments_by_camera(context_assignments)
+
+    cameras = [_local_node_camera_view(row, context_by_camera) for row in (cameras_result.data or [])]
 
     # Single-node branches that pre-date this migration would otherwise go
     # dark the instant this ships (every existing camera's assigned_node_id
@@ -837,7 +885,7 @@ def get_node_config(node_api_key: str) -> dict:
                         .order('channel')
                     ),
                 )
-                cameras = [_local_node_camera_view(row) for row in (fallback_result.data or [])]
+                cameras = [_local_node_camera_view(row, context_by_camera) for row in (fallback_result.data or [])]
         except Exception:
             logger.warning(
                 'get_node_config: single-node fallback check failed for branch=%s — '

@@ -101,6 +101,9 @@ def parse_embedding_package(zip_path: Path) -> dict[str, Any]:
                 "full_name": str(meta.get("full_name") or ""),
                 "embeddings": normalized_embeddings,
                 "model_version": str(meta.get("model_version") or ""),
+                "department_id": str(meta.get("department_id") or ""),
+                "class_id": str(meta.get("class_id") or ""),
+                "section_id": str(meta.get("section_id") or ""),
             })
 
         return {

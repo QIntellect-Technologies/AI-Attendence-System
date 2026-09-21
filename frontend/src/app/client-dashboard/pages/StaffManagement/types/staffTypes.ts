@@ -172,6 +172,13 @@ export interface StaffMember {
    * departmentId field. null/undefined means "unassigned".
    */
   departmentId?: string | null;
+  /**
+   * Students hold a class (+ optional section) instead of a department.
+   * Real backend UUIDs (classes.id / sections.id), used by the Trainer
+   * enrollment CSV export so recognition can be gated per camera context.
+   */
+  classId?: string | null;
+  sectionId?: string | null;
   designationId?: string | null;
   designationName?: string;
   role: string;

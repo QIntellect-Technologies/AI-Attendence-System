@@ -2386,6 +2386,7 @@ import DynamicFilterToolbar, {
   type DynamicFilterSection,
 } from "../../components/ui/DynamicFilterToolbar";
 import ExportButton from "../../components/ui/ExportButton";
+import EnrollmentCsvExportButton from "./components/EnrollmentCsvExportButton";
 import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
 import { FastPagination } from "../../components/common/FastPagination";
@@ -4196,6 +4197,10 @@ const StaffDirectory: FC = () => {
                 }}
               />
             </div>
+            <EnrollmentCsvExportButton
+              data={filtered}
+              filenamePrefix={`${peopleModel.exportFilenamePrefix}_${selectedBranchLabel}`}
+            />
             <DynamicFilterToolbar
               sections={staffFilterSections}
               mobileOnly

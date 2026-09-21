@@ -35,7 +35,7 @@ from support_db_attendance_gate import (
     _get_branch_timezone,
     _find_approved_overtime,
 )
-from support_db_attendance_settings import list_pending_manual_instructions_for_branch
+from support_db_attendance_settings import list_pending_manual_instructions_for_branch, sync_student_class_from_names
 from support_db_time_utils import is_missing_table_or_column as _table_missing
 import support_db_attendance_exceptions as _attendance_exceptions
 from zoneinfo import ZoneInfo, available_timezones
@@ -45,6 +45,8 @@ from core.vertical_templates import (
     build_vertical_config,
     get_vertical_template,
 )
+
+logger = get_logger(__name__)
 
 def _safe_float(value: Any) -> float | None:
     """Parse an optional numeric field (geofence lat/lng) without raising.
@@ -610,6 +612,13 @@ def _client_staff_safe(
         'dept': department_display,
         'department_id': row.get('department_id'),
         'departmentId': row.get('department_id'),
+        # Students hold a class (+ optional section) instead of a department
+        # (see assign_student_class). Emitted so the Trainer enrollment CSV export
+        # can carry the real UUIDs the camera context gate compares against.
+        'class_id': row.get('class_id'),
+        'classId': row.get('class_id'),
+        'section_id': row.get('section_id'),
+        'sectionId': row.get('section_id'),
         'position': role_name,
         'designation': role_name,
         'designation_name': designation_display,
@@ -996,6 +1005,11 @@ def create_client_staff(
         raise RuntimeError('Failed to create person')
 
     row = result.data[0]
+    if people_type == 'student':
+        try:
+            row = sync_student_class_from_names(org_key, row)
+        except Exception:
+            logger.warning('create_client_staff: student class/section id sync failed for %s', row.get('id'), exc_info=True)
     safe = _client_staff_safe(row, org_key)
     safe['branch_ui_id'] = ui_branch_id
     safe['branchUiId'] = ui_branch_id
@@ -1352,7 +1366,17 @@ def update_client_staff(
         import session_registry
         session_registry.end_all_client_staff_sessions(str(staff_id))
 
-    return _client_staff_safe(result.data[0], org_id)
+    updated_row = result.data[0]
+    if (
+        _normalize_people_type(updated_row.get('people_type') or current.get('people_type')) == 'student'
+        and ({'department_name', 'position', 'role_name'} & set(update_data))
+    ):
+        try:
+            updated_row = sync_student_class_from_names(org_id, updated_row)
+        except Exception:
+            logger.warning('update_client_staff: student class/section id sync failed for %s', staff_id, exc_info=True)
+
+    return _client_staff_safe(updated_row, org_id)
 
 def archive_client_staff(staff_id: str, reason: str = 'Archived from Staff Management', archived_by: str | None = None) -> dict:
     sb = get_supabase()

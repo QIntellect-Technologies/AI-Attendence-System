@@ -125,6 +125,18 @@ def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE attendance_buffer ADD COLUMN {column} {ddl_type}")
 
+    # staff_embeddings retrofit: department_id/class_id/section_id are the
+    # backend's real department/class/section UUIDs (see
+    # camera_context_assignments), carried through from the trainer_desktop
+    # package — see package_import.py and upsert_person_embeddings. NULL
+    # for every row imported before this migration, and for any row whose
+    # CSV never carried an id column; both are treated as "no context tag"
+    # by whatever later reads them, never as an error.
+    existing_embedding_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff_embeddings)").fetchall()}
+    for column in ("department_id", "class_id", "section_id"):
+        if column not in existing_embedding_columns:
+            conn.execute(f"ALTER TABLE staff_embeddings ADD COLUMN {column} TEXT")
+
 
 def reset_local_data() -> None:
     """Wipe every locally-cached table (attendance_buffer, staff_embeddings,
@@ -184,6 +196,9 @@ def init_db() -> None:
                 model_version TEXT,
                 source_package_id TEXT,
                 imported_at TEXT NOT NULL,
+                department_id TEXT,
+                class_id TEXT,
+                section_id TEXT,
                 UNIQUE (branch_id, people_type, person_code, embedding_index)
             )
             """
@@ -284,29 +299,44 @@ def upsert_person_embeddings(
     embeddings: list[list[float]],
     model_version: str,
     source_package_id: str,
+    department_id: str = "",
+    class_id: str = "",
+    section_id: str = "",
 ) -> int:
     """Replace embeddings for exactly one person, leaving every other person
     in this branch untouched. This is the core primitive for incremental zip
-    imports — never delete-then-insert at the branch level for this flow."""
+    imports — never delete-then-insert at the branch level for this flow.
+
+    Deletes by (branch_id, person_code) ONLY — not people_type. A person's
+    people_type can legitimately change between imports (e.g. a person_code
+    that was first enrolled under the wrong people_type via a bad default,
+    then re-enrolled correctly). If the DELETE were scoped to the new
+    people_type too, a changed people_type would never remove the old row:
+    it would just add a second candidate for the same person_code under
+    the old people_type, and recognition_worker treats (people_type,
+    person_code) as the candidate identity — so the same face becomes two
+    enrolled candidates, and matching can silently pick either one."""
     now = utc_now()
     with _connect() as conn:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM staff_embeddings WHERE branch_id = ? AND people_type = ? AND person_code = ?",
-            (branch_id, people_type, person_code),
+            "DELETE FROM staff_embeddings WHERE branch_id = ? AND person_code = ?",
+            (branch_id, person_code),
         )
         for index, embedding in enumerate(embeddings):
             cur.execute(
                 """
                 INSERT INTO staff_embeddings (
                     branch_id, people_type, person_code, full_name, embedding_index,
-                    embedding, embedding_dim, model_version, source_package_id, imported_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    embedding, embedding_dim, model_version, source_package_id, imported_at,
+                    department_id, class_id, section_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     branch_id, people_type, person_code, full_name, index,
                     json.dumps(embedding, separators=(",", ":")), len(embedding),
                     model_version, source_package_id, now,
+                    department_id or None, class_id or None, section_id or None,
                 ),
             )
         conn.commit()
@@ -333,6 +363,9 @@ def import_embedding_package(
                 embeddings=record["embeddings"],
                 model_version=str(record.get("model_version") or ""),
                 source_package_id=package_id,
+                department_id=str(record.get("department_id") or ""),
+                class_id=str(record.get("class_id") or ""),
+                section_id=str(record.get("section_id") or ""),
             )
             if count > 0:
                 imported += 1

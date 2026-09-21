@@ -31,6 +31,7 @@ def process_enrollment_folder(
     enrollment_folder: Path,
     csv_path: Path,
     branch_label: str,
+    default_people_type: str | None = None,
 ) -> TrainingRunResult:
     """
     Complete trainer workflow.
@@ -75,6 +76,7 @@ def process_enrollment_folder(
     logger.info("Enrollment Folder : %s", enrollment_folder)
     logger.info("CSV               : %s", csv_path.name)
     logger.info("Branch            : %s", branch_label)
+    logger.info("Default People Type: %s", default_people_type or "(none — CSV must supply its own)")
     logger.info("------------------------------------------------")
 
     #
@@ -85,7 +87,7 @@ def process_enrollment_folder(
     #
     # Read CSV
     #
-    people = read_enrollment_csv(csv_path)
+    people = read_enrollment_csv(csv_path, default_people_type=default_people_type)
 
     logger.info(
         "Loaded %d enrollment record(s).",

@@ -268,6 +268,10 @@ type StaffApiUser = User & {
   department_name?: string | null;
   department_id?: number | string | null;
   departmentId?: number | string | null;
+  class_id?: string | null;
+  classId?: string | null;
+  section_id?: string | null;
+  sectionId?: string | null;
   role_name?: string | null;
   designation_id?: number | string | null;
   designationId?: number | string | null;
@@ -428,6 +432,8 @@ export function apiUserToStaffMember(user: User): StaffMember {
     // liveDepartmentId initializer.
     department: row.department ?? row.department_name ?? "",
     departmentId: row.department_id ?? row.departmentId ?? null,
+    classId: row.class_id ?? row.classId ?? null,
+    sectionId: row.section_id ?? row.sectionId ?? null,
     designationId: row.designation_id ?? row.designationId ?? null,
     designationName: row.designation_name ?? row.designationName ?? "",
     role: position,

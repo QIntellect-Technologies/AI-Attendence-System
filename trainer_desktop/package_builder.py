@@ -277,6 +277,12 @@ def write_embedding_record(
 
         "branch": person.branch,
 
+        "department_id": person.department_id,
+
+        "class_id": person.class_id,
+
+        "section_id": person.section_id,
+
         "embedding_model": result["model_version"],
 
         "embedding_count": result["embedding_count"],
@@ -509,6 +515,9 @@ def write_manifest_and_zip(
                 "full_name": item.person.full_name,
                 "group": item.person.group,
                 "subgroup": item.person.subgroup,
+                "department_id": item.person.department_id,
+                "class_id": item.person.class_id,
+                "section_id": item.person.section_id,
                 "embedding_file": item.embedding_file,
                 "embedding_count": item.embedding_count,
                 "avg_quality": item.avg_quality,

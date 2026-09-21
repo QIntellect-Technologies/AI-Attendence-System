@@ -1692,6 +1692,7 @@ import React, {
 import { getCurrentOrganization } from "../api/api";
 import { useAuth } from "./useAuth";
 import { resolvePeopleTypesFromBizType } from "../utils/templateRendering";
+import { readShiftEnabledPeopleTypes } from "../utils/shiftSupport";
 import {
   isSessionExpiryHandled,
   handleSessionExpired,
@@ -2039,7 +2040,8 @@ const DEFAULT_ORG_CONFIG: OrgConfig = {
   primaryPeopleType: "staff",
   enabledPeopleTypes: ["staff"],
   attendancePeopleTypes: ["staff"],
-  shiftEnabledPeopleTypes: [],
+  // shiftEnabledPeopleTypes intentionally omitted: undefined = "never
+  // configured" (see utils/shiftSupport.ts); [] would mean "no type uses shifts".
   modulePeopleTypesByBranch: {},
   module_people_types_by_branch: {},
   enabledStaffTypes: ["office", "field"],
@@ -2693,13 +2695,12 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
                     : "staff",
               ],
     ),
-    shiftEnabledPeopleTypes: uniqStrings(
-      Array.isArray(raw.shiftEnabledPeopleTypes)
-        ? raw.shiftEnabledPeopleTypes
-        : Array.isArray(raw.shift_enabled_people_types)
-          ? raw.shift_enabled_people_types
-          : [],
-    ),
+    // Keep "never configured" (undefined) distinct from "explicitly none" ([]).
+    shiftEnabledPeopleTypes:
+      readShiftEnabledPeopleTypes(
+        raw.shiftEnabledPeopleTypes,
+        raw.shift_enabled_people_types,
+      ) ?? undefined,
     modulePeopleTypesByBranch: isRecord(raw.modulePeopleTypesByBranch)
       ? normalizeModulePeopleTypesByBranch(raw.modulePeopleTypesByBranch)
       : isRecord(raw.module_people_types_by_branch)
