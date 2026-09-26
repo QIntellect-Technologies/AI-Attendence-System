@@ -63,9 +63,27 @@ export async function confirmDialog(opts: {
   });
 }
 
+export async function alertDialog(opts: {
+  title?: string;
+  text?: string;
+  icon?: "warning" | "info" | "question" | "success" | "error";
+  confirmButtonText?: string;
+}) {
+  const { title, text, icon = "error", confirmButtonText = "OK" } = opts;
+  return Swal.fire({
+    ...swalDefaults,
+    title,
+    text,
+    icon,
+    confirmButtonText,
+    confirmButtonColor: T.teal600,
+  });
+}
+
 export default {
   toastSuccess,
   toastError,
   toastInfo,
   confirmDialog,
+  alertDialog,
 };

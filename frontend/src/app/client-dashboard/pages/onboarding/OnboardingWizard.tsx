@@ -4531,14 +4531,10 @@ function StudentClassesStep({
   organizationId,
   branches,
   plan,
-  shiftEnabledPeopleTypes,
-  setShiftEnabledPeopleTypes,
 }: {
   organizationId: string | number;
   branches: Branch[];
   plan: OnboardingPlan;
-  shiftEnabledPeopleTypes: string[];
-  setShiftEnabledPeopleTypes: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
   return (
     <div>
@@ -4549,38 +4545,6 @@ function StudentClassesStep({
         later in Settings — each branch tab saves directly, so there's
         nothing to re-enter after onboarding.
       </p>
-
-      {plan.studentPeopleTypes.length > 0 && (
-        <div style={{ ...cardStyle({ padding: 18, marginBottom: 16 }) }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={sectionTitle()}>Shift scheduling</div>
-          </div>
-          <p style={{ margin: "8px 0 14px", color: C.textSub, fontSize: 13 }}>
-            Enable shift-based attendance for the student people types below.
-          </p>
-          <div style={{ display: "grid", gap: 10 }}>
-            {plan.studentPeopleTypes.map((peopleType) => {
-              const normalizedType = normalizePeopleType(peopleType);
-              return (
-                <label key={peopleType} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, border: `1px solid ${C.border}`, background: C.card, cursor: "pointer", fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={shiftEnabledPeopleTypes.includes(normalizedType)}
-                    onChange={() => {
-                      setShiftEnabledPeopleTypes((prev) =>
-                        prev.includes(normalizedType)
-                          ? prev.filter((value) => value !== normalizedType)
-                          : [...prev, normalizedType],
-                      );
-                    }}
-                  />
-                  {titleCase(peopleType)}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       <ClassSectionEditor organizationId={organizationId} branches={branches} />
     </div>
@@ -4811,14 +4775,10 @@ function WorkforceDepartmentsStep({
   organizationId,
   branches,
   plan,
-  shiftEnabledPeopleTypes,
-  setShiftEnabledPeopleTypes,
 }: {
   organizationId: string | number;
   branches: Branch[];
   plan: OnboardingPlan;
-  shiftEnabledPeopleTypes: string[];
-  setShiftEnabledPeopleTypes: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
   return (
     <div>
@@ -4836,53 +4796,6 @@ function WorkforceDepartmentsStep({
         Settings — each branch tab saves directly, so there's nothing to
         re-enter after onboarding.
       </p>
-
-      {plan.workforcePeopleTypes.length > 0 && (
-        <div style={{ ...cardStyle({ padding: 18, marginBottom: 16 }) }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={sectionTitle()}>Shift scheduling</div>
-          </div>
-          <p style={{ margin: "8px 0 14px", color: C.textSub, fontSize: 13 }}>
-            Enable shift-based attendance for the workforce people types below.
-          </p>
-          <div style={{ display: "grid", gap: 10 }}>
-            {plan.workforcePeopleTypes.map((peopleType) => {
-              const normalizedType = normalizePeopleType(peopleType);
-              return (
-                <label
-                  key={peopleType}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "12px 14px",
-                    borderRadius: 12,
-                    border: `1px solid ${C.border}`,
-                    background: C.card,
-                    cursor: "pointer",
-                    fontSize: 14,
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={shiftEnabledPeopleTypes.includes(normalizedType)}
-                    onChange={() => {
-                      const normalized = normalizePeopleType(peopleType);
-                      setShiftEnabledPeopleTypes((prev) => {
-                        const next = prev.includes(normalized)
-                          ? prev.filter((value) => value !== normalized)
-                          : [...prev, normalized];
-                        return next;
-                      });
-                    }}
-                  />
-                  {titleCase(peopleType)}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       <DepartmentDesignationEditor
         organizationId={organizationId}
@@ -5632,16 +5545,6 @@ export default function OnboardingWizard() {
           organizationId={organizationId}
           branches={branches}
           plan={onboardingPlan}
-          shiftEnabledPeopleTypes={config.shiftEnabledPeopleTypes ?? []}
-          setShiftEnabledPeopleTypes={(updater) =>
-            setConfig((prev) => ({
-              ...prev,
-              shiftEnabledPeopleTypes:
-                typeof updater === "function"
-                  ? updater(prev.shiftEnabledPeopleTypes ?? [])
-                  : updater,
-            }))
-          }
         />
       );
     }
@@ -5652,16 +5555,6 @@ export default function OnboardingWizard() {
           organizationId={organizationId}
           branches={branches}
           plan={onboardingPlan}
-          shiftEnabledPeopleTypes={config.shiftEnabledPeopleTypes ?? []}
-          setShiftEnabledPeopleTypes={(updater) =>
-            setConfig((prev) => ({
-              ...prev,
-              shiftEnabledPeopleTypes:
-                typeof updater === "function"
-                  ? updater(prev.shiftEnabledPeopleTypes ?? [])
-                  : updater,
-            }))
-          }
         />
       );
     }

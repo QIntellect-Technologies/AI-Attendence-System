@@ -4347,7 +4347,6 @@ import { useOrg } from "../../contexts/OrgConfigContext";
 import { peopleFamilyForType } from "../../utils/templateRendering";
 import { readShiftEnabledPeopleTypes } from "../../utils/shiftSupport";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
-import { AttendanceSettingsScreens } from "../attendance_temp/settings/AttendanceSettingsScreens";
 import DepartmentDesignationEditor from "./DepartmentDesignationEditor";
 import ClassSectionEditor from "./ClassSectionEditor";
 import {
@@ -5479,61 +5478,6 @@ function WorkforceStructureEditor({
   );
 }
 
-function ShiftSchedulingEditor({
-  activePeopleTypes,
-  shiftEnabledPeopleTypes,
-  setShiftEnabledPeopleTypes,
-  terminology,
-}: {
-  activePeopleTypes: string[];
-  shiftEnabledPeopleTypes: string[] | undefined;
-  setShiftEnabledPeopleTypes: (
-    updater: React.SetStateAction<string[] | undefined>,
-  ) => void;
-  terminology: Terminology;
-}) {
-  const current = shiftEnabledPeopleTypes || [];
-
-  const toggle = (peopleType: string) => {
-    const normalized = normalizeKey(peopleType);
-    setShiftEnabledPeopleTypes((prev) => {
-      const existing = prev || [];
-      return existing.includes(normalized)
-        ? existing.filter((v) => v !== normalized)
-        : [...existing, normalized];
-    });
-  };
-
-  if (!activePeopleTypes || activePeopleTypes.length === 0) return null;
-
-  return (
-    <ConfigCard icon={<ShieldCheck size={18} />} title="Shift Scheduling">
-      <p style={{ margin: "6px 0 12px", color: C.textSub }}>
-        Enable shift-based attendance for the people types below. These settings
-        are saved as part of the onboarding config and are template-aware.
-      </p>
-      <div style={{ display: "grid", gap: 10 }}>
-        {activePeopleTypes.map((pt) => {
-          const normalized = normalizeKey(pt);
-          return (
-            <label
-              key={pt}
-              style={{ display: "flex", alignItems: "center", gap: 10 }}
-            >
-              <input
-                type="checkbox"
-                checked={current.includes(normalized)}
-                onChange={() => toggle(pt)}
-              />
-              <span style={{ fontSize: 14 }}>{titleCase(pt)}</span>
-            </label>
-          );
-        })}
-      </div>
-    </ConfigCard>
-  );
-}
-
 function CameraSettingsEditor({
   branches,
   cameras,
@@ -6340,21 +6284,6 @@ export default function Settings() {
               terminology={terminology}
             />
           ) : null} */}
-
-          <ShiftSchedulingEditor
-            activePeopleTypes={activePeopleTypes}
-            shiftEnabledPeopleTypes={config.shiftEnabledPeopleTypes}
-            setShiftEnabledPeopleTypes={(updater) =>
-              setConfig((prev) => ({
-                ...prev,
-                shiftEnabledPeopleTypes:
-                  typeof updater === "function"
-                    ? (updater(prev.shiftEnabledPeopleTypes) as string[])
-                    : (updater as string[]),
-              }))
-            }
-            terminology={terminology}
-          />
 
           <CameraSettingsEditor
             branches={branches}

@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/ProfileDrawer.tsx
+ * pages/StaffManagement/components/ProfileDrawer.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Right-side detail panel for a single staff member.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -93,10 +93,13 @@ export const ProfileDrawer: FC<{
     };
   }, [member.id, organizationId, peopleModel.isStudent]);
 
+  const allowanceItems = salaryConfig?.allowancesBreakdown ?? [];
+  const hasAllowanceItems = allowanceItems.length > 0;
+
   const allowanceSummary = (() => {
     if (peopleModel.isStudent) return null;
     if (salaryConfigLoading) return "Loading…";
-    const items = salaryConfig?.allowancesBreakdown ?? [];
+    const items = allowanceItems;
     if (!items.length) return "—";
     return items
       .map((item) =>
@@ -272,11 +275,15 @@ export const ProfileDrawer: FC<{
               val: member.department,
             },
             { Icon: Shield, label: peopleModel.roleLabel, val: member.role },
-            {
-              Icon: UserRound,
-              label: `${peopleModel.personSingular} Type`,
-              val: staffTypeText(member),
-            },
+            ...(peopleModel.showStaffTypeField
+              ? [
+                  {
+                    Icon: UserRound,
+                    label: `${peopleModel.personSingular} Type`,
+                    val: staffTypeText(member),
+                  },
+                ]
+              : []),
             { Icon: CalendarClock, label: "Shift", val: shiftText(member) },
             ...(!peopleModel.isStudent
               ? [
@@ -287,12 +294,19 @@ export const ProfileDrawer: FC<{
                   },
                 ]
               : []),
-            {
-              Icon: CheckCircle,
-              label: `${peopleModel.personSingular} Benefits`,
-              val: member.benefits.length ? member.benefits.join(", ") : "—",
-            },
             ...(!peopleModel.isStudent
+              ? [
+                  {
+                    Icon: CheckCircle,
+                    label: `${peopleModel.personSingular} Benefits`,
+                    val: member.benefits.length
+                      ? member.benefits.join(", ")
+                      : "—",
+                  },
+                ]
+              : []),
+            ...(!peopleModel.isStudent &&
+            (salaryConfigLoading || hasAllowanceItems)
               ? [
                   {
                     Icon: Briefcase,
@@ -348,19 +362,20 @@ export const ProfileDrawer: FC<{
           ))}
 
           {/* Module Access */}
-          <div style={{ marginTop: 16 }}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: T.muted,
-                textTransform: "uppercase",
-                letterSpacing: ".07em",
-                marginBottom: 8,
-              }}
-            >
-              Dashboard Module Access
-            </div>
+          {!peopleModel.isStudent && (
+            <div style={{ marginTop: 16 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: T.muted,
+                  textTransform: "uppercase",
+                  letterSpacing: ".07em",
+                  marginBottom: 8,
+                }}
+              >
+                Dashboard Module Access
+              </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {staffModules(member).length ? (
                 staffModules(member).map((m) => (
@@ -383,9 +398,10 @@ export const ProfileDrawer: FC<{
                 <span style={{ fontSize: 12, color: T.muted }}>
                   No access granted
                 </span>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Actions */}

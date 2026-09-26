@@ -897,7 +897,7 @@ def get_node_config(node_api_key: str) -> dict:
         'get_node_config.capture_settings',
         lambda: (
             sb.table('attendance_capture_settings')
-            .select('people_type, mode, sync_delay_minutes')
+            .select('people_type, mode, sync_delay_minutes, attendance_workflow')
             .eq('org_id', str(node['org_id']))
             .eq('branch_id', str(node['branch_id']))
         ),
@@ -917,23 +917,20 @@ def get_node_config(node_api_key: str) -> dict:
         if row.get('people_type')
     })
 
-    # Determine if shift mode is enabled for ANY people_type in this branch.
-    # If ANY attendance_capture_settings has mode='shift', then shift gating
-    # is active and the local node should enforce it. This prevents the
-    # fallback in shift_gate.is_event_within_shift() that would accept
-    # out-of-hours detections when shift_windows sync fails or is incomplete.
-    #
-    # BUGFIX: this used to read row.get('mode') against a query that only
-    # selected 'people_type' — 'mode' was never fetched, so this was always
-    # None and shift_mode_enabled was unconditionally False for every
-    # branch, silently disabling the exact safety switch this comment
-    # describes. Folded into the single capture_settings_result query above
-    # (which also now carries sync_delay_minutes) instead of a third
-    # round-trip to the same table.
-    shift_mode_enabled = any(
-        row.get('mode') == 'shift'
+    # Every person is timed by a shift (personal shift, else the branch
+    # default), so shift gating is always on. A person with neither has no
+    # window, and shift_gate treats that as outside the shift instead of
+    # silently accepting the detection.
+    shift_mode_enabled = True
+
+    # Per-people_type local-node marking behavior (see local_node.attendance_marking_*).
+    # Defaults to 'scenario_based' so a row saved before this column existed
+    # (or with the value NULL for any reason) never silently changes behavior.
+    attendance_workflows = {
+        row.get('people_type'): row.get('attendance_workflow') or 'scenario_based'
         for row in capture_settings_rows
-    )
+        if row.get('people_type')
+    }
 
     # shift_windows / staff_shift_windows are the two fields shift_gate.py's
     # safety fallback depends on (shift_mode_enabled=True + no window found
@@ -1023,6 +1020,7 @@ def get_node_config(node_api_key: str) -> dict:
         'shift_windows': shift_windows,
         'staff_shift_windows': staff_shift_windows,
         'manual_instructions': manual_instructions,
+        'attendance_workflows': attendance_workflows,
     }
 
 

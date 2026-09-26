@@ -141,6 +141,46 @@ def _normalize_people_type(value: object, fallback: str = "staff") -> str:
     }
     return aliases.get(text, text or fallback)
 
+# people_type values that count as the "student" family for Mobile App
+# entitlement (Organization.enabled_mobile_people_types). Mirrors the
+# Client Dashboard's STUDENT_TYPES set exactly (templateRendering.ts) —
+# keep the two in sync, or a person the dashboard shows as a student
+# could resolve to a different bucket at mobile login than in the UI.
+_MOBILE_SCOPE_STUDENT_TYPES = frozenset({
+    'student', 'students', 'learner', 'learners', 'pupil', 'pupils',
+})
+
+def people_type_mobile_scope_key(people_type: object) -> str:
+    """'student' or 'staff' -- which Organization.enabled_mobile_people_types
+    bucket a person's people_type falls into. See _MOBILE_SCOPE_STUDENT_TYPES."""
+    return 'student' if _normalize_people_type(people_type) in _MOBILE_SCOPE_STUDENT_TYPES else 'staff'
+
+def _duplicate_client_staff_message(exc: Exception) -> str | None:
+    """Turn a raw client_staff unique-constraint violation (Postgres 23505 --
+    e.g. client_staff_email_unique_idx on (org_id, lower(email))) into a
+    human-readable message, or None if exc isn't one of these.
+
+    _assert_unique_client_staff_login_identifier already pre-checks email/
+    phone before create/update, but it only looks at is_archived=False rows
+    (an archived person's email is meant to be reusable via Restore) while
+    the DB's unique index makes no such distinction. So a duplicate against
+    an ARCHIVED row passes that pre-check and only fails here, at the
+    actual insert/update -- this is the one place that failure gets turned
+    into something a person can act on, instead of the raw driver exception
+    ('duplicate key value violates unique constraint "client_staff_email_
+    unique_idx" ... Key (org_id, lower(email))=(...) already exists.')
+    reaching the Client Dashboard verbatim.
+    """
+    text = str(exc).lower()
+    if 'duplicate key' not in text and '23505' not in text:
+        return None
+    field = 'email' if 'email' in text else 'phone' if 'phone' in text else 'record'
+    return (
+        f'This {field} is already used by another person in your organization. '
+        'If that person was archived, open the Archived Employees tab and '
+        'click Restore instead of creating a duplicate.'
+    )
+
 # ── Person-name validation ───────────────────────────────────────────────────
 #
 # Names arrive from the client dashboard and the Local Node enroll screen and
@@ -1000,7 +1040,13 @@ def create_client_staff(
     if _client_staff_has_people_type_column():
         insert_data['people_type'] = people_type
 
-    result = sb.table('client_staff').insert(insert_data).execute()
+    try:
+        result = sb.table('client_staff').insert(insert_data).execute()
+    except Exception as exc:
+        message = _duplicate_client_staff_message(exc)
+        if message:
+            raise ValueError(message) from exc
+        raise
     if not result.data:
         raise RuntimeError('Failed to create person')
 
@@ -1073,12 +1119,12 @@ def update_client_staff_own_password(staff_id: str, new_password: str) -> dict:
 def update_client_staff(
     staff_id: str,
     payload: dict,
-    # Fail-closed by default — see create_client_staff above for why.
     granted_by_is_admin: bool = False,
+    _prefetched: dict | None = None,
 ) -> dict:
     from support_db_client_users import _assert_unique_client_staff_login_identifier, _assert_unique_client_staff_person_code, _hash_password, _person_code_from_payload, _person_code_label
     sb = get_supabase()
-    current = get_client_staff_member(str(staff_id))
+    current = _prefetched or get_client_staff_member(str(staff_id))
     org_id = str(current['organization_id'])
 
     update_data: dict = {}
@@ -1351,7 +1397,13 @@ def update_client_staff(
         return current
 
     update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-    result = sb.table('client_staff').update(update_data).eq('id', str(staff_id)).execute()
+    try:
+        result = sb.table('client_staff').update(update_data).eq('id', str(staff_id)).execute()
+    except Exception as exc:
+        message = _duplicate_client_staff_message(exc)
+        if message:
+            raise ValueError(message) from exc
+        raise
     if not result.data:
         raise RuntimeError('Failed to update person')
 
@@ -1377,6 +1429,12 @@ def update_client_staff(
             logger.warning('update_client_staff: student class/section id sync failed for %s', staff_id, exc_info=True)
 
     return _client_staff_safe(updated_row, org_id)
+
+def reset_client_staff_credentials(staff_id: str, *, _prefetched: dict | None = None) -> dict:
+    from support_db_client_users import _generate_temp_password
+    password = _generate_temp_password()
+    user = update_client_staff(str(staff_id), {'password': password}, _prefetched=_prefetched)
+    return {'user': user, 'password': password}
 
 def archive_client_staff(staff_id: str, reason: str = 'Archived from Staff Management', archived_by: str | None = None) -> dict:
     sb = get_supabase()

@@ -122,7 +122,7 @@
 
 
 /**
- * modules/staff/types/staffTypes.ts
+ * pages/StaffManagement/types/staffTypes.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Local Staff data contract — the StaffMember shape the directory UI works
  * with, plus the small unions and option types that hang off it. This is the

@@ -297,6 +297,28 @@ export function useUpdateOrganizationStaffTypeScope() {
   };
 }
 
+export function useUpdateOrganizationMobileScope() {
+  const mutation = useMutationState();
+  return {
+    updateOrganizationMobileScope: (
+      orgId: string,
+      enabledMobilePeopleTypes: PeopleType[],
+      onSuccess?: (org: Organization) => void,
+    ) =>
+      mutation.run(
+        () =>
+          organizationsApi.updateMobileScope({
+            id: orgId,
+            enabled_mobile_people_types: enabledMobilePeopleTypes,
+          }),
+        onSuccess,
+      ),
+    isUpdatingMobileScope: mutation.isMutating,
+    error: mutation.error,
+    clearError: mutation.clearError,
+  };
+}
+
 export function useUpdateOrganizationTemplate() {
   const mutation = useMutationState();
   return {

@@ -1460,6 +1460,21 @@ export async function setStaffDashboardScope(
 }
 
 /**
+ * Issues a brand-new login password for an existing staff/student row —
+ * Staff Management's "Generate Credentials" row action. Same response
+ * shape as createStaffRecord's `credentials` block, so the caller reuses
+ * the exact same StaffLoginCredentials builder used at creation time.
+ */
+export async function generateStaffCredentials(
+  userId: number | string,
+): Promise<StaffMutationResponse> {
+  return staffJson<StaffMutationResponse>(
+    `/api/staff/${encodeURIComponent(String(userId))}/generate-credentials`,
+    { method: "POST" },
+  );
+}
+
+/**
  * One level of direct reports (everyone whose manager_id points at
  * `userId`) — used to decide whether a 'branch'-scoped dashboard session
  * is eligible to see the "My Team" toggle at all (a manager with zero

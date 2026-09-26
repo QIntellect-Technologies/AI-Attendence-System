@@ -219,7 +219,7 @@ export function useLeaveFilters({
     }
     return dateFilteredLeaves.filter((leave) => {
       const rowTypeRaw = normalize(
-        (leave as Record<string, unknown>).peopleType ?? "staff",
+        (leave as unknown as Record<string, unknown>).peopleType ?? "staff",
       );
       const rowType = aliases[rowTypeRaw] ?? rowTypeRaw;
       return rowType === selected;

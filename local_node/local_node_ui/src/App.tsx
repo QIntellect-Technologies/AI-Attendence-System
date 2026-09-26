@@ -1078,6 +1078,11 @@ export default function App() {
   const runtime = status?.runtime ?? {};
   const isLocalMode =
     String(status?.attendance_mode || "").toLowerCase() === "local";
+  const hasScenarioBasedWorkflow =
+    Object.values(status?.attendance_workflows ?? {}).length === 0 ||
+    Object.values(status?.attendance_workflows ?? {}).some(
+      (workflow) => workflow !== "simple",
+    );
 
   // Big brand line in the header. Prefers the organization's display name
   // from the node status; falls back to something sensible before
@@ -1413,7 +1418,9 @@ export default function App() {
             onSync={() => void syncAttendance()}
             clearing={busy === "clear"}
             onClear={() => void clearTodayAttendance()}
-            onOpenHeldReview={() => setHeldReviewOpen(true)}
+            onOpenHeldReview={
+              hasScenarioBasedWorkflow ? () => setHeldReviewOpen(true) : undefined
+            }
           />
         </div>
       </section>

@@ -27,6 +27,7 @@ export function getPeopleTableColumns(
   showBranch: boolean,
   peopleType: string,
   purchasedModules: string[],
+  showStaffType: boolean,
 ): StaffTemplateColumn[] {
   const normalizedPeopleType = normalizePeopleType(peopleType);
   const purchased = new Set(
@@ -56,7 +57,7 @@ export function getPeopleTableColumns(
   // so it's injected here instead of expected to already be in the list.
   // Skipped for students — the student template has no staff_type/
   // attendance-mode concept at all.
-  if (normalizedPeopleType !== "student") {
+  if (normalizedPeopleType !== "student" && showStaffType) {
     const staffTypeColumn = {
       key: "staffType",
       dataKey: "staffType",

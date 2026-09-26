@@ -3064,9 +3064,10 @@ class CameraStreamManager:
             # nothing new to publish.
             if row.get("event_type") in (
                 "locked_by_manual_override", "stray_ignored", "outside_checkout_window_ignored",
+                "check_in_pre_shift_ignored", "stray_after_checkout",
             ):
                 continue
-            if row.get("sync_status") != "held_for_review":
+            if row.get("sync_status") not in ("held_for_review", "checkout_pending_window"):
                 event_type = row.get("event_type", "check_in")
                 is_check_out = event_type == "check_out"
                 snapshot_b64 = self._encode_snapshot(frame, bbox)

@@ -1,5 +1,5 @@
 // /**
-//  * modules/staff/components/StaffModal.tsx
+//  * pages/StaffManagement/components/StaffModal.tsx
 //  * ─────────────────────────────────────────────────────────────────────────────
 //  * Add / Edit staff modal. Still the largest component in the module — see
 //  * REFACTOR_NOTES.md for the suggested next round of extraction (live
@@ -2603,7 +2603,7 @@
 
 
 /**
- * modules/staff/components/StaffModal.tsx
+ * pages/StaffManagement/components/StaffModal.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Add / Edit staff modal. Still the largest component in the module — see
  * REFACTOR_NOTES.md for the suggested next round of extraction (live
@@ -2880,7 +2880,7 @@ export const StaffModal: FC<{
     const showSubGroupField = peopleModel.isStudent && hasField("section", "designation");
     const showSalaryField = hasField("salary");
     const showBenefitsField = hasField("benefits");
-    const showStaffTypeField = !peopleModel.isStudent && hasField("staffType");
+    const showStaffTypeField = peopleModel.showStaffTypeField && hasField("staffType");
     const showShiftField = hasField("shiftId");
     const showProfileImageField = hasField("profileImage");
     const showMediaFields = showProfileImageField;

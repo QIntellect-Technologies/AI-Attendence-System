@@ -92,7 +92,7 @@ from typing import Optional
 
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
-
+from concurrent.futures import ThreadPoolExecutor
 logger = get_logger(__name__)
 
 _TABLE = 'active_sessions'
@@ -268,12 +268,10 @@ def invalidate_session(account_type: str, user_id: str, *, reason: str = 'passwo
 
 
 def end_all_client_staff_sessions(staff_id: str, *, reason: str = 'password_changed') -> None:
-    """A client_staff row can hold a desktop dashboard session
-    ('client_staff') and a mobile portal session ('client_staff_mobile')
-    at once (see module docstring). A password reset/change for that
-    person must kill both, not just whichever surface triggered it —
-    otherwise a stolen mobile token (30-day TTL) survives a desktop-side
-    password reset undisturbed, or vice versa.
-    """
-    invalidate_session('client_staff', staff_id, reason=reason)
-    invalidate_session('client_staff_mobile', staff_id, reason=reason)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(invalidate_session, 'client_staff', staff_id, reason=reason),
+            pool.submit(invalidate_session, 'client_staff_mobile', staff_id, reason=reason),
+        ]
+        for f in futures:
+            f.result()

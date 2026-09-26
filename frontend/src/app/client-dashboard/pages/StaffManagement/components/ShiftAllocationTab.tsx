@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/ShiftAllocationTab.tsx
+ * pages/StaffManagement/components/ShiftAllocationTab.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Bulk assignment of staff to the branch's configured shifts.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +32,7 @@ import { type StaffMember } from "../types/staffTypes";
 import { shiftText } from "../utils/staffShifts";
 import { formatShiftWindow } from "../utils/shiftOverlap";
 import { ShiftTimingsModal } from "./ShiftTimingsModal";
+import { BranchDefaultShiftCard } from "./BranchDefaultShiftCard";
 import { StaffAttendanceOverridesPanel } from "./StaffAttendanceOverridesPanel";
 
 export const ShiftAllocationTab: FC<{
@@ -409,6 +410,14 @@ export const ShiftAllocationTab: FC<{
           branch, or refresh the dashboard.
         </div>
       )}
+      <BranchDefaultShiftCard
+        apiBranchId={scopedApiBranchId}
+        organizationId={organizationId}
+        peopleType={peopleModel.peopleType}
+        personPlural={peopleModel.personPlural.toLowerCase()}
+        shifts={liveShifts}
+        isLoadingShifts={isLoadingShifts}
+      />
 
       <div
         style={{

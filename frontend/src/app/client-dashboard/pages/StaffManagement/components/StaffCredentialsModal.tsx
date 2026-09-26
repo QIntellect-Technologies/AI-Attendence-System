@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/StaffCredentialsModal.tsx
+ * pages/StaffManagement/components/StaffCredentialsModal.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * One-time display of generated login credentials, with copy/download.
  * ─────────────────────────────────────────────────────────────────────────────

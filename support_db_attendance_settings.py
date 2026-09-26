@@ -50,7 +50,7 @@
 # from typing import Any, Optional
 
 # from supabase_client import get_supabase
-# from support_db_core import build_or_eq_filter
+# from support_db_core import build_or_eq_filter, _execute_supabase
 # from support_db_time_utils import (
 #     now_iso,
 #     clean_text,
@@ -1011,7 +1011,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from supabase_client import get_supabase
-from support_db_core import build_or_eq_filter
+from support_db_core import build_or_eq_filter, _execute_supabase
 from support_db_time_utils import (
     now_iso,
     clean_text,
@@ -1191,18 +1191,20 @@ def list_departments(org_id: str, branch_id: str, *, include_inactive: bool = Fa
     """branch_id is now always a real branch — no more "all" aggregate and
     no more org-wide (branch_id IS NULL) departments. A department belongs
     to exactly one branch, so a newly added branch starts with none."""
-    sb = get_supabase()
-    query = (
-        sb.table("departments")
-        .select("*")
-        .eq("org_id", str(org_id))
-        .eq("branch_id", str(branch_id))
-    )
-    if not include_inactive:
-        query = query.eq("status", "active")
+    def build():
+        query = (
+            get_supabase()
+            .table("departments")
+            .select("*")
+            .eq("org_id", str(org_id))
+            .eq("branch_id", str(branch_id))
+        )
+        if not include_inactive:
+            query = query.eq("status", "active")
+        return query.order("name")
 
     try:
-        result = query.order("name").execute()
+        result = _execute_supabase("list_departments", build)
     except Exception as exc:
         if is_missing_table_or_column(exc, "departments"):
             return []
@@ -1322,17 +1324,20 @@ def delete_department(org_id: str, department_id: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────
 
 def list_classes(org_id: str, branch_id: str, *, include_inactive: bool = False) -> list[dict]:
-    sb = get_supabase()
-    query = (
-        sb.table("classes")
-        .select("*")
-        .eq("org_id", str(org_id))
-        .eq("branch_id", str(branch_id))
-    )
-    if not include_inactive:
-        query = query.eq("status", "active")
+    def build():
+        query = (
+            get_supabase()
+            .table("classes")
+            .select("*")
+            .eq("org_id", str(org_id))
+            .eq("branch_id", str(branch_id))
+        )
+        if not include_inactive:
+            query = query.eq("status", "active")
+        return query.order("name")
+
     try:
-        result = query.order("name").execute()
+        result = _execute_supabase("list_classes", build)
     except Exception as exc:
         if is_missing_table_or_column(exc, "classes"):
             return []
@@ -1419,26 +1424,30 @@ def delete_class(org_id: str, class_id: str) -> bool:
 
 
 def list_sections(org_id: str, class_id: str, *, include_inactive: bool = False) -> list[dict]:
-    sb = get_supabase()
-    klass = (
-        sb.table("classes")
+    klass = _execute_supabase("list_sections.class", lambda: (
+        get_supabase()
+        .table("classes")
         .select("id,org_id")
         .eq("id", str(class_id))
         .eq("org_id", str(org_id))
         .limit(1)
-        .execute()
-    )
+    ))
     if not klass.data:
         raise ValueError(f"Class {class_id!r} not found for this organization")
-    query = (
-        sb.table("sections")
-        .select("*")
-        .eq("org_id", str(org_id))
-        .eq("class_id", str(class_id))
-    )
-    if not include_inactive:
-        query = query.eq("status", "active")
-    return query.order("name").execute().data or []
+
+    def build():
+        query = (
+            get_supabase()
+            .table("sections")
+            .select("*")
+            .eq("org_id", str(org_id))
+            .eq("class_id", str(class_id))
+        )
+        if not include_inactive:
+            query = query.eq("status", "active")
+        return query.order("name")
+
+    return _execute_supabase("list_sections", build).data or []
 
 
 def create_section(org_id: str, class_id: str, payload: dict) -> dict:
@@ -1933,6 +1942,42 @@ def list_capture_settings(org_id: str, branch_id: str | None = None) -> list[dic
     return attach_branch_names(org_id, rows) if aggregate else rows
 
 
+def list_attendance_workflows(org_id: str, branch_id: str) -> list[dict]:
+    """Support-only. One entry per people_type that has attendance enabled
+    on this branch, each with its attendance_workflow — so the workflow
+    selector never depends on an attendance_capture_settings row existing.
+
+    Source of truth for "attendance enabled": the branch's own 'attendance'
+    module people types (branch_module_people_types); only when the branch
+    has no module config at all does it fall back to the org-wide
+    attendance_people_types (same fallback rule the client dashboard uses).
+    People types that already have a row are always kept. A missing/NULL
+    workflow reads as 'scenario_based', the same default get_node_config
+    applies for the Local Node.
+    """
+    # Lazy imports: same circular-import avoidance this codebase already
+    # uses for cross-module lookups.
+    from support_db_client_users import list_branch_module_people_types
+    from support_db_organizations import get_organization
+
+    branch_modules = list_branch_module_people_types(org_id, branch_id)
+    configured = (
+        branch_modules.get("attendance", [])
+        if branch_modules
+        else get_organization(str(org_id)).get("attendance_people_types") or []
+    )
+    saved = {
+        row["people_type"]: row.get("attendance_workflow")
+        for row in list_capture_settings(org_id, branch_id)
+        if row.get("people_type")
+    }
+    people_types = dict.fromkeys([normalize_people_type(item) for item in configured] + list(saved))
+    return [
+        {"people_type": people_type, "attendance_workflow": saved.get(people_type) or "scenario_based"}
+        for people_type in people_types
+    ]
+
+
 def _parse_sync_delay_minutes(value: Any) -> int:
     if value is None:
         return 0
@@ -1965,8 +2010,8 @@ def upsert_capture_settings(org_id: str, branch_id: str, people_type: str, paylo
     normalized = normalize_people_type(people_type)
 
     mode = clean_text(payload.get("mode")) or "shift"
-    if mode not in ("shift", "simple"):
-        raise ValueError("mode must be 'shift' or 'simple'")
+    if mode != "shift":
+        raise ValueError("mode must be 'shift' — every person is timed by a shift")
 
     capture_check_out = bool(payload.get("capture_check_out", False))
 
@@ -2084,6 +2129,11 @@ def set_branch_default_shift(
     get_branch_owned_by_org(org_id, branch_key)
     normalized = normalize_people_type(people_type)
 
+    if not shift_id:
+        raise ValueError(
+            "A branch default shift is required — every person must resolve to a shift"
+        )
+
     existing = get_capture_settings(org_id, branch_key, normalized)
     if existing and existing.get("mode") == "simple":
         raise ValueError(
@@ -2138,6 +2188,49 @@ def set_branch_default_shift(
         raise
     if not result.data:
         raise RuntimeError("Failed to set branch default shift")
+    return result.data[0]
+
+def set_attendance_workflow(org_id: str, branch_id: str, people_type: str, workflow: str) -> dict:
+    """Support-only. Sets attendance_capture_settings.attendance_workflow
+    for one branch+people_type — see local_node.attendance_marking_scenario
+    vs local_node.attendance_marking_simple for what each value drives on
+    the node. Never called from the client-facing capture-settings route
+    (client_attendance_settings_routes.py) — that route's payload handling
+    builds its row dict field-by-field and never includes this key, which
+    is what keeps this support-only by construction, not just by convention.
+    """
+    if workflow not in ("scenario_based", "simple"):
+        raise ValueError(f"Invalid attendance_workflow: {workflow!r}")
+
+    branch_key = require_specific_branch(branch_id, "Setting attendance workflow")
+    sb = get_supabase()
+    get_branch_owned_by_org(org_id, branch_key)
+    normalized = normalize_people_type(people_type)
+
+    try:
+        result = (
+            sb.table("attendance_capture_settings")
+            .upsert(
+                {
+                    "org_id": str(org_id),
+                    "branch_id": branch_key,
+                    "people_type": normalized,
+                    "attendance_workflow": workflow,
+                    "updated_at": now_iso(),
+                },
+                on_conflict="branch_id,people_type",
+            )
+            .execute()
+        )
+    except Exception as exc:
+        if is_missing_table_or_column(exc, "attendance_capture_settings"):
+            raise RuntimeError(
+                "attendance_capture_settings is missing the attendance_workflow "
+                "column — run the pending migration (Step 1a)."
+            ) from exc
+        raise
+    if not result.data:
+        raise RuntimeError("Failed to set attendance workflow")
     return result.data[0]
 
 

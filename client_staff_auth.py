@@ -153,6 +153,45 @@ def _org_access_blocked_response():
     }), 403
 
 
+def _mobile_scope_blocked_response():
+    """Return a 403 tuple if this person's family (student/staff) is no
+    longer entitled to Mobile App access.
+
+    Same reasoning as _org_access_blocked_response just above: mobile
+    tokens live 30 days, so without a per-request re-check here, Support
+    revoking Organization.enabled_mobile_people_types for this person's
+    family would not take effect until the token naturally expired — up to
+    a month later. get_organization() is cache-backed, so this adds no
+    real per-request DB cost. Function-local import for the same
+    circular-import reason as _org_access_blocked_response. Fails open on
+    a lookup error, same as that function, so a transient DB issue
+    doesn't lock out every mobile session at once.
+    """
+    from support_db import get_organization, people_type_mobile_scope_key
+
+    org_id = (g.client_staff or {}).get('org_id')
+    if not org_id:
+        return None
+
+    try:
+        org = get_organization(str(org_id))
+    except Exception:
+        logger.exception('Mobile entitlement lookup failed for org_id=%s', org_id)
+        return None
+
+    enabled_families = set((org or {}).get('enabled_mobile_people_types') or [])
+    scope_key = people_type_mobile_scope_key(g.client_staff.get('people_type'))
+
+    if scope_key in enabled_families:
+        return None
+
+    return jsonify({
+        'success': False,
+        'error': 'Mobile App access is not enabled for your account. Contact your administrator.',
+        'code': 'MOBILE_ACCESS_REVOKED',
+    }), 403
+
+
 # ─── Auth decorator ───────────────────────────────────────────────────────────
 
 def require_client_staff_auth(f):
@@ -206,6 +245,10 @@ def require_client_staff_auth(f):
         }
 
         blocked = _org_access_blocked_response()
+        if blocked is not None:
+            return blocked
+
+        blocked = _mobile_scope_blocked_response()
         if blocked is not None:
             return blocked
 

@@ -125,10 +125,15 @@ function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
   const failed = event.status.toLowerCase() === "failed";
   const status = event.status.toLowerCase();
   const pct = Math.round((Number(event.confidence) || 0) * 100);
-  const time = new Date(event.marked_at).toLocaleTimeString("en-US", {
+  const eventDate = new Date(event.marked_at);
+  const time = eventDate.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+  });
+  const date = eventDate.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
   });
   const legNote = noteForLeg(event.notes, status, time);
 
@@ -163,10 +168,9 @@ function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
           <div style={styles.cardInfo}>
             <div style={styles.cardName}>{event.name}</div>
             <div style={styles.cardMeta}>
-              {time}
-              {event.camera_name || event.camera_id
-                ? ` · ${event.camera_name || event.camera_id}`
-                : ""}
+              {date} · {time}
+              {event.staff_id ? ` · ${event.staff_id}` : ""}
+              {event.camera_name ? ` · ${event.camera_name}` : ""}
             </div>
           </div>
         </div>

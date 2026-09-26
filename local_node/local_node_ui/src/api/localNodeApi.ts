@@ -30,6 +30,7 @@ export interface NodeStatusResponse {
   branch_id?: string | null;
   attendance_mode?: "cloud" | "local" | string | null;
   hostname?: string | null;
+  attendance_workflows?: Record<string, string> | null;
   runtime?: NodeRuntimeStatus;
   held_attendance_count?: number;
 }

@@ -296,6 +296,7 @@ class AttendanceSyncWorker:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
+                local_db.promote_expired_checkout_holds(str(load_config().get("branch_id") or ""))
                 self.run_once()
             except Exception:
                 pass

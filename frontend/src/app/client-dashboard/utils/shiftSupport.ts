@@ -38,13 +38,15 @@ export function readShiftEnabledPeopleTypes(
   return null;
 }
 
-/** `fallback` applies only when shift enablement was never configured. */
+/**
+ * Every person is timed by a shift (personal shift, else the branch
+ * default), so every people type supports shifts. The saved
+ * Settings -> Shift Scheduling list no longer switches this off.
+ */
 export function resolveSupportsShift(
-  enabledPeopleTypes: string[] | null | undefined,
-  peopleType: string,
-  fallback: boolean,
+  _enabledPeopleTypes: string[] | null | undefined,
+  _peopleType: string,
+  _fallback: boolean,
 ): boolean {
-  return enabledPeopleTypes == null
-    ? fallback
-    : enabledPeopleTypes.includes(toKey(peopleType));
+  return true;
 }

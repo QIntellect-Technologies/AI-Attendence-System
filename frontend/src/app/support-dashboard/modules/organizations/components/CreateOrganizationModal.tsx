@@ -71,6 +71,7 @@ type FormState = {
   business_type: BusinessType;
   attendance_people_types: PeopleType[];
   enabled_staff_types: StaffWorkType[];
+  enabled_mobile_people_types: PeopleType[];
   people_kind: PeopleKind;
   attendance_mode: AttendanceMode;
   node_offline_threshold_seconds: number;
@@ -326,6 +327,7 @@ function defaultFormState(): FormState {
     business_type: "company",
     attendance_people_types: ["staff"],
     enabled_staff_types: ["office", "field"],
+    enabled_mobile_people_types: [],
     people_kind: "staff",
     attendance_mode: "cloud",
     node_offline_threshold_seconds: 10,
@@ -567,6 +569,13 @@ export const CreateOrganizationModal: React.FC<
             : undefined,
         max_branches: form.max_branches,
       });
+
+      if (form.enabled_mobile_people_types.length > 0) {
+        await organizationsApi.updateMobileScope({
+          id: org.id,
+          enabled_mobile_people_types: form.enabled_mobile_people_types,
+        });
+      }
 
       await modulesApi.setAll(org.id, form.selected_modules);
 
@@ -840,27 +849,52 @@ export const CreateOrganizationModal: React.FC<
 
               <div style={{ gridColumn: "1 / -1" }}>
                 <Field
-                  label="Staff Type Scope"
-                  helper="Which staff work types this client is entitled to add in the Staff Directory: Office only, Field only, or both. Commercial/Support-owned — can be changed later from Organization Detail."
+                  label="Mobile App Access"
+                  helper="Which people families this client is entitled to give Mobile App access to: Students only, Staff only, or both. Commercial/Support-owned — can be changed later from Organization Detail."
                 >
                   <AttendanceScopeSelector
-                    availablePeopleTypes={["office", "field"]}
-                    value={form.enabled_staff_types}
-                    onChange={(enabledStaffTypes) =>
+                    availablePeopleTypes={templatePeopleTypes}
+                    value={form.enabled_mobile_people_types}
+                    onChange={(enabledMobilePeopleTypes) =>
                       dispatch({
                         type: "PATCH",
                         patch: {
-                          enabled_staff_types:
-                            enabledStaffTypes as StaffWorkType[],
+                          enabled_mobile_people_types: enabledMobilePeopleTypes,
                         },
                       })
                     }
-                    labels={{ office: "Office Staff", field: "Field Staff" }}
+                    labels={templateLabels}
                     disabled={isSaving}
-                    required
+                    required={false}
                   />
                 </Field>
               </div>
+
+              {form.enabled_mobile_people_types.includes("staff") && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <Field
+                    label="Staff Type Scope"
+                    helper="Which staff work types this client is entitled to add in the Staff Directory: Office only, Field only, or both. Commercial/Support-owned — can be changed later from Organization Detail."
+                  >
+                    <AttendanceScopeSelector
+                      availablePeopleTypes={["office", "field"]}
+                      value={form.enabled_staff_types}
+                      onChange={(enabledStaffTypes) =>
+                        dispatch({
+                          type: "PATCH",
+                          patch: {
+                            enabled_staff_types:
+                              enabledStaffTypes as StaffWorkType[],
+                          },
+                        })
+                      }
+                      labels={{ office: "Office Staff", field: "Field Staff" }}
+                      disabled={isSaving}
+                      required
+                    />
+                  </Field>
+                </div>
+              )}
 
               <Field
                 label="Attendance Mode"

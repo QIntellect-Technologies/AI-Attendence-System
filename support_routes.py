@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g, send_file
 from support_auth import require_support_auth, require_capability, login_internal_user, logout_internal_user
 import support_db as db
+import support_db_attendance_settings as settings_db
 import login_throttle
 from logger_config import get_logger
 from pathlib import Path
@@ -243,6 +244,34 @@ def update_organization_staff_type_scope(org_id):
     return _handle(_run)
 
 
+@support_bp.route("/organizations/<org_id>/mobile-scope", methods=["PATCH", "PUT"])
+@require_capability("orgs:write")
+def update_organization_mobile_scope(org_id):
+    """
+    Support-only endpoint.
+
+    Sets which people families (student/staff) this org is commercially
+    entitled to give Mobile App access to. Client Dashboard must never call
+    this — same contract as the staff-type-scope route above. Unlike
+    staff-type-scope, an empty array is valid (Mobile App fully disabled).
+    """
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        enabled_mobile_people_types = payload.get("enabled_mobile_people_types")
+
+        if not isinstance(enabled_mobile_people_types, list):
+            return _err("enabled_mobile_people_types must be an array", 400)
+
+        org = db.update_organization_mobile_scope(
+            org_id=org_id,
+            enabled_mobile_people_types=enabled_mobile_people_types,
+            updated_by=g.support_user["id"],
+        )
+        return _ok({"organization": org})
+
+    return _handle(_run)
+
+
 @support_bp.route("/organizations/<org_id>/archive", methods=["PATCH"])
 @require_capability("orgs:lifecycle")
 def archive_organization(org_id):
@@ -422,6 +451,48 @@ def set_branch_module_people_types_route(org_id, branch_id):
         payload = request.get_json(silent=True) or {}
         config = db.set_branch_module_people_types(org_id, branch_id, payload)
         return _ok({"module_people_types": config})
+
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/attendance-workflow",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def get_attendance_workflow_route(org_id, branch_id):
+    """
+    Support-only endpoint. Returns every people_type that has attendance
+    enabled on this branch, with its attendance_workflow, in a single call,
+    so the UI can render a selector per people_type without one request each.
+    """
+    def _run():
+        settings = settings_db.list_attendance_workflows(org_id, branch_id)
+        return _ok({"capture_settings": settings})
+
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/people-types/<people_type>/attendance-workflow",
+    methods=["PATCH"],
+)
+@require_capability("branches:write")
+def set_attendance_workflow_route(org_id, branch_id, people_type):
+    """
+    Support-only endpoint.
+
+    Sets whether this branch+people_type's local node marks attendance
+    scenario-based (hold-for-review) or simple (auto-confirm) — see
+    local_node.attendance_marking_scenario / attendance_marking_simple.
+    Client Dashboard must never call this — same contract as mobile-scope
+    and module-people-types above.
+    """
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        workflow = payload.get("attendance_workflow")
+        settings = settings_db.set_attendance_workflow(org_id, branch_id, people_type, workflow)
+        return _ok({"capture_settings": settings})
 
     return _handle(_run)
 

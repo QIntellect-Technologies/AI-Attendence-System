@@ -561,6 +561,9 @@ export async function assignStaffShift(
 
 export interface CaptureSettings {
   mode: "shift" | "simple";
+  default_shift_id?: string | null;
+  default_check_in_grace_override?: number | null;
+  default_check_out_grace_override?: number | null;
   check_in_time?: string | null;
   check_in_grace_minutes?: number;
   capture_check_out?: boolean;
