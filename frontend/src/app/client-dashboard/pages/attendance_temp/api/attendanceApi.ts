@@ -63,6 +63,10 @@ export interface AttendanceTimingFields {
   check_out_status?: AttendanceTimingStatus | string | null;
   checkOutConfidence?: number | null;
   check_out_confidence?: number | null;
+  /** Camera that captured the check-in — resolved to a display name
+   * client-side via OrgConfigContext's cfg.cameras. */
+  cameraId?: string | null;
+  camera_id?: string | null;
   checkOutCameraId?: string | null;
   check_out_camera_id?: string | null;
   /** Operator-facing context set by the local node for a check-in confirmed
@@ -362,6 +366,8 @@ function mapTimingFields(raw: Record<string, unknown>): AttendanceTimingFields {
     "check_out_confidence",
     "checkOutConfidence",
   );
+  const cameraId =
+    (first(raw, "camera_id", "cameraId") as string | undefined) ?? null;
   const checkOutCameraId =
     (first(raw, "check_out_camera_id", "checkOutCameraId") as
       | string
@@ -431,6 +437,8 @@ function mapTimingFields(raw: Record<string, unknown>): AttendanceTimingFields {
       checkOutConfidenceRaw !== undefined
         ? Number(checkOutConfidenceRaw)
         : null,
+    cameraId,
+    camera_id: cameraId,
     checkOutCameraId,
     check_out_camera_id: checkOutCameraId,
     notes,

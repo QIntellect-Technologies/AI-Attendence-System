@@ -240,6 +240,9 @@ interface ApiAttendance {
    *  AttendanceTimingFields for the shared definition/migration note. */
   capture_channel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
   captureChannel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  /** Physical camera id — resolved to a display name against cfg.cameras. */
+  camera_id?: string | number | null;
+  cameraId?: string | number | null;
   branchId?: number;
   branch_id?: number | string;
   staffId?: string | number;
@@ -1089,7 +1092,7 @@ const CAPTURE_CHANNEL_LABELS: Record<
   { label: string; className: string }
 > = {
   local_node: {
-    label: "Local Node",
+    label: "On-Site",
     className: "bg-indigo-50 text-indigo-600 border-indigo-100",
   },
   cloud: {
@@ -1113,6 +1116,21 @@ function captureChannelBadge(
   return (
     CAPTURE_CHANNEL_LABELS[value as keyof typeof CAPTURE_CHANNEL_LABELS] ?? null
   );
+}
+
+/**
+ * Resolves a raw camera_id to its human name via cfg.cameras (already
+ * hydrated org-wide). Falls back to the raw id if not found, rather than
+ * hiding a real value behind "—".
+ */
+function resolveCameraLabel(
+  cameraId: string | number | null | undefined,
+  camerasById: Map<string, string>,
+): string | null {
+  if (cameraId === null || cameraId === undefined || cameraId === "") {
+    return null;
+  }
+  return camerasById.get(String(cameraId)) ?? String(cameraId);
 }
 
 const normalizeAttendanceForView = (
@@ -1162,6 +1180,7 @@ const normalizeAttendanceForView = (
   check_out_status: record.check_out_status ?? record.checkOutStatus ?? null,
   notes: record.notes ?? null,
   capture_channel: record.capture_channel ?? record.captureChannel ?? null,
+  camera_id: record.camera_id ?? record.cameraId ?? null,
   day_status: record.day_status ?? record.dayStatus ?? null,
   dayStatus: record.day_status ?? record.dayStatus ?? null,
   check_out_payroll_decision:
@@ -1465,6 +1484,18 @@ export default function AttendanceView() {
     () => dailyAttendanceColumns.filter((column) => column.key !== "action"),
     [dailyAttendanceColumns],
   );
+
+  // Flattened id → display-name lookup for the Camera column, built once
+  // from cfg.cameras (already hydrated org-wide by OrgConfigContext).
+  const camerasById = useMemo(() => {
+    const map = new Map<string, string>();
+    Object.values(cfg.cameras).forEach((branchCameras) => {
+      branchCameras.forEach((camera) => {
+        map.set(String(camera.id), camera.name);
+      });
+    });
+    return map;
+  }, [cfg.cameras]);
 
   const rangeAttendanceColumns = useMemo(
     () =>
@@ -2032,6 +2063,7 @@ export default function AttendanceView() {
                 "",
               notes: realRecord.notes ?? null,
               captureChannel: realRecord.capture_channel ?? null,
+              cameraId: realRecord.camera_id ?? null,
               dayStatus: realRecord.day_status ?? null,
               // Which column holds the decision depends on BOTH day_status
               // and capture_channel -- only a mobile-sourced 'late' row is
@@ -2062,6 +2094,7 @@ export default function AttendanceView() {
             workDuration: "",
             notes: null,
             captureChannel: null,
+            cameraId: null,
             dayStatus: null,
             payrollDecision: null,
             isPresent: false,
@@ -2769,6 +2802,13 @@ export default function AttendanceView() {
                     <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                       Channel
                     </th>
+                    {/* Same "fixed column" reasoning as Notes above --
+                     * camera_id isn't part of peopleModel.attendanceColumns
+                     * either. Shows the specific camera that recognized
+                     * this person, resolved to a name via camerasById. */}
+                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                      Camera
+                    </th>
                     {/* Action (Edit/Save/Mark Absent) is intentionally last —
                      * see visibleDailyAttendanceColumns above. */}
                     <th className="px-6 py-3 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
@@ -3024,6 +3064,21 @@ export default function AttendanceView() {
                             );
                           })()}
                         </td>
+                        <td className="px-6 py-4 text-center">
+                          {(() => {
+                            const cameraLabel = resolveCameraLabel(
+                              todayRecord?.cameraId,
+                              camerasById,
+                            );
+                            return cameraLabel ? (
+                              <span className="text-sm text-gray-700">
+                                {cameraLabel}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300 text-sm">—</span>
+                            );
+                          })()}
+                        </td>
                         {/* Action (Edit/Save/Mark Absent) is the fixed last
                          * column — see visibleDailyAttendanceColumns above. */}
                         <td className="px-6 py-4 text-center">
@@ -3122,7 +3177,7 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={dailyAttendanceColumns.length + 4}
+                        colSpan={dailyAttendanceColumns.length + 5}
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">

@@ -37,6 +37,7 @@ import { useAuthenticatedImageUrl } from "../hooks/useAuthenticatedImageUrl";
 import { getEnabledModules, MODULE_REGISTRY } from "../config/moduleRegistry";
 import DashboardTabBar from "../components/ui/DashboardTabBar";
 import { getUnreadNotificationCount } from "../pages/Notifications/api/notificationApi";
+import { useDocumentTitle } from "../../../shared/hooks/useDocumentTitle";
 import {
   Sidebar,
   SidebarGroup,
@@ -464,6 +465,9 @@ export default function AdminLayout() {
 
   const navigate = useNavigate();
   const location = useLocation();
+
+  useDocumentTitle("Dashboard");
+
   const {
     cfg,
     activeBranchId,
