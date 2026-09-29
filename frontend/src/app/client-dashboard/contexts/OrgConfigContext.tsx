@@ -1880,6 +1880,8 @@ export interface OrgConfig {
   verticalConfig: Record<string, unknown>;
   terminologyOverrides: Record<string, unknown>;
   orgName: string;
+  /** Organization contact email (organizations.contact_email). */
+  orgEmail: string;
   tagline: string;
   address: string;
   size: string;
@@ -2007,7 +2009,7 @@ export interface OrgContextValue {
 
   masterData: OrgMasterData;
   updateCfg: (patch: Partial<OrgConfig>) => void;
-  refreshOrgConfig: () => Promise<void>;
+  refreshOrgConfig: (opts?: { silent?: boolean }) => Promise<void>;
   isRefreshingOrgConfig: boolean;
 
   activeBranchId: number | null;
@@ -2057,6 +2059,7 @@ const DEFAULT_ORG_CONFIG: OrgConfig = {
   verticalConfig: {},
   terminologyOverrides: {},
   orgName: "",
+  orgEmail: "",
   tagline: "",
   address: "",
   size: "",
@@ -2751,6 +2754,7 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
         ? raw.terminology_overrides
         : {},
     orgName: typeof raw.orgName === "string" ? raw.orgName : "",
+    orgEmail: typeof raw.orgEmail === "string" ? raw.orgEmail : "",
     tagline: typeof raw.tagline === "string" ? raw.tagline : "",
     address: typeof raw.address === "string" ? raw.address : "",
     size: typeof raw.size === "string" ? raw.size : "",

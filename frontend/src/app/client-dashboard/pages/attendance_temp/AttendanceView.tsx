@@ -62,7 +62,10 @@ import {
   readColumnValue,
   type TemplateColumn,
 } from "../../utils/templateColumns";
-import { resolveModulePeopleTypes } from "../../utils/templateRendering";
+import {
+  isStudentPeopleType,
+  resolveModulePeopleTypes,
+} from "../../utils/templateRendering";
 
 import {
   DAY_STATUS_LABELS,
@@ -1485,6 +1488,19 @@ export default function AttendanceView() {
     [dailyAttendanceColumns],
   );
 
+  // Payroll decisions only exist when the org purchased the Payroll module
+  // AND for payroll-eligible people (staff, workers, ...) -- never students.
+  // The whole column is dropped when the module is missing or the scope is
+  // student-only; in a mixed scope ("all") it stays for the non-student rows
+  // and student rows render an empty cell (see isPayrollApplicable below).
+  // Backend enforces the same rules.
+  const showPayrollDecisionColumn =
+    isModuleEnabled(cfg.modules, "payroll") && !peopleModel.isStudentScope;
+  const isPayrollApplicable = (member: unknown): boolean =>
+    !isStudentPeopleType(
+      (member as any)?.peopleType ?? (member as any)?.people_type,
+    );
+
   // Flattened id → display-name lookup for the Camera column, built once
   // from cfg.cameras (already hydrated org-wide by OrgConfigContext).
   const camerasById = useMemo(() => {
@@ -2792,9 +2808,11 @@ export default function AttendanceView() {
                      * on an already-classified day, distinct from Day Status
                      * itself. See derivePayrollDecisionBadge; currently only
                      * ever populated for local-node rows. */}
-                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                      Decision
-                    </th>
+                    {showPayrollDecisionColumn && (
+                      <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                        Decision
+                      </th>
+                    )}
                     {/* Same "fixed column" reasoning as Notes just above --
                      * capture_channel isn't part of peopleModel.attendanceColumns
                      * either. Shows which surface (local node / cloud / mobile
@@ -3031,23 +3049,27 @@ export default function AttendanceView() {
                             );
                           })()}
                         </td>
-                        <td className="px-6 py-4 text-center">
-                          {(() => {
-                            const badge = derivePayrollDecisionBadge({
-                              dayStatus: todayRecord?.dayStatus,
-                              payrollDecision: todayRecord?.payrollDecision,
-                            });
-                            return badge ? (
-                              <span
-                                className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
-                              >
-                                {badge.label}
-                              </span>
-                            ) : (
-                              <span className="text-gray-300 text-sm">—</span>
-                            );
-                          })()}
-                        </td>
+                        {showPayrollDecisionColumn && (
+                          <td className="px-6 py-4 text-center">
+                            {(() => {
+                              const badge = isPayrollApplicable(member)
+                                ? derivePayrollDecisionBadge({
+                                    dayStatus: todayRecord?.dayStatus,
+                                    payrollDecision: todayRecord?.payrollDecision,
+                                  })
+                                : null;
+                              return badge ? (
+                                <span
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
+                                >
+                                  {badge.label}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              );
+                            })()}
+                          </td>
+                        )}
                         <td className="px-6 py-4 text-center">
                           {(() => {
                             const badge = captureChannelBadge(
@@ -3177,7 +3199,7 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={dailyAttendanceColumns.length + 5}
+                        colSpan={dailyAttendanceColumns.length + (showPayrollDecisionColumn ? 5 : 4)}
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">

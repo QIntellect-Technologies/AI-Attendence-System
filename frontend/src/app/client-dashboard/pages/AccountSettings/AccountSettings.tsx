@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Building2, UserCircle2 } from "lucide-react";
+import { Avatar } from "../../components/ui/Avatar";
+import { OrgLogoCard } from "../../components/ui/OrgLogoCard";
+import { useOrg } from "../../contexts/OrgConfigContext";
 import { useAuth } from "../../contexts/useAuth";
 import { ChangePasswordCard } from "../../components/ui/ChangePasswordCard";
 import { C, ConfigCard, ReadOnlyLine } from "../Settings/Settings";
@@ -104,13 +107,51 @@ function extractOrgProfileSummary(
   };
 }
 
+type AuthRecord = Record<string, unknown> | null | undefined;
+
+/** First non-empty string among the given keys (payloads mix snake/camel case). */
+function pickText(record: AuthRecord, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+/** Rows that have no value for this account type (e.g. the org owner has no
+ * designation) are dropped instead of rendering a column of dashes. */
+function buildProfileRows(user: AuthRecord) {
+  return [
+    { label: "Name", value: pickText(user, "name") },
+    { label: "Email", value: pickText(user, "email") },
+    {
+      label: pickText(user, "personCodeLabel", "person_code_label") || "Person Code",
+      value: pickText(user, "personCode", "person_code", "employeeId", "employee_id"),
+    },
+    { label: "Designation", value: pickText(user, "designationName", "designation_name", "designation") },
+    { label: "Department", value: pickText(user, "department", "department_name") },
+    { label: "Branch", value: pickText(user, "branchName", "branch_name") },
+    { label: "Phone", value: pickText(user, "phone") },
+    { label: "Role", value: pickText(user, "role").toUpperCase() },
+  ].filter((row) => row.value);
+}
+
 export default function AccountSettings() {
   const { user } = useAuth();
+  const { cfg } = useOrg();
   // Same `|| ""` widening pattern AdminLayout.tsx already uses for these
   // pass-through (index-signature) fields — kept consistent rather than
   // introducing a different cast here.
   const displayName = (user?.name as string) || (user?.email as string) || "";
   const organizationId = user?.organization_id || user?.organizationId;
+
+  const profileRows = buildProfileRows(user as AuthRecord);
+
+  // Company branding is an admin action; everyone else's photo is managed in
+  // Staff Management, so nothing on this page edits a person's own image.
+  const canManageOrgLogo = pickText(user as AuthRecord, "role").toLowerCase() === "admin";
+
+  const photo = pickText(user as AuthRecord, "profileImageUrl", "avatarUrl", "photo_url");
 
   const [orgProfile, setOrgProfile] = useState<OrgProfileSummary | null>(
     null,
@@ -188,11 +229,39 @@ export default function AccountSettings() {
         </div>
 
         <div style={{ display: "grid", gap: 18 }}>
+          <ConfigCard icon={<UserCircle2 size={18} />} title="My Profile">
+            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
+              <Avatar src={photo} label={displayName || "User"} size={72} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 900, color: C.primary }}>
+                  {displayName || "—"}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {profileRows.map((row) => (
+                <ReadOnlyLine key={row.label} label={row.label} value={row.value} />
+              ))}
+            </div>
+          </ConfigCard>
           {orgProfile && (
             <ConfigCard
               icon={<Building2 size={18} />}
               title="Organization Profile"
             >
+              <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
+                {canManageOrgLogo ? (
+                  <OrgLogoCard />
+                ) : (
+                  <Avatar
+                    src={cfg.logo}
+                    label={orgProfile.name}
+                    size={44}
+                    shape="rounded"
+                    fit="contain"
+                  />
+                )}
+              </div>
               <div
                 style={{
                   display: "grid",

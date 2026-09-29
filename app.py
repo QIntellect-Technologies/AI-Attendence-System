@@ -2768,6 +2768,32 @@ def api_client_onboarding_complete():
         )
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
+@app.route('/api/client/organization/logo', methods=['PUT', 'DELETE'])
+@require_client_dashboard_admin
+def api_client_organization_logo():
+    """Set (PUT {logo: <data URL>, file_name}) or remove (DELETE) the caller's
+    organization logo. Admin-only, and org_id comes from the verified token,
+    never the request. Dashboard staff without the admin tier cannot change
+    company branding."""
+    org_id = str(g.dashboard_user.get('org_id') or '').strip()
+    if not org_id:
+        return jsonify({'success': False, 'message': 'organization_id is required.'}), 400
+
+    data = request.get_json(silent=True) or {}
+    try:
+        logo = support_cp_db.save_organization_logo(
+            org_id,
+            None if request.method == 'DELETE' else data.get('logo'),
+            file_name=str(data.get('file_name') or '')[:255],
+        )
+        return jsonify({'success': True, 'logo': logo}), 200
+    except ValueError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'Organization logo update failed for org_id={org_id}')
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/org/retention-policy', methods=['GET'])
 @require_client_dashboard_auth
 def api_get_retention_policy():

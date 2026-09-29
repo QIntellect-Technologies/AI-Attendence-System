@@ -28,7 +28,7 @@
  */
 
 import React, { Suspense } from "react";
-import { Navigate, type RouteObject } from "react-router-dom";
+import { Navigate, createBrowserRouter, type RouteObject } from "react-router-dom";
 import SupportLayout from "./layouts/SupportLayout";
 import { SupportAuthProvider } from "./contexts/SupportAuthContext";
 import { SupportProtectedRoute } from "./components/SupportProtectedRoute";
@@ -195,3 +195,15 @@ export const supportRoutes: RouteObject[] = [
     ],
   },
 ];
+
+export const supportRouter = createBrowserRouter([
+  ...supportRoutes,
+  {
+    path: "/",
+    element: <Navigate to="/support" replace />,
+  },
+  {
+    path: "*",
+    element: <Navigate to="/support" replace />,
+  },
+]);

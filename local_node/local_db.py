@@ -122,6 +122,8 @@ def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
         # Cleared by mark_held_check_ins_short_leave / mark_held_check_ins_half_day.
         "check_in_hold_reason": "TEXT",
         "branch_id": "TEXT NOT NULL DEFAULT ''",
+        "check_out_last_late_seen_at": "TEXT",
+        "check_out_late_synced_at": "TEXT",
         "check_out_resolution": "TEXT",
         "check_in_resolution": "TEXT",
         # NULL until an operator resolves a held checkout via one of the
@@ -1406,15 +1408,18 @@ def resolve_local_person_code(branch_id: str, people_type: str, backend_person_c
     return backend_person_code
 
 
-def promote_expired_checkout_holds(branch_id: str) -> int:
-    """Auto-confirm every 'checkout_pending_window' row on this branch whose
-    checkout window has now closed with nothing better ever arriving. A
-    later in-window or late sighting would already have overwritten this
-    row to check_out_confirmed=1/sync_status='pending' via
-    attendance_marking_simple's other branches — so if a row is still
-    sitting here, that never happened. Called once per
-    AttendanceSyncWorker cycle (see attendance_sync_worker.py), so this
-    runs on the same cadence as the regular sync loop."""
+_LATE_CHECKOUT_SETTLE_SECONDS = 90
+
+
+def settle_stale_checkout_notes(branch_id: str) -> int:
+    """Handles two checkout-leg situations no single detection event can
+    resolve on its own. (1) An early sighting never followed by another
+    before the window closed — forces sync once the window is over,
+    without ever setting check_out_confirmed. (2) Late sighting(s) —
+    forces sync once check_out_last_late_seen_at has gone quiet for
+    _LATE_CHECKOUT_SETTLE_SECONDS, using check_out_late_synced_at to avoid
+    re-pushing an unchanged note every future cycle. Called once per
+    AttendanceSyncWorker cycle."""
     cfg = shift_gate.load_config()
     now = datetime.now(timezone.utc)
     promoted: list[str] = []
@@ -1423,29 +1428,48 @@ def promote_expired_checkout_holds(branch_id: str) -> int:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute(
-                "SELECT * FROM attendance_buffer WHERE branch_id = ? AND sync_status = 'checkout_pending_window'",
+                "SELECT * FROM attendance_buffer WHERE branch_id = ? "
+                "AND check_out_confirmed = 0 AND check_out_hold_reason = 'early'",
                 (branch_id,),
             )
-            rows = [dict(row) for row in cur.fetchall()]
-            for row in rows:
-                still_open = shift_gate.classify_check_out_timing(
+            for row in [dict(r) for r in cur.fetchall()]:
+                if shift_gate.classify_check_out_timing(
                     row["people_type"], now, person_code=row["person_code"], config=cfg,
-                ) != "late"
-                if still_open:
+                ) != "late":
                     continue
                 cur.execute(
-                    """
-                    UPDATE attendance_buffer
-                    SET check_out_confirmed = 1, check_out_hold_reason = NULL, sync_status = 'pending'
-                    WHERE id = ?
-                    """,
+                    "UPDATE attendance_buffer SET sync_status = 'pending', sync_error = NULL WHERE id = ?",
                     (row["id"],),
+                )
+                promoted.append(row["local_event_id"])
+
+            cur.execute(
+                "SELECT * FROM attendance_buffer WHERE branch_id = ? "
+                "AND check_out_last_late_seen_at IS NOT NULL",
+                (branch_id,),
+            )
+            for row in [dict(r) for r in cur.fetchall()]:
+                last_seen_raw = row["check_out_last_late_seen_at"]
+                if last_seen_raw == row.get("check_out_late_synced_at"):
+                    continue
+                try:
+                    last_seen = datetime.fromisoformat(str(last_seen_raw).replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+                if (now - last_seen).total_seconds() < _LATE_CHECKOUT_SETTLE_SECONDS:
+                    continue
+                cur.execute(
+                    "UPDATE attendance_buffer SET sync_status = 'pending', sync_error = NULL, "
+                    "check_out_late_synced_at = ? WHERE id = ?",
+                    (last_seen_raw, row["id"]),
                 )
                 promoted.append(row["local_event_id"])
             conn.commit()
     if promoted:
         logger.info(
-            "attendance: auto-confirmed %d checkout(s) whose window closed with no later sighting: %s",
+            "attendance: settled %d checkout note(s) for final sync: %s",
             len(promoted), ", ".join(promoted),
         )
     return len(promoted)

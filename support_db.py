@@ -59,6 +59,7 @@ from support_db_client_users import (
     list_branch_module_people_types,
     list_org_branch_module_people_types,
     save_client_onboarding_config,
+    save_organization_logo,
     set_branch_module_people_types,
     update_client_user_profile,
     validate_strong_password,

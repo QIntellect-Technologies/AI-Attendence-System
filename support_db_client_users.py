@@ -1972,6 +1972,7 @@ import secrets
 import string
 import hashlib
 import uuid
+import base64
 import os
 import re
 from urllib.parse import urlparse
@@ -3634,6 +3635,7 @@ def _extract_company_profile(config: dict, org: dict) -> dict:
 
     return {
         'orgName': org.get('name') or config.get('orgName') or '',
+        'orgEmail': org.get('contact_email') or '',
         'bizType': (
             org.get('business_type')
             or org.get('org_type')
@@ -4196,3 +4198,103 @@ def change_own_dashboard_password(account_type: str, user_id: str, new_password:
         return update_client_user_profile(str(user_id), {'new_password': new_password})
  
     raise ValueError('Unsupported account type for password change')
+
+
+_LOGO_MAX_BYTES = 300 * 1024  # keeps client_onboarding_configs.company_profile light; mirrors utils/imageToDataUrl.ts's client-side cap
+_LOGO_DATA_URL_RE = re.compile(r'^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$', re.DOTALL)
+_LOGO_MIME_SNIFFERS: dict[str, Callable[[bytes], bool]] = {
+    # Declared MIME is caller-controlled -- these magic-byte checks are what's
+    # actually trusted. SVG is rejected on purpose: the logo also gets baked
+    # into generated PDF/Excel exports, which don't render SVG.
+    'image/png': lambda b: b.startswith(b'\x89PNG\r\n\x1a\n'),
+    'image/jpeg': lambda b: b.startswith(b'\xff\xd8\xff'),
+    'image/webp': lambda b: b.startswith(b'RIFF') and b[8:12] == b'WEBP',
+}
+
+def _validate_logo_data_url(raw: str) -> str:
+    """Validate a company-logo data URL and return it unchanged if it passes.
+
+    Mirrors utils/imageToDataUrl.ts's client-side downscaling, but the
+    server never trusts the client -- a caller could hit
+    PUT /api/client/organization/logo directly with any payload, so the
+    declared MIME type, the 300 KB cap, and the actual file bytes are all
+    re-checked here rather than assumed from what the frontend sent.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError('logo is required')
+
+    match = _LOGO_DATA_URL_RE.match(raw.strip())
+    if not match:
+        raise ValueError('logo must be a base64 data URL')
+
+    mime, encoded = match.group(1).lower(), match.group(2)
+    sniffer = _LOGO_MIME_SNIFFERS.get(mime)
+    if sniffer is None:
+        raise ValueError('Logo must be a PNG, JPEG or WebP image')
+
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise ValueError('logo is not valid base64') from exc
+
+    if not decoded:
+        raise ValueError('logo is empty')
+    if len(decoded) > _LOGO_MAX_BYTES:
+        raise ValueError('Logo must be smaller than 300KB')
+    if not sniffer(decoded):
+        raise ValueError('File contents do not match the declared image type')
+
+    return f'data:{mime};base64,{encoded}'
+
+def save_organization_logo(
+    org_id: str,
+    logo: Optional[str],
+    file_name: str = '',
+) -> Optional[str]:
+    """Set (logo = data URL) or remove (logo = None) an organization's
+    company logo.
+
+    Unlike save_client_onboarding_config, this touches only
+    company_profile.{logo,logoDataUrl,logoFileName} on the existing
+    client_onboarding_configs row via a plain UPDATE. It never upserts the
+    full onboarding payload, so departments/roles/cameras/network/shifts
+    for the org are left exactly as they were -- a logo change should
+    never risk reverting unrelated Settings state.
+    """
+    if not str(org_id or '').strip():
+        raise ValueError('org_id is required')
+
+    existing = get_client_onboarding_config(str(org_id))
+    if not existing:
+        # No row yet means the org hasn't finished onboarding. Upserting one
+        # here just to hold a logo would create a config row missing every
+        # other section save_client_onboarding_config normally fills in,
+        # which get_client_bootstrap and the local-node camera sync don't
+        # expect -- so this fails clearly instead of writing a partial row.
+        raise ValueError('Complete dashboard setup before changing the company logo.')
+
+    company_profile = existing.get('company_profile')
+    company_profile = dict(company_profile) if isinstance(company_profile, dict) else {}
+
+    if logo is None:
+        company_profile.pop('logo', None)
+        company_profile.pop('logoDataUrl', None)
+        company_profile.pop('logoFileName', None)
+        new_logo: Optional[str] = None
+    else:
+        new_logo = _validate_logo_data_url(logo)
+        company_profile['logo'] = new_logo
+        company_profile['logoDataUrl'] = new_logo
+        company_profile['logoFileName'] = str(file_name or '')[:255]
+
+    updated = _execute_supabase(
+        'save_organization_logo',
+        lambda: get_supabase().table('client_onboarding_configs').update({
+            'company_profile': company_profile,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('org_id', str(org_id)),
+    )
+    if not updated.data:
+        raise RuntimeError('Failed to update organization logo')
+
+    return new_logo

@@ -1,5 +1,8 @@
 {
   "dependencies": {
     "sweetalert2": "^11.26.25"
+  },
+  "devDependencies": {
+    "supabase": "^2.118.0"
   }
 }

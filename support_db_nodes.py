@@ -1124,7 +1124,7 @@ def push_node_attendance(node_api_key: str, payload: dict) -> dict:
     """
     from support_db_attendance_dashboard import _dashboard_day_window_utc
     from support_db_internal import _support_text
-    from support_db_staff import _normalize_people_type
+    from support_db_staff import _normalize_people_type, people_type_needs_payroll_decision
     sb = get_supabase()
     node = get_node_by_api_key(node_api_key)
     _ensure_org_client_access(str(node['org_id']), 'Local node attendance sync')
@@ -1363,6 +1363,10 @@ def push_node_attendance(node_api_key: str, payload: dict) -> dict:
             if node_day_status not in _CLASSIFIED_DAY_STATUSES or not attendance_id:
                 return
             if node_day_status == previous_day_status:
+                return
+            # Students have no payroll: no decision notification and no
+            # linked leave/overtime adjustment either.
+            if not people_type_needs_payroll_decision(people_type):
                 return
             try:
                 _attendance_exceptions.notify_payroll_decision_pending(

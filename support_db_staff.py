@@ -155,6 +155,14 @@ def people_type_mobile_scope_key(people_type: object) -> str:
     bucket a person's people_type falls into. See _MOBILE_SCOPE_STUDENT_TYPES."""
     return 'student' if _normalize_people_type(people_type) in _MOBILE_SCOPE_STUDENT_TYPES else 'staff'
 
+def people_type_needs_payroll_decision(people_type: object) -> bool:
+    """False for the student family: students have no payroll, so they never
+    get a payroll include/exclude decision (nor the pending notification,
+    linked leave/overtime adjustment or [Payroll] note that come with one).
+    Single source of truth -- reuses _MOBILE_SCOPE_STUDENT_TYPES so the
+    student definition can't drift from the one used for mobile scoping."""
+    return _normalize_people_type(people_type) not in _MOBILE_SCOPE_STUDENT_TYPES
+
 def _duplicate_client_staff_message(exc: Exception) -> str | None:
     """Turn a raw client_staff unique-constraint violation (Postgres 23505 --
     e.g. client_staff_email_unique_idx on (org_id, lower(email))) into a

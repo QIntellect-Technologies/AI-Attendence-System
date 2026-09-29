@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 
 import { useOrg } from "../../contexts/OrgConfigContext";
+import { isModuleEnabled } from "../../utils/moduleAccess";
 import { useBranchSelector } from "../../hooks/useBranchSelector";
 import { useDateFilter } from "../../hooks/useDateFilter";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
@@ -446,6 +447,9 @@ export default function LeaveManagement() {
   const { branchId: branchIdParam } = useParams<{ branchId?: string }>();
   const [searchParams] = useSearchParams();
   const { cfg, organizationName } = useOrg();
+  // Paid/Unpaid/Excluded + the include/exclude decision are payroll data:
+  // only meaningful when the org purchased the Payroll module.
+  const showPayrollTreatment = isModuleEnabled(cfg.modules, "payroll");
 
   const highlightedLeaveId = searchParams.get("highlight");
   const isGlobal = !branchIdParam;
@@ -667,6 +671,7 @@ export default function LeaveManagement() {
             ?.name ?? "Branch")
       : (branchName ?? "Branch"),
     filterMetadata: leaveFilters.exportMetadata,
+    includePayrollTreatment: showPayrollTreatment,
   });
 
   // ── CSV export (Leave History tab) ──────────────────────────────────────────
@@ -1042,11 +1047,15 @@ export default function LeaveManagement() {
                         align: "left",
                       },
                       { key: "type", label: "Leave Type", align: "left" },
-                      {
-                        key: "payrollTreatment",
-                        label: "Payroll Treatment",
-                        align: "center",
-                      },
+                      ...(showPayrollTreatment
+                        ? [
+                            {
+                              key: "payrollTreatment",
+                              label: "Payroll Treatment",
+                              align: "center",
+                            },
+                          ]
+                        : []),
                       { key: "days", label: "Days", align: "center" },
                       { key: "status", label: "Status", align: "center" },
                       { key: "action", label: "Action", align: "center" },
@@ -1076,7 +1085,7 @@ export default function LeaveManagement() {
                   {leavesLoading ? (
                     <tr>
                       <td
-                        colSpan={isGlobal ? 8 : 7}
+                        colSpan={(isGlobal ? 8 : 7) - (showPayrollTreatment ? 0 : 1)}
                         style={{
                           padding: 48,
                           textAlign: "center",
@@ -1219,6 +1228,7 @@ export default function LeaveManagement() {
                             </td>
 
                             {/* Payroll treatment */}
+                            {showPayrollTreatment && (
                             <td
                               style={{
                                 padding: "13px 16px",
@@ -1301,6 +1311,7 @@ export default function LeaveManagement() {
                                 );
                               })()}
                             </td>
+                            )}
 
                             {/* Days */}
                             <td
@@ -1399,7 +1410,7 @@ export default function LeaveManagement() {
                       {paginatedItems.length === 0 && (
                         <tr>
                           <td
-                            colSpan={isGlobal ? 8 : 7}
+                            colSpan={(isGlobal ? 8 : 7) - (showPayrollTreatment ? 0 : 1)}
                             style={{
                               padding: 48,
                               textAlign: "center",

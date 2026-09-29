@@ -256,6 +256,18 @@ def _run_recipient_scoped(build_query, *, recipient_type: str, not_found_default
         raise
 
 
+_PAYROLL_DECISION_EVENT_TYPE = "attendance.payroll_decision.pending"
+
+
+def _hides_payroll_notifications(org_id: str) -> bool:
+    """True when the org has no active Payroll module, so payroll-decision
+    notifications must not be listed or counted. Lazy import: the
+    attendance-exceptions module imports this one at load time."""
+    from support_db_attendance_exceptions import _org_has_payroll_module
+
+    return not _org_has_payroll_module(get_supabase(), str(org_id))
+
+
 def list_notifications(
     org_id: str,
     user_id: str,
@@ -288,11 +300,20 @@ def list_notifications(
 
     rows = [r for r in (result.data or []) if r.get("notifications")]
     mapped = [_map_recipient_row(r) for r in rows]
+    if _hides_payroll_notifications(org_key):
+        mapped = [n for n in mapped if n.get("event_type") != _PAYROLL_DECISION_EVENT_TYPE]
     mapped.sort(key=lambda n: n.get("created_at") or "", reverse=True)
     return mapped
 
 
 def get_unread_count(org_id: str, user_id: str, *, recipient_type: str = "client_user") -> int:
+    if _hides_payroll_notifications(org_id):
+        # The count query has no notifications join, so it can't tell a
+        # payroll-decision row from any other. Count what the list shows so
+        # the bell badge and the page can never disagree.
+        return len(list_notifications(
+            org_id, user_id, recipient_type=recipient_type, unread_only=True, limit=500,
+        ))
     sb = get_supabase()
 
     def build(include_recipient_type: bool):

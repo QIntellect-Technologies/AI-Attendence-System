@@ -155,29 +155,31 @@ def record_simple_attendance(
 
             row = existing_dict
 
-            within_co = shift_gate.is_event_within_shift(
-                people_type, event_dt, is_check_out=True, person_code=person_code, config=cfg,
-            )
+            if not shift_gate.capture_check_out_enabled(people_type, person_code, config=cfg):
+                return {**row, "already_marked": True, "event_type": "check_out_capture_disabled"}
 
-            if bool(row.get("check_out_confirmed")) and not within_co:
+            if bool(row.get("check_out_confirmed")):
                 note = _format_stray_after_checkout_note(now, cfg)
                 notes = _merge_note(row.get("notes"), "check_out", note)
                 cur.execute(
-                    "UPDATE attendance_buffer SET notes = ? WHERE id = ?",
-                    (notes, row["id"]),
+                    "UPDATE attendance_buffer SET notes = ?, check_out_last_late_seen_at = ? WHERE id = ?",
+                    (notes, now, row["id"]),
                 )
                 conn.commit()
-                return {**row, "notes": notes, "already_marked": True, "event_type": "stray_after_checkout"}
+                return {
+                    **row, "notes": notes, "check_out_last_late_seen_at": now,
+                    "already_marked": True, "event_type": "stray_after_checkout",
+                }
 
-            check_out_ready_at = shift_gate.resolve_leg_ready_at_utc(
-                people_type, person_code, event_dt, is_check_out=True, config=cfg,
-            )
-            check_out_metadata_json = _metadata_json(check_out_ready_at)
             hold_reason = shift_gate.classify_check_out_timing(
                 people_type, event_dt, person_code=person_code, config=cfg,
             )
 
-            if within_co or hold_reason == "late":
+            if hold_reason == "within":
+                check_out_ready_at = shift_gate.resolve_leg_ready_at_utc(
+                    people_type, person_code, event_dt, is_check_out=True, config=cfg,
+                )
+                check_out_metadata_json = _metadata_json(check_out_ready_at)
                 notes = _merge_note(row.get("notes"), "check_out", "")
                 cur.execute(
                     """
@@ -196,21 +198,29 @@ def record_simple_attendance(
                     "sync_status": "pending", "already_marked": False, "event_type": "check_out", "notes": notes,
                 }
 
+            if hold_reason == "early":
+                note = _format_checkout_hold_note(people_type, person_code, now, hold_reason)
+                notes = _merge_note(row.get("notes"), "check_out", note)
+                cur.execute(
+                    "UPDATE attendance_buffer SET check_out_hold_reason = ?, notes = ? WHERE id = ?",
+                    (hold_reason, notes, row["id"]),
+                )
+                conn.commit()
+                return {
+                    **row, "check_out_hold_reason": hold_reason, "notes": notes,
+                    "already_marked": True, "event_type": "check_out_unconfirmed",
+                }
+
             note = _format_checkout_hold_note(people_type, person_code, now, hold_reason)
             notes = _merge_note(row.get("notes"), "check_out", note)
             cur.execute(
-                """
-                UPDATE attendance_buffer
-                SET check_out_marked_at = ?, check_out_confidence = ?, check_out_camera_id = ?,
-                    check_out_metadata = ?, check_out_confirmed = 0, check_out_hold_reason = ?,
-                    sync_status = 'checkout_pending_window', sync_error = NULL, notes = ?
-                WHERE id = ?
-                """,
-                (now, float(confidence), camera_id, check_out_metadata_json, hold_reason, notes, row["id"]),
+                "UPDATE attendance_buffer SET check_out_hold_reason = ?, notes = ?, "
+                "check_out_last_late_seen_at = ? WHERE id = ?",
+                (hold_reason, notes, now, row["id"]),
             )
             conn.commit()
             return {
-                **row, "check_out_marked_at": now, "check_out_confidence": float(confidence),
-                "check_out_camera_id": camera_id, "check_out_confirmed": 0, "check_out_hold_reason": hold_reason,
-                "sync_status": "checkout_pending_window", "already_marked": False, "event_type": "check_out_unconfirmed", "notes": notes,
+                **row, "check_out_hold_reason": hold_reason, "notes": notes,
+                "check_out_last_late_seen_at": now,
+                "already_marked": True, "event_type": "check_out_unconfirmed",
             }

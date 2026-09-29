@@ -207,6 +207,8 @@ export interface StaffMember {
   shift: string;
   shiftId: ShiftDefinition["id"];
   shiftLabel: string;
+  /** client_staff.shift_id_ref — the real `shifts` row this person is assigned to. */
+  shiftIdRef?: string | null;
   shiftStart: string;
   shiftEnd: string;
 

@@ -129,6 +129,7 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
     shift: shiftId,
     shiftId,
     shiftLabel,
+    shiftIdRef: ((raw.shiftIdRef ?? raw.shift_id_ref ?? null) as string | null),
     shiftStart: asString(
       raw.shiftStart ?? raw.dutyStart ?? raw.duty_start,
       "09:00",

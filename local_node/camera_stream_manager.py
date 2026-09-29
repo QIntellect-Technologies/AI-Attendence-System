@@ -3064,8 +3064,10 @@ class CameraStreamManager:
             # nothing new to publish.
             if row.get("event_type") in (
                 "locked_by_manual_override", "stray_ignored", "outside_checkout_window_ignored",
-                "check_in_pre_shift_ignored", "stray_after_checkout",
+                "check_in_pre_shift_ignored", "stray_after_checkout", "check_out_capture_disabled",
             ):
+                continue
+            if row.get("event_type") == "check_out_unconfirmed" and row.get("check_out_hold_reason") == "early":
                 continue
             if row.get("sync_status") not in ("held_for_review", "checkout_pending_window"):
                 event_type = row.get("event_type", "check_in")

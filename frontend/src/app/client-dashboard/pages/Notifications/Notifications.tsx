@@ -26,6 +26,8 @@ import {
 
 import { useAuth } from "../../contexts/useAuth";
 import { useOrgReady } from "../../hooks/useOrgReady";
+import { useOrg } from "../../contexts/OrgConfigContext";
+import { isModuleEnabled } from "../../utils/moduleAccess";
 import { T } from "../../components/ui/theme";
 import { JellyButton } from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
@@ -198,6 +200,10 @@ export default function NotificationsPage() {
 
   // [Fix-1] useOrgReady ensures organizationId is loaded before using it
   const { isReady, organizationId } = useOrgReady();
+  const { cfg } = useOrg();
+  // Payroll-decision prompts are meaningless without the Payroll module
+  // (also drops any that were stored before the module was removed).
+  const payrollModuleEnabled = isModuleEnabled(cfg.modules, "payroll");
 
   const userId = cleanId(rawUser?.id);
 
@@ -252,7 +258,11 @@ export default function NotificationsPage() {
       // decisions so UI immediately reflects includes/excludes even if
       // the server-side notifications table doesn't store that flag.
       setItems((prev) =>
-        response.notifications.map((n) => {
+        response.notifications
+          .filter(
+            (n) => payrollModuleEnabled || !isPayrollDecisionNotification(n),
+          )
+          .map((n) => {
           try {
             const prevMatch = prev.find((p) => {
               const a = String(
@@ -309,7 +319,7 @@ export default function NotificationsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [userId, isReady, organizationId]);
+  }, [userId, isReady, organizationId, payrollModuleEnabled]);
 
   // [Fix-3] Only load when BOTH userId and org are ready
   useEffect(() => {

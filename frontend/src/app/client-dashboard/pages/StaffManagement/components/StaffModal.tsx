@@ -4184,6 +4184,21 @@ export const StaffModal: FC<{
                             value: item.id,
                             label: item.name,
                           })),
+                        ...(form.designationId &&
+                        !liveDesignations.some(
+                          (item) =>
+                            item.status === "active" &&
+                            String(item.id) === String(form.designationId),
+                        )
+                          ? [
+                              {
+                                value: String(form.designationId),
+                                label:
+                                  (initial as any)?.designationName ||
+                                  "Current designation",
+                              },
+                            ]
+                          : []),
                       ]}
                       ariaLabel="Select designation"
                       width="100%"

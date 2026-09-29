@@ -161,6 +161,19 @@ class AttendanceSyncWorker:
             metadata = dict(row.get("metadata") or {})
             if row.get("sync_status") == "held_for_review":
                 metadata["marked_after_grace"] = True
+
+            # An early checkout sighting (window not yet closed) must never
+            # reach the cloud, regardless of why THIS row is syncing right
+            # now — its own check-in's normal pending cycle, a forced
+            # flush, or a selected sync. Scrub only the checkout leg's
+            # note/hold_reason for the outgoing payload; the local row
+            # itself, and the check-in leg's own data, are untouched.
+            sync_notes = row.get("notes")
+            sync_check_out_hold_reason = row.get("check_out_hold_reason")
+            if sync_check_out_hold_reason == "early" and not row.get("check_out_confirmed"):
+                sync_notes = local_db._merge_note(sync_notes, "check_out", "")
+                sync_check_out_hold_reason = None
+
             records.append({
                 "local_event_id": row["local_event_id"],
                 "people_type": row["people_type"],
@@ -192,7 +205,7 @@ class AttendanceSyncWorker:
                 # local_db._format_checkout_hold_note). Forwarded so the
                 # cloud attendance record can carry the same context the
                 # node captured, once the backend has a column for it.
-                "notes": row.get("notes"),
+                "notes": sync_notes,
                 # day-level status set by an operator resolving a held
                 # checkout via local_db.mark_held_checkouts_half_day
                 # ('half_day'); 'present' for every other row. The backend
@@ -205,7 +218,7 @@ class AttendanceSyncWorker:
                 # directly on a held row) — 'early' or 'late'. NULL once
                 # resolved. Forwarded so the cloud can tell an as-is-synced
                 # held checkout apart from a normal confirmed one.
-                "check_out_hold_reason": row.get("check_out_hold_reason"),
+                "check_out_hold_reason": sync_check_out_hold_reason,
             })
 
         logger.info(
@@ -296,7 +309,7 @@ class AttendanceSyncWorker:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                local_db.promote_expired_checkout_holds(str(load_config().get("branch_id") or ""))
+                local_db.settle_stale_checkout_notes(str(load_config().get("branch_id") or ""))
                 self.run_once()
             except Exception:
                 pass
