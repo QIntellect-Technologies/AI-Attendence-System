@@ -3875,6 +3875,26 @@ def get_client_staff_leave_taken_bulk(
     return result
 
 
+def get_org_payroll_module_flags(org_id: str) -> dict[str, bool]:
+    """Which payroll-feeding modules ('leave', 'overtime') the org has ACTIVE.
+
+    Payroll must not read leave / overtime data for an org that never bought
+    those modules: the UI hides the related rules and columns, so any
+    leftover rows (e.g. from a lapsed subscription) must not silently keep
+    changing net pay. Reuses support_db_client_users._active_client_modules
+    so legacy aliases ('leave_management', ...) resolve identically to the
+    rest of the platform. Fails open (True) on a lookup error, matching
+    support_db_attendance_exceptions._org_has_payroll_module, so a transient
+    DB blip can't zero out OT / leave for paying orgs.
+    """
+    try:
+        from support_db_client_users import _active_client_modules
+        active = set(_active_client_modules(str(org_id)))
+    except Exception:
+        logger.exception('Payroll module flag lookup failed for org=%s; assuming enabled', org_id)
+        return {'leave': True, 'overtime': True}
+    return {'leave': 'leave' in active, 'overtime': 'overtime' in active}
+
 def get_approved_overtime_hours_for_payroll_period(
     org_id: str,
     branch_id: str | list[str] | tuple[str, ...],
@@ -4766,6 +4786,9 @@ def get_client_payroll_page(
     # Validates the organization and keeps metadata tenant-scoped/cached.
     get_organization(org_key)
     branches, backend_to_ui, branch_by_backend = _client_branch_indexes(org_key)
+    module_flags = get_org_payroll_module_flags(org_key)
+    has_leave_module = module_flags['leave']
+    has_overtime_module = module_flags['overtime']
 
     backend_branch_id: str | None = None
     if _payroll_text(branch_id):
@@ -5068,8 +5091,10 @@ def get_client_payroll_page(
         staff_branch_id = _payroll_text(staff.get('branch_id')) or None
         policy = resolve_policy(staff_branch_id, staff_id)
         policy_by_staff[staff_id] = policy
-        effective_ot_rate_by_staff[staff_id] = resolve_effective_ot_rate(
-            salary_by_staff.get(staff_id), policy
+        effective_ot_rate_by_staff[staff_id] = (
+            resolve_effective_ot_rate(salary_by_staff.get(staff_id), policy)
+            if has_overtime_module
+            else 0.0
         )
 
     if period_start_text and period_end_text:
@@ -5095,7 +5120,8 @@ def get_client_payroll_page(
             if period_end_date < date.today():
                 cache_key = (
                     f'{org_key}:{"|".join(distinct_branch_ids)}:'
-                    f'{period_start_text}:{period_end_text}:{"|".join(sorted(staff_ids))}'
+                    f'{period_start_text}:{period_end_text}:{"|".join(sorted(staff_ids))}:'
+                    f'L{int(has_leave_module)}O{int(has_overtime_module)}'
                 )
                 cached_breakdown = _cache_get(_PAYROLL_BREAKDOWN_CACHE, cache_key)
 
@@ -5110,20 +5136,24 @@ def get_client_payroll_page(
                 attendance_by_staff = get_staff_attendance_for_payroll_period(
                     org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
                 )
-                leaves_by_staff = get_approved_leaves_for_payroll_period(
-                    org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
-                )
-                overtime_by_staff = get_approved_overtime_hours_for_payroll_period(
-                    org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
-                )
-                local_node_overtime_by_staff = get_local_node_overtime_hours_for_payroll_period(
-                    org_key,
-                    distinct_branch_ids,
-                    period_start_text,
-                    period_end_text,
-                    attendance_by_staff=attendance_by_staff,
-                    staff_ids=staff_ids,
-                )
+                # Skip the queries entirely for modules the org hasn't bought
+                # (also saves 1-3 Supabase round-trips per page load).
+                if has_leave_module:
+                    leaves_by_staff = get_approved_leaves_for_payroll_period(
+                        org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
+                    )
+                if has_overtime_module:
+                    overtime_by_staff = get_approved_overtime_hours_for_payroll_period(
+                        org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
+                    )
+                    local_node_overtime_by_staff = get_local_node_overtime_hours_for_payroll_period(
+                        org_key,
+                        distinct_branch_ids,
+                        period_start_text,
+                        period_end_text,
+                        attendance_by_staff=attendance_by_staff,
+                        staff_ids=staff_ids,
+                    )
 
                 paid_staff_ids = get_paid_payroll_periods(org_key, period_start_text, period_end_text)
 

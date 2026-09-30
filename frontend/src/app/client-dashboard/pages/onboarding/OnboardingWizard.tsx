@@ -4640,12 +4640,6 @@ function WorkforceStructureStep({
         Configure {plan.workforceGroupPlural.toLowerCase()} and{" "}
         {plan.workforceRolePlural.toLowerCase()}
       </h1>
-      <p style={subStyle()}>
-        Add the operational structure used by attendance-enabled non-student
-        people types such as teachers, staff, administration, workers,
-        supervisors, doctors, nurses, or employees. Student classes and sections
-        remain separate when students are also enabled.
-      </p>
       <BranchTabs
         branches={branches}
         activeBranchId={activeBranchId}
@@ -4786,16 +4780,6 @@ function WorkforceDepartmentsStep({
         Configure {plan.workforceGroupPlural.toLowerCase()} and{" "}
         {plan.workforceRolePlural.toLowerCase()}
       </h1>
-      <p style={subStyle()}>
-        Add the operational structure used by attendance-enabled non-student
-        people types such as teachers, staff, administration, workers,
-        supervisors, doctors, nurses, or employees. Student classes and
-        sections remain separate when students are also enabled. This is the
-        same {plan.workforceGroupPlural.toLowerCase()} &{" "}
-        {plan.workforceRolePlural.toLowerCase()} manager you'll see later in
-        Settings — each branch tab saves directly, so there's nothing to
-        re-enter after onboarding.
-      </p>
 
       <DepartmentDesignationEditor
         organizationId={organizationId}

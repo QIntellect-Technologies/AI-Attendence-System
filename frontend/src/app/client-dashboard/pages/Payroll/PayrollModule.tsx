@@ -46,6 +46,10 @@ import ExportButton from "../../components/ui/ExportButton";
 import type { PdfPrimitive } from "../../components/ui/ExportPdfButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { usePayrollPolicy } from "./hooks/usePayrollPolicy";
+import {
+  usePayrollModuleGates,
+  type PayrollGatedModule,
+} from "./hooks/usePayrollModuleGates";
 import { toastSuccess, toastError } from "../../utils/notifications";
 import { formatDisplayDate } from "../../utils/formatDate";
 import {
@@ -138,7 +142,6 @@ const LATE_COMING_MODE_OPTIONS: ModernSelectOption[] = [
     label: "Flat Per Occurrence",
     description: "Fixed Rs. deducted per late arrival",
   },
-  { value: "per_minute", label: "Per-Minute Rate", description: "Coming soon" },
 ];
 
 const LEAVE_PAY_STATUS_OPTIONS: ModernSelectOption[] = [
@@ -726,9 +729,32 @@ const cardSubStyle: React.CSSProperties = {
   color: T.textLight,
 };
 
+/** Sort choices; `requires` hides an option when its module isn't purchased. */
+const PAYROLL_SORT_OPTIONS: ReadonlyArray<{
+  value: PayrollSortKey;
+  label: string;
+  requires?: PayrollGatedModule;
+}> = [
+  { value: "name", label: "Name" },
+  { value: "department", label: "Department" },
+  { value: "branchName", label: "Branch" },
+  { value: "netPay", label: "Net Salary" },
+  { value: "baseSalary", label: "Base Salary" },
+  { value: "overtimeAmount", label: "OT Pay", requires: "overtime" },
+  { value: "lateCount", label: "Late Comings" },
+  { value: "unpaidLeaveDays", label: "Unpaid Leaves", requires: "leave" },
+  { value: "deductions", label: "Deductions" },
+  { value: "presentDays", label: "Present Days" },
+];
+
 export default function PayrollModule() {
   const { branchId: branchIdParam } = useParams<{ branchId?: string }>();
   const { cfg, updateCfg, activeBranchId, organizationId } = useOrg();
+  // Leave / Overtime are separately purchased modules — every rule, column,
+  // sort option, export field and edit input tied to them is gated here.
+  const gates = usePayrollModuleGates();
+  const hasOvertime = gates.overtime;
+  const hasLeave = gates.leave;
 
   // Route param takes highest priority (branch dashboard pages).
   // Falls back to sidebar-selected branch (activeBranchId from OrgConfigContext).
@@ -827,9 +853,9 @@ export default function PayrollModule() {
       return "Default salary must be at least PKR 1.";
     if (draftPolicy.defaultSalary > PAYROLL_VALUE_MAX)
       return "Default salary cannot exceed PKR 100,000,000.";
-    if (draftPolicy.otRatePerHour < PAYROLL_VALUE_MIN)
+    if (hasOvertime && draftPolicy.otRatePerHour < PAYROLL_VALUE_MIN)
       return "OT rate must be at least PKR 1.";
-    if (draftPolicy.otRatePerHour > PAYROLL_VALUE_MAX)
+    if (hasOvertime && draftPolicy.otRatePerHour > PAYROLL_VALUE_MAX)
       return "OT rate cannot exceed PKR 100,000,000.";
     for (const type of Object.values(draftPolicy.allowanceTypes)) {
       const maximum =
@@ -842,7 +868,7 @@ export default function PayrollModule() {
           : "Allowance values cannot exceed PKR 100,000,000.";
     }
     return allowanceNameError;
-  }, [allowanceNameError, draftPolicy]);
+  }, [allowanceNameError, draftPolicy, hasOvertime]);
 
   const selectedMonth = useMemo(
     () => monthFromDate(payrollDateFilter.range.startDate),
@@ -956,6 +982,8 @@ export default function PayrollModule() {
       /** Excel number format — set on currency columns so the cell renders
        *  as native, formatted currency instead of a plain number/string. */
       numFmt?: string;
+      /** Omitted from both exports when this module isn't purchased. */
+      requires?: PayrollGatedModule;
     }>
   >(
     () => [
@@ -986,6 +1014,7 @@ export default function PayrollModule() {
         header: "OT Hours",
         accessor: (row: PayrollRow) => row.otHours,
         align: "right" as const,
+        requires: "overtime" as const,
       },
       {
         header: "OT Rate/hr",
@@ -993,6 +1022,7 @@ export default function PayrollModule() {
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.otRate),
         align: "right" as const,
         numFmt: PKR_NUM_FMT,
+        requires: "overtime" as const,
       },
       {
         header: "OT Pay",
@@ -1000,6 +1030,7 @@ export default function PayrollModule() {
         pdfAccessor: (row: PayrollRow) => fmtPKR(row.overtimeAmount),
         align: "right" as const,
         numFmt: PKR_NUM_FMT,
+        requires: "overtime" as const,
       },
       {
         header: "Late Comings",
@@ -1010,6 +1041,7 @@ export default function PayrollModule() {
         header: "Unpaid Leaves",
         accessor: (row: PayrollRow) => row.unpaidLeaveDays,
         align: "right" as const,
+        requires: "leave" as const,
       },
       {
         header: "Deductions",
@@ -1030,25 +1062,30 @@ export default function PayrollModule() {
     [otRatePerHour],
   );
 
+  const visibleExportFields = useMemo(
+    () => gates.filterByGate(payrollExportFields),
+    [gates, payrollExportFields],
+  );
+
   const payrollExcelColumns = useMemo(
     () =>
-      payrollExportFields.map(({ header, accessor, align, numFmt }) => ({
+      visibleExportFields.map(({ header, accessor, align, numFmt }) => ({
         header,
         accessor,
         align,
         numFmt,
       })),
-    [payrollExportFields],
+    [visibleExportFields],
   );
 
   const payrollPdfColumns = useMemo(
     () =>
-      payrollExportFields.map(({ header, accessor, pdfAccessor, align }) => ({
+      visibleExportFields.map(({ header, accessor, pdfAccessor, align }) => ({
         header,
         accessor: pdfAccessor ?? accessor,
         align,
       })),
-    [payrollExportFields],
+    [visibleExportFields],
   );
 
   const visibleRows = useMemo<PayrollRow[]>(() => {
@@ -1223,18 +1260,9 @@ export default function PayrollModule() {
         label: "Sort By",
         value: sortKey,
         minWidth: 150,
-        options: [
-          { value: "name", label: "Name" },
-          { value: "department", label: "Department" },
-          { value: "branchName", label: "Branch" },
-          { value: "netPay", label: "Net Salary" },
-          { value: "baseSalary", label: "Base Salary" },
-          { value: "overtimeAmount", label: "OT Pay" },
-          { value: "lateCount", label: "Late Comings" },
-          { value: "unpaidLeaveDays", label: "Unpaid Leaves" },
-          { value: "deductions", label: "Deductions" },
-          { value: "presentDays", label: "Present Days" },
-        ],
+        options: gates
+          .filterByGate(PAYROLL_SORT_OPTIONS)
+          .map(({ value, label }) => ({ value, label })),
         onChange: (value: string) => setSortKey(value as PayrollSortKey),
       },
       {
@@ -1282,12 +1310,18 @@ export default function PayrollModule() {
       searchQuery,
       sortDirection,
       sortKey,
+      gates,
     ],
   );
 
   // After
   const tableColumns = useMemo(
-    () => [
+    () =>
+      gates.filterByGate<{
+        key: string;
+        label: string;
+        requires?: PayrollGatedModule;
+      }>([
       { key: "#", label: "#" },
       { key: "name", label: "Name" },
       { key: "cnic", label: "CNIC" },
@@ -1296,18 +1330,26 @@ export default function PayrollModule() {
       { key: "base", label: "Base Salary" },
       { key: "allowances", label: "Allowances" },
       { key: "present", label: "Present" },
-      { key: "otHrs", label: "OT Hrs" },
-      { key: "otRate", label: "OT Rate/hr" },
-      { key: "otPay", label: "OT Pay" },
+      { key: "otHrs", label: "OT Hrs", requires: "overtime" },
+      { key: "otRate", label: "OT Rate/hr", requires: "overtime" },
+      { key: "otPay", label: "OT Pay", requires: "overtime" },
       { key: "lateComings", label: "Late Comings" },
-      { key: "unpaidLeaves", label: "Unpaid Leaves" },
+      { key: "unpaidLeaves", label: "Unpaid Leaves", requires: "leave" },
       { key: "deductions", label: "Deductions" },
       { key: "net", label: "Net Salary" },
       { key: "status", label: "Status" },
       { key: "action", label: "" },
-    ],
-    [isGlobal],
+      ]),
+    [isGlobal, gates],
   );
+
+  // Body cells render off the same filtered list as the header, so a column
+  // can never be hidden in <thead> but still present in <tbody> (or vice versa).
+  const visibleColumnKeys = useMemo(
+    () => new Set(tableColumns.map((column) => column.key)),
+    [tableColumns],
+  );
+  const showCol = (key: string) => visibleColumnKeys.has(key);
 
   const openEditModal = useCallback((row: PayrollRow) => {
     setEditingRow(row);
@@ -1411,7 +1453,12 @@ export default function PayrollModule() {
         editingRow.staffId,
         Number(draftSalary),
         undefined,
-        { otRate, appliedAllowances: draftAppliedAllowances },
+        {
+          // Omitted (not sent as 0) without the Overtime module, so saving a
+          // salary edit can't silently clear a previously-set per-staff rate.
+          ...(hasOvertime ? { otRate } : {}),
+          appliedAllowances: draftAppliedAllowances,
+        },
       );
       setIsEditModalOpen(false);
       setEditingRow(null);
@@ -1430,6 +1477,7 @@ export default function PayrollModule() {
     otRateConfigError,
     editingRow,
     updateBaseSalary,
+    hasOvertime,
   ]);
 
   // Payroll Rules modal scope is derived from where the person already is
@@ -1853,32 +1901,38 @@ export default function PayrollModule() {
                     <td style={{ ...tableCellStyle, textAlign: "center" }}>
                       {row.presentDays}
                     </td>
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
-                      {row.otHours}h
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
-                      {fmtPKR(row.otRate)}
-                    </td>
-                    <td
-                      style={{
-                        ...tableCellStyle,
-                        color: T.navy600,
-                        fontWeight: 800,
-                      }}
-                    >
-                      <BreakdownValue
-                        amount={row.overtimeAmount}
-                        prefix="+"
-                        color={T.navy600}
-                        lines={
-                          row.breakdown
-                            ? [
+                    {showCol("otHrs") && (
+                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                        {row.otHours}h
+                      </td>
+                    )}
+                    {showCol("otRate") && (
+                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                        {fmtPKR(row.otRate)}
+                      </td>
+                    )}
+                    {showCol("otPay") && (
+                      <td
+                        style={{
+                          ...tableCellStyle,
+                          color: T.navy600,
+                          fontWeight: 800,
+                        }}
+                      >
+                        <BreakdownValue
+                          amount={row.overtimeAmount}
+                          prefix="+"
+                          color={T.navy600}
+                          lines={
+                            row.breakdown
+                              ? [
                                 `${row.breakdown.overtimeHours}h × Rs.${row.otRate}/hr`,
                               ]
-                            : []
-                        }
-                      />
-                    </td>
+                              : []
+                          }
+                        />
+                      </td>
+                    )}
                     <td
                       style={{
                         ...tableCellStyle,
@@ -1889,16 +1943,18 @@ export default function PayrollModule() {
                     >
                       {row.lateCount}
                     </td>
-                    <td
-                      style={{
-                        ...tableCellStyle,
-                        textAlign: "center",
-                        color: T.amber600,
-                        fontWeight: 800,
-                      }}
-                    >
-                      {row.unpaidLeaveDays}
-                    </td>
+                    {showCol("unpaidLeaves") && (
+                      <td
+                        style={{
+                          ...tableCellStyle,
+                          textAlign: "center",
+                          color: T.amber600,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {row.unpaidLeaveDays}
+                      </td>
+                    )}
                     <td
                       style={{
                         ...tableCellStyle,
@@ -1913,20 +1969,21 @@ export default function PayrollModule() {
                         lines={
                           row.breakdown
                             ? [
-                                row.breakdown.lateCount > 0
-                                  ? `Late arrivals: ${row.breakdown.lateCount} → ${fmtPKR(row.breakdown.lateDeductionAmount)}`
-                                  : "",
-                                row.breakdown.halfDayAttendanceCount > 0 ||
+                              row.breakdown.lateCount > 0
+                                ? `Late arrivals: ${row.breakdown.lateCount} → ${fmtPKR(row.breakdown.lateDeductionAmount)}`
+                                : "",
+                              row.breakdown.halfDayAttendanceCount > 0 ||
                                 row.breakdown.halfDayLeaveCount > 0
-                                  ? `Half-days: ${row.breakdown.halfDayAttendanceCount + row.breakdown.halfDayLeaveCount} → ${fmtPKR(row.breakdown.halfDayDeductionAmount)}`
-                                  : "",
-                                row.breakdown.unpaidLeaveDays > 0
-                                  ? `Unpaid leave: ${row.breakdown.unpaidLeaveDays}d → ${fmtPKR(row.breakdown.unpaidLeaveDeductionAmount)}`
-                                  : "",
+                                ? `Half-days: ${row.breakdown.halfDayAttendanceCount + row.breakdown.halfDayLeaveCount} → ${fmtPKR(row.breakdown.halfDayDeductionAmount)}`
+                                : "",
+                              hasLeave && row.breakdown.unpaidLeaveDays > 0
+                                ? `Unpaid leave: ${row.breakdown.unpaidLeaveDays}d → ${fmtPKR(row.breakdown.unpaidLeaveDeductionAmount)}`
+                                : "",
+                              hasLeave &&
                                 row.breakdown.attendanceLeaveConflictDays > 0
-                                  ? `⚠ ${row.breakdown.attendanceLeaveConflictDays}d on file as leave but also attended — excluded from deduction`
-                                  : "",
-                              ].filter(Boolean)
+                                ? `⚠ ${row.breakdown.attendanceLeaveConflictDays}d on file as leave but also attended — excluded from deduction`
+                                : "",
+                            ].filter(Boolean)
                             : []
                         }
                       />
@@ -2046,7 +2103,7 @@ export default function PayrollModule() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr",
+              gridTemplateColumns: hasOvertime ? "1fr 1fr" : "1fr",
               gap: 16,
               marginBottom: 20,
             }}
@@ -2071,6 +2128,7 @@ export default function PayrollModule() {
                 style={inputStyle}
               />
             </Field>
+            {hasOvertime && (
             <Field label="OT Rate / Hour">
               <input
                 type="number"
@@ -2109,9 +2167,14 @@ export default function PayrollModule() {
                 </p>
               )}
             </Field>
+            )}
           </div>
 
-          <Field label="Per-Day Rate Basis (for leave/half-day deductions)">
+          {/* Per-day rate also prices late / half-day (attendance) deductions,
+              so it stays even without the Leave module — only the label changes. */}
+          <Field
+            label={`Per-Day Rate Basis (for ${hasLeave ? "leave/half-day" : "late/half-day"} deductions)`}
+          >
             <ModernSelect
               value={draftPolicy.perDayRateBasis}
               onChange={(value) =>
@@ -2215,6 +2278,7 @@ export default function PayrollModule() {
             )}
           </div>
 
+          {hasLeave && (
           <div style={{ marginTop: 20, marginBottom: 24 }}>
             <span
               style={{
@@ -2351,24 +2415,27 @@ export default function PayrollModule() {
                 Add
               </button>
             </div>
-            {allowanceNameError && (
-              <div
-                role="alert"
-                style={{
-                  background: "#fef2f2",
-                  border: `1px solid #fecaca`,
-                  borderRadius: 10,
-                  padding: "10px 14px",
-                  marginTop: 10,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: T.red600,
-                }}
-              >
-                {allowanceNameError}
-              </div>
-            )}
           </div>
+          )}
+          {/* Lives outside the Leave block: it reports an allowance-name
+              error and must still show when the Leave module is off. */}
+          {allowanceNameError && (
+            <div
+              role="alert"
+              style={{
+                background: "#fef2f2",
+                border: `1px solid #fecaca`,
+                borderRadius: 10,
+                padding: "10px 14px",
+                marginTop: 10,
+                fontSize: 12,
+                fontWeight: 600,
+                color: T.red600,
+              }}
+            >
+              {allowanceNameError}
+            </div>
+          )}
 
           <div style={{ marginTop: 20, marginBottom: 24 }}>
             <span
@@ -2589,16 +2656,16 @@ export default function PayrollModule() {
               gap: 8,
               cursor:
                 policySaving ||
-                policyLoading ||
-                rulesBranchUnavailable ||
-                Boolean(payrollRulesError)
+                  policyLoading ||
+                  rulesBranchUnavailable ||
+                  Boolean(payrollRulesError)
                   ? "not-allowed"
                   : "pointer",
               opacity:
                 policySaving ||
-                policyLoading ||
-                rulesBranchUnavailable ||
-                Boolean(payrollRulesError)
+                  policyLoading ||
+                  rulesBranchUnavailable ||
+                  Boolean(payrollRulesError)
                   ? 0.7
                   : 1,
             }}
@@ -2626,9 +2693,9 @@ export default function PayrollModule() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr",
+              gridTemplateColumns: hasOvertime ? "1fr 1fr" : "1fr",
               gap: 16,
-              marginBottom: 12,
+              marginBottom: hasOvertime ? 12 : 20,
             }}
           >
             <Field label="Base Salary (PKR)">
@@ -2664,6 +2731,7 @@ export default function PayrollModule() {
                 </p>
               )}
             </Field>
+            {hasOvertime && (
             <Field label="OT Rate Override (Rs/hr)">
               <input
                 type="number"
@@ -2690,19 +2758,22 @@ export default function PayrollModule() {
                 }}
               />
             </Field>
+            )}
           </div>
-          <p
-            style={{
-              fontSize: 11,
-              color: T.textMuted,
-              marginTop: -4,
-              marginBottom: 20,
-            }}
-          >
-            Leave blank to use the org rate. OT Hours this period (
-            {editingRow.otHours}h) come from approved Overtime Management
-            requests and aren't edited here.
-          </p>
+          {hasOvertime && (
+            <p
+              style={{
+                fontSize: 11,
+                color: T.textMuted,
+                marginTop: -4,
+                marginBottom: 20,
+              }}
+            >
+              Leave blank to use the org rate. OT Hours this period (
+              {editingRow.otHours}h) come from approved Overtime Management
+              requests and aren't edited here.
+            </p>
+          )}
 
           {editingRowAllowanceTypesLoading ? (
             <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 20 }}>
@@ -2811,11 +2882,11 @@ export default function PayrollModule() {
                                   raw.trim() === ""
                                     ? undefined
                                     : Math.min(
-                                        type.mode === "percent"
-                                          ? PAYROLL_PERCENT_MAX
-                                          : PAYROLL_VALUE_MAX,
-                                        Number(raw),
-                                      ),
+                                      type.mode === "percent"
+                                        ? PAYROLL_PERCENT_MAX
+                                        : PAYROLL_VALUE_MAX,
+                                      Number(raw),
+                                    ),
                               },
                             }));
                           }}
@@ -2853,25 +2924,27 @@ export default function PayrollModule() {
                 Math.max(
                   0,
                   Number(draftSalary) +
-                    editingRow.otHours *
+                  (hasOvertime
+                    ? editingRow.otHours *
                       (draftOtRateOverride.trim() === ""
                         ? otRatePerHour
-                        : Number(draftOtRateOverride) || 0) +
-                    editingRow.manualAllowance +
-                    Object.entries(draftAppliedAllowances).reduce(
-                      (sum, [key, applied]) => {
-                        if (!applied?.enabled) return sum;
-                        const type = editingRowAllowanceTypes[key];
-                        if (!type) return sum;
-                        const value = applied.overrideValue ?? type.value ?? 0;
-                        if (type.mode === "percent")
-                          return sum + (Number(draftSalary) * value) / 100;
-                        if (type.mode === "none") return sum;
-                        return sum + value;
-                      },
-                      0,
-                    ) -
-                    editingRow.deductions,
+                        : Number(draftOtRateOverride) || 0)
+                    : 0) +
+                  editingRow.manualAllowance +
+                  Object.entries(draftAppliedAllowances).reduce(
+                    (sum, [key, applied]) => {
+                      if (!applied?.enabled) return sum;
+                      const type = editingRowAllowanceTypes[key];
+                      if (!type) return sum;
+                      const value = applied.overrideValue ?? type.value ?? 0;
+                      if (type.mode === "percent")
+                        return sum + (Number(draftSalary) * value) / 100;
+                      if (type.mode === "none") return sum;
+                      return sum + value;
+                    },
+                    0,
+                  ) -
+                  editingRow.deductions,
                 ),
               )}
             </span>
@@ -3048,11 +3121,11 @@ const Modal: React.FC<{
         position: "relative",
         ...(scrollable
           ? {
-              height: "fit-content",
-              minHeight: 0,
-              maxHeight: "min(75vh, calc(100vh - 32px))",
-              overflow: "hidden",
-            }
+            height: "fit-content",
+            minHeight: 0,
+            maxHeight: "min(75vh, calc(100vh - 32px))",
+            overflow: "hidden",
+          }
           : null),
       }}
       onClick={(event) => event.stopPropagation()}

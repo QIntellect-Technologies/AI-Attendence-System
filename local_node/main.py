@@ -7,7 +7,7 @@ import socket
 import sys
 import time
 import webbrowser
-from threading import Timer
+from threading import Thread
 
 # PyInstaller's --windowed build (build_pyinstaller.py's onefile target)
 # runs with no console attached, so sys.stdout/sys.stderr are None rather

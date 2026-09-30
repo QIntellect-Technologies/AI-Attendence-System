@@ -74,6 +74,10 @@ const MODULE_ALIASES: Record<string, string> = {
   leavemanagement: "leave",
   leaves: "leave",
 
+  // → overtime
+  overtimemanagement: "overtime",
+  ot: "overtime",
+
   // → liveattendance
   liveattendance: "liveattendance",
   liveattendancemonitoring: "liveattendance",
