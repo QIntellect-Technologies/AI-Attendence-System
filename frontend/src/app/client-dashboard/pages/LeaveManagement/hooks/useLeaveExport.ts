@@ -43,6 +43,9 @@ export interface UseLeaveExportOptions {
    * matches exactly what useLeaveFilters.exportMetadata returns.
    */
   filterMetadata: LeaveExportMetadata;
+  /** Include the Paid/Unpaid/Excluded column. Payroll data: pass false when
+   *  the org has not purchased the Payroll module. Defaults to true. */
+  includePayrollTreatment?: boolean;
 }
 
 // ─── Return ────────────────────────────────────────────────────────────────
@@ -57,14 +60,18 @@ export interface UseLeaveExportReturn {
 
 // ─── Column definitions ────────────────────────────────────────────────────
 
+// Shared by both column sets below, and the exact reference the hook filters
+// out when the Payroll module isn't purchased.
+const LEAVE_TREATMENT_COLUMN: ExportExcelColumn<PendingLeaveItem> = {
+  header: "Paid/Unpaid",
+  accessor: (r) => leaveTreatmentLabel(r),
+};
+
 const LEAVE_EXPORT_COLUMNS_BRANCH: ExportExcelColumn<PendingLeaveItem>[] = [
   { header: "Employee Name", accessor: (r) => r.name },
   { header: "Department", accessor: (r) => r.dept },
   { header: "Leave Type", accessor: (r) => r.type },
-  {
-    header: "Paid/Unpaid",
-    accessor: (r) => leaveTreatmentLabel(r),
-  },
+  LEAVE_TREATMENT_COLUMN,
   { header: "Days", accessor: (r) => r.days },
   { header: "Status", accessor: (r) => r.status ?? "Pending" },
   {
@@ -127,11 +134,16 @@ export function useLeaveExport({
   dateLabel,
   branchLabel,
   filterMetadata,
+  includePayrollTreatment = true,
 }: UseLeaveExportOptions): UseLeaveExportReturn {
-  const columns = useMemo<ExportExcelColumn<PendingLeaveItem>[]>(
-    () => (isGlobal ? LEAVE_EXPORT_COLUMNS_GLOBAL : LEAVE_EXPORT_COLUMNS_BRANCH),
-    [isGlobal],
-  );
+  const columns = useMemo<ExportExcelColumn<PendingLeaveItem>[]>(() => {
+    const base = isGlobal
+      ? LEAVE_EXPORT_COLUMNS_GLOBAL
+      : LEAVE_EXPORT_COLUMNS_BRANCH;
+    return includePayrollTreatment
+      ? base
+      : base.filter((column) => column !== LEAVE_TREATMENT_COLUMN);
+  }, [isGlobal, includePayrollTreatment]);
 
   const filename = useMemo(
     () => generateExportFilename(branchLabel, dateLabel),

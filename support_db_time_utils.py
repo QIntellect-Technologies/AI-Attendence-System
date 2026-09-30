@@ -22,6 +22,7 @@ from typing import Any
 from uuid import UUID
 
 from supabase_client import get_supabase
+from support_db_core import _execute_supabase
 
 # ─── Aggregate ("all branches") sentinel ───────────────────────────────────
 
@@ -106,15 +107,14 @@ def get_branch_owned_by_org(org_id: str, branch_id: str) -> dict:
     except ValueError:
         raise ValueError(f"'{branch_key}' is not a valid branch id")
 
-    sb = get_supabase()
-    result = (
-        sb.table("branches")
+    result = _execute_supabase("get_branch_owned_by_org", lambda: (
+        get_supabase()
+        .table("branches")
         .select("*")
         .eq("id", branch_key)
         .eq("org_id", str(org_id))
         .limit(1)
-        .execute()
-    )
+    ))
     if not result.data:
         raise ValueError("Branch does not belong to this organization")
     return result.data[0]

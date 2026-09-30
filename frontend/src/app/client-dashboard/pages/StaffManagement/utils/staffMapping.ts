@@ -101,6 +101,8 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
 
     department: asString(raw.department ?? raw.dept, "Unassigned"),
     departmentId: (raw.departmentId ?? raw.department_id ?? null) as string | null,
+    classId: (raw.classId ?? raw.class_id ?? null) as string | null,
+    sectionId: (raw.sectionId ?? raw.section_id ?? null) as string | null,
     designationId: (raw.designationId ?? raw.designation_id ?? null) as string | null,
     designationName: asString(raw.designationName ?? raw.designation_name, ""),
     role: roleName,
@@ -127,6 +129,7 @@ export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
     shift: shiftId,
     shiftId,
     shiftLabel,
+    shiftIdRef: ((raw.shiftIdRef ?? raw.shift_id_ref ?? null) as string | null),
     shiftStart: asString(
       raw.shiftStart ?? raw.dutyStart ?? raw.duty_start,
       "09:00",

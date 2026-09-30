@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/StaffStats.tsx
+ * pages/StaffManagement/components/StaffStats.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Stat bar above the directory table.
  * ─────────────────────────────────────────────────────────────────────────────

@@ -25,6 +25,10 @@
 import { defineConfig, loadEnv } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 /**
  * Shared proxy rule factory — define once, spread everywhere.
@@ -49,9 +53,17 @@ export default defineConfig(({ mode }) => {
   // Third arg "" loads all variables, not just VITE_-prefixed ones.
   const env = loadEnv(mode, ".", "");
   const backendUrl = env.VITE_BACKEND_URL || "http://localhost:5000";
+  const isSupport = mode === "support";
 
   return {
     plugins: [react(), tailwindcss()],
+
+    build: {
+      outDir: isSupport ? "dist-support" : "dist",
+      rollupOptions: isSupport
+        ? { input: resolve(__dirname, "support.html") }
+        : undefined,
+    },
 
     server: {
       port: 5173,

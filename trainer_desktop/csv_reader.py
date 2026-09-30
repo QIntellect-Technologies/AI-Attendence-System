@@ -36,6 +36,9 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "group": ("group", "class", "department", "grade", "team"),
     "subgroup": ("subgroup", "sub group", "section", "role", "designation"),
     "branch": ("branch", "branch name", "location"),
+    "department_id": ("department_id", "department id"),
+    "class_id": ("class_id", "class id"),
+    "section_id": ("section_id", "section id"),
     "profile_image_file_name": (
         "profile image file name",
         "profile image",
@@ -107,7 +110,7 @@ def _normalize_people_type(value: str) -> str:
         return "worker"
     if key in {"staff", "staff member", "staff members"}:
         return "staff"
-    return key.replace(" ", "_") or "staff"
+    return key.replace(" ", "_")
 
 
 def _build_header_map(fieldnames: Iterable[str] | None) -> dict[str, str]:
@@ -150,7 +153,7 @@ def _read_cell(row: dict[str, str], header_map: dict[str, str], canonical: str) 
     return str(row.get(original, "") or "").strip()
 
 
-def read_enrollment_csv(csv_path: Path) -> list[EnrollmentPerson]:
+def read_enrollment_csv(csv_path: Path, default_people_type: str | None = None) -> list[EnrollmentPerson]:
     if not csv_path.exists() or not csv_path.is_file():
         raise EnrollmentCsvError(f"Enrollment CSV was not found: {csv_path}")
 
@@ -166,8 +169,18 @@ def read_enrollment_csv(csv_path: Path) -> list[EnrollmentPerson]:
     people: list[EnrollmentPerson] = []
     seen_codes: set[tuple[str, str]] = set()
 
+    default_people_type = str(default_people_type or "").strip()
+
     for index, row in enumerate(reader, start=2):
-        raw_people_type = _read_cell(row, header_map, "people_type") or "staff"
+        cell_people_type = _read_cell(row, header_map, "people_type")
+        raw_people_type = cell_people_type or default_people_type
+        if not raw_people_type:
+            raise EnrollmentCsvError(
+                f"Row {index}: this CSV has no people_type/people type column, and no "
+                "--default-people-type was passed. Add that column to the CSV, or re-run "
+                "with e.g. --default-people-type student so rows without one aren't "
+                "silently mislabeled."
+            )
         people_type = _normalize_people_type(raw_people_type)
         person_code = _read_cell(row, header_map, "person_code")
         full_name = _read_cell(row, header_map, "full_name")
@@ -175,6 +188,9 @@ def read_enrollment_csv(csv_path: Path) -> list[EnrollmentPerson]:
         group = _read_cell(row, header_map, "group")
         subgroup = _read_cell(row, header_map, "subgroup")
         branch = _read_cell(row, header_map, "branch")
+        department_id = _read_cell(row, header_map, "department_id")
+        class_id = _read_cell(row, header_map, "class_id")
+        section_id = _read_cell(row, header_map, "section_id")
         profile_image_file_name = _read_cell(row, header_map, "profile_image_file_name")
 
         if not any(str(value or "").strip() for value in row.values()):
@@ -218,6 +234,9 @@ def read_enrollment_csv(csv_path: Path) -> list[EnrollmentPerson]:
                 group=group,
                 subgroup=subgroup,
                 branch=branch,
+                department_id=department_id,
+                class_id=class_id,
+                section_id=section_id,
                 profile_image_file_name=profile_image_file_name,
                 extra=extra,
             )

@@ -669,7 +669,6 @@ import {
   BRANCH_ROUTE,
   type ModuleDef,
 } from "./config/moduleRegistry";
-import { supportRoutes } from "../support-dashboard/routes";
 import PayrollDecisions from "./pages/attendance_temp/PayrollDecisions";
 
 const Login = lazy(() => import("./pages/Login"));
@@ -1265,7 +1264,11 @@ export const router = createBrowserRouter([
         // the two screens) separate — see client_payroll_decision_routes.py's
         // module docstring.
         path: "attendance/payroll-decisions",
-        element: suspense(<PayrollDecisionsPage />),
+        element: (
+          <ModuleAccessRoute moduleKey="payroll" branchScoped={false}>
+            {suspense(<PayrollDecisionsPage />)}
+          </ModuleAccessRoute>
+        ),
       },
       {
         path: BRANCH_ROUTE.path,
@@ -1299,7 +1302,6 @@ export const router = createBrowserRouter([
     path: "/staff/:moduleKey",
     element: <StaffModuleLandingRoute />,
   },
-  ...supportRoutes,
   {
     path: "*",
     element: <Navigate to="/login" replace />,

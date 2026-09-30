@@ -1,4 +1,4 @@
-// modules/staff/types.ts
+// pages/StaffManagement/types.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared people-directory helpers for template-aware person code rendering.
 // Biometric video training is intentionally not handled from Client Dashboard.

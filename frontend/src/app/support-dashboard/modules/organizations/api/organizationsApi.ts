@@ -31,8 +31,14 @@ import type {
   UpdateOrganizationPayload,
   UpdateOrganizationTemplatePayload,
   UpdateOrganizationStaffTypeScopePayload,
+  UpdateOrganizationMobileScopePayload,
   UpdateBranchPayload,
 } from "../../../packages/shared-types/src/organization";
+
+type AttendanceWorkflowSetting = {
+  people_type: string;
+  attendance_workflow: "scenario_based" | "simple";
+};
 
 const BASE = "/v1/support/organizations";
 const PERMANENT_DELETE_TIMEOUT_MS = 120_000;
@@ -363,6 +369,15 @@ export const organizationsApi = {
       })
       .then((r) => r.data.organization),
 
+  updateMobileScope: (
+    payload: UpdateOrganizationMobileScopePayload,
+  ): Promise<Organization> =>
+    supportApiClient
+      .patch<OrgEnvelope>(`${BASE}/${encodeId(payload.id)}/mobile-scope`, {
+        enabled_mobile_people_types: payload.enabled_mobile_people_types,
+      })
+      .then((r) => r.data.organization),
+
   inviteClient: (
     orgId: string,
     payload: InviteClientPayload,
@@ -519,6 +534,33 @@ export const branchesApi = {
       )
       .then((r) => r.data.module_people_types ?? {}),
 
+  getAttendanceWorkflows: (
+    orgId: string,
+    branchId: string,
+  ): Promise<AttendanceWorkflowSetting[]> =>
+    supportApiClient
+      .get<{
+        capture_settings: AttendanceWorkflowSetting[];
+      }>(
+        `${BASE}/${encodeId(orgId)}/branches/${encodeId(branchId)}/attendance-workflow`,
+      )
+      .then((r) => r.data.capture_settings ?? []),
+
+  setAttendanceWorkflow: (
+    orgId: string,
+    branchId: string,
+    peopleType: string,
+    attendanceWorkflow: "scenario_based" | "simple",
+  ): Promise<AttendanceWorkflowSetting> =>
+    supportApiClient
+      .patch<{
+        capture_settings: AttendanceWorkflowSetting;
+      }>(
+        `${BASE}/${encodeId(orgId)}/branches/${encodeId(branchId)}/people-types/${encodeId(peopleType)}/attendance-workflow`,
+        { attendance_workflow: attendanceWorkflow },
+      )
+      .then((r) => r.data.capture_settings),
+
   createInstallToken: (
     orgId: string,
     branchId: string,
@@ -616,6 +658,7 @@ export const invoicesApi = {
 } as const;
 
 export interface NodeHealth {
+  id: string;
   branch_id: string;
   branch_name: string;
   node_id: string | null;

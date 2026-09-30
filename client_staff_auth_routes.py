@@ -78,6 +78,26 @@ def staff_login():
                     403,
                 )
 
+        # Support-owned commercial gate: this organization may only be
+        # entitled to give Mobile App access to some people families
+        # (Organization.enabled_mobile_people_types) — see
+        # support_db_organizations._normalize_mobile_scope and the Client
+        # Dashboard's OrgConfigContext.enabledMobilePeopleTypes. Enforced
+        # here, not just hidden in the dashboard UI, so a client_staff row
+        # that already has valid credentials — created before the org's
+        # entitlement changed, or before Mobile App was enabled for their
+        # family — can never bypass the toggle just by logging in.
+        if staff_org_id:
+            org = support_cp_db.get_organization(str(staff_org_id))
+            enabled_families = set(org.get("enabled_mobile_people_types") or [])
+            scope_key = support_cp_db.people_type_mobile_scope_key(staff.get("people_type"))
+            if scope_key not in enabled_families:
+                return err(
+                    "Mobile App access is not enabled for your account. "
+                    "Contact your administrator.",
+                    403,
+                )
+
         # Keyed as "user" (not "staff") to match the response shape of
         # /api/login (client_users/client_staff dashboard login) — one
         # parsing path on the client regardless of which endpoint it hit.

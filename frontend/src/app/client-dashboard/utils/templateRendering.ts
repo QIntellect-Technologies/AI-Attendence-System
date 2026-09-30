@@ -1,3 +1,5 @@
+import { readShiftEnabledPeopleTypes, resolveSupportsShift } from "./shiftSupport";
+
 export type PeopleFamily = "student" | "workforce";
 
 export interface TemplateConfigLike {
@@ -24,6 +26,8 @@ export interface TemplateConfigLike {
     string,
     Record<string, string[]>
   > | null;
+  enabledMobilePeopleTypes?: unknown;
+  enabled_mobile_people_types?: unknown;
 }
 
 export interface TemplateTerminologyModel {
@@ -77,6 +81,10 @@ export interface PeopleRenderingModel {
   showShiftAllocation: boolean;
   showDashboardModuleAccess: boolean;
   showTrainingMedia: boolean;
+  /** Whether Mobile App access is enabled for this person's family (student/staff), per Organization.enabled_mobile_people_types. */
+  mobileAppEnabled: boolean;
+  /** Whether a login/credentials should be generated for this person — see buildStaffCredentials/staffCredentials.ts. */
+  shouldGenerateCredentials: boolean;
   supportsShift: boolean;
   supportsPayroll: boolean;
   supportsLeave: boolean;
@@ -239,6 +247,23 @@ export function isStudentPeopleType(peopleType: unknown): boolean {
 
 export function peopleFamilyForType(peopleType: unknown): PeopleFamily {
   return isStudentPeopleType(peopleType) ? "student" : "workforce";
+}
+
+/**
+ * Mirrors OrgConfigContext's normalizeMobilePeopleTypes: is Mobile App
+ * enabled for this person's family? Reads Organization.enabled_mobile_people_types
+ * (camel/snake fallback), normalized the same way resolveActivePeopleTypes
+ * normalizes other people-type lists.
+ */
+function resolveMobileAppEnabled(
+  config: TemplateConfigLike,
+  family: PeopleFamily,
+): boolean {
+  const enabledMobilePeopleTypes = normalizePeopleTypeList(
+    config.enabledMobilePeopleTypes ?? config.enabled_mobile_people_types,
+  );
+  const scopeKey = family === "student" ? "student" : "staff";
+  return enabledMobilePeopleTypes.includes(scopeKey);
 }
 
 export function resolveActivePeopleTypes(config: TemplateConfigLike): string[] {
@@ -562,6 +587,7 @@ export function resolvePeopleRenderingModel(
     : (allPeopleTypes[0] ?? "staff");
   const family = peopleFamilyForType(peopleType);
   const isStudent = family === "student";
+  const mobileAppEnabled = resolveMobileAppEnabled(config, family);
   const isFactory =
     businessType.includes("factory") ||
     businessType.includes("manufacturing") ||
@@ -649,21 +675,21 @@ export function resolvePeopleRenderingModel(
     "leaveManagement",
     "leave_management",
   ]);
-  // Respect explicit per-people-type shift enablement when provided via
-  // `shiftEnabledPeopleTypes` (onboarding/config). If that list exists, use
-  // it to decide shift support for the current people type. Otherwise fall
-  // back to the legacy feature flag or `!isStudent` heuristic.
-  const shiftList = normalizePeopleTypeList(
-    (config as Record<string, unknown>).shiftEnabledPeopleTypes ??
-      (config as Record<string, unknown>).shift_enabled_people_types ??
-      verticalConfig.shiftEnabledPeopleTypes ??
-      verticalConfig.shift_enabled_people_types,
+  // Per-people-type shift enablement (Settings -> Shift Scheduling). A saved
+  // list is authoritative even when empty ("no type uses shifts"); only a
+  // never-configured org falls back to the legacy flag / `!isStudent` default.
+  const shiftList = readShiftEnabledPeopleTypes(
+    (config as unknown as Record<string, unknown>).shiftEnabledPeopleTypes,
+    (config as unknown as Record<string, unknown>).shift_enabled_people_types,
+    verticalConfig.shiftEnabledPeopleTypes,
+    verticalConfig.shift_enabled_people_types,
   );
 
-  const supportsShift =
-    shiftList.length > 0
-      ? shiftList.includes(peopleType)
-      : (explicitShift ?? !isStudent);
+  const supportsShift = resolveSupportsShift(
+    shiftList,
+    peopleType,
+    explicitShift ?? !isStudent,
+  );
   const supportsPayroll = explicitPayroll ?? !isStudent;
   const supportsLeave = explicitLeave ?? !isStudent;
 
@@ -709,11 +735,13 @@ export function resolvePeopleRenderingModel(
     showDepartmentDesignationFields: !isStudent,
     showCompensationFields: supportsPayroll,
     showBenefitsFields: supportsPayroll,
-    showStaffTypeField: !isStudent,
+    showStaffTypeField: !isStudent && mobileAppEnabled,
     showShiftFields: supportsShift,
     showShiftAllocation: supportsShift,
     showDashboardModuleAccess: !isStudent,
     showTrainingMedia: true,
+    mobileAppEnabled,
+    shouldGenerateCredentials: mobileAppEnabled,
     supportsShift,
     supportsPayroll,
     supportsLeave,

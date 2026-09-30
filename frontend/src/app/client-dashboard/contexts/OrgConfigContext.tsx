@@ -1757,6 +1757,7 @@ export interface OrgCamera {
 }
 
 export type StaffWorkType = "office" | "field";
+export type MobilePeopleType = "student" | "staff";
 export type ShiftKey = "morning" | "evening" | "night" | "custom";
 
 export interface ShiftDefinition {
@@ -1855,7 +1856,6 @@ export interface OrgConfig {
   primaryPeopleType: string;
   enabledPeopleTypes: string[];
   attendancePeopleTypes: string[];
-  shiftEnabledPeopleTypes?: string[];
   modulePeopleTypesByBranch: Record<string, Record<string, string[]>>;
   module_people_types_by_branch: Record<string, Record<string, string[]>>;
   /**
@@ -1868,9 +1868,20 @@ export interface OrgConfig {
    */
   enabledStaffTypes: StaffWorkType[];
   enabled_staff_types: StaffWorkType[];
+  /**
+   * Support-owned commercial scope (Organization.enabled_mobile_people_types):
+   * which people families ("student" | "staff") this org is entitled to
+   * give Mobile App access to. Unlike enabledStaffTypes, an empty/missing
+   * value means "Mobile App disabled" (closed-by-default), not "both" —
+   * matches the DB column's default of an empty array.
+   */
+  enabledMobilePeopleTypes: MobilePeopleType[];
+  enabled_mobile_people_types: MobilePeopleType[];
   verticalConfig: Record<string, unknown>;
   terminologyOverrides: Record<string, unknown>;
   orgName: string;
+  /** Organization contact email (organizations.contact_email). */
+  orgEmail: string;
   tagline: string;
   address: string;
   size: string;
@@ -1998,7 +2009,7 @@ export interface OrgContextValue {
 
   masterData: OrgMasterData;
   updateCfg: (patch: Partial<OrgConfig>) => void;
-  refreshOrgConfig: () => Promise<void>;
+  refreshOrgConfig: (opts?: { silent?: boolean }) => Promise<void>;
   isRefreshingOrgConfig: boolean;
 
   activeBranchId: number | null;
@@ -2039,14 +2050,16 @@ const DEFAULT_ORG_CONFIG: OrgConfig = {
   primaryPeopleType: "staff",
   enabledPeopleTypes: ["staff"],
   attendancePeopleTypes: ["staff"],
-  shiftEnabledPeopleTypes: [],
   modulePeopleTypesByBranch: {},
   module_people_types_by_branch: {},
   enabledStaffTypes: ["office", "field"],
   enabled_staff_types: ["office", "field"],
+  enabledMobilePeopleTypes: [],
+  enabled_mobile_people_types: [],
   verticalConfig: {},
   terminologyOverrides: {},
   orgName: "",
+  orgEmail: "",
   tagline: "",
   address: "",
   size: "",
@@ -2540,6 +2553,21 @@ function normalizeStaffWorkTypes(value: unknown): StaffWorkType[] {
   return cleaned.length ? cleaned : valid;
 }
 
+/**
+ * Mirrors support_db.py's _normalize_mobile_scope: restrict to the known
+ * "student"/"staff" values and dedupe. Unlike normalizeStaffWorkTypes,
+ * an empty/garbage value stays empty — "not configured" means Mobile App
+ * is off, the same closed-by-default posture as DEFAULT_ORG_CONFIG.
+ * enabledMobilePeopleTypes.
+ */
+function normalizeMobilePeopleTypes(value: unknown): MobilePeopleType[] {
+  const valid: MobilePeopleType[] = ["student", "staff"];
+  if (!Array.isArray(value)) return [];
+  return uniqStrings(value).filter((item): item is MobilePeopleType =>
+    valid.includes(item as MobilePeopleType),
+  );
+}
+
 const VALID_ALLOWANCE_MODES: PayrollAllowanceMode[] = [
   "fixed",
   "percent",
@@ -2693,13 +2721,6 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
                     : "staff",
               ],
     ),
-    shiftEnabledPeopleTypes: uniqStrings(
-      Array.isArray(raw.shiftEnabledPeopleTypes)
-        ? raw.shiftEnabledPeopleTypes
-        : Array.isArray(raw.shift_enabled_people_types)
-          ? raw.shift_enabled_people_types
-          : [],
-    ),
     modulePeopleTypesByBranch: isRecord(raw.modulePeopleTypesByBranch)
       ? normalizeModulePeopleTypesByBranch(raw.modulePeopleTypesByBranch)
       : isRecord(raw.module_people_types_by_branch)
@@ -2716,6 +2737,12 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
     enabled_staff_types: normalizeStaffWorkTypes(
       raw.enabledStaffTypes ?? raw.enabled_staff_types,
     ),
+    enabledMobilePeopleTypes: normalizeMobilePeopleTypes(
+      raw.enabledMobilePeopleTypes ?? raw.enabled_mobile_people_types,
+    ),
+    enabled_mobile_people_types: normalizeMobilePeopleTypes(
+      raw.enabledMobilePeopleTypes ?? raw.enabled_mobile_people_types,
+    ),
     verticalConfig: isRecord(raw.verticalConfig)
       ? raw.verticalConfig
       : isRecord(raw.vertical_config)
@@ -2727,6 +2754,7 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
         ? raw.terminology_overrides
         : {},
     orgName: typeof raw.orgName === "string" ? raw.orgName : "",
+    orgEmail: typeof raw.orgEmail === "string" ? raw.orgEmail : "",
     tagline: typeof raw.tagline === "string" ? raw.tagline : "",
     address: typeof raw.address === "string" ? raw.address : "",
     size: typeof raw.size === "string" ? raw.size : "",
@@ -3139,6 +3167,13 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
             orgLevel.enabled_staff_types ??
             cfgSource.enabledStaffTypes ??
             cfgSource.enabled_staff_types,
+          // Same source-of-truth precedence as enabledStaffTypes above, for
+          // Organization.enabled_mobile_people_types.
+          enabledMobilePeopleTypes:
+            orgLevel.enabledMobilePeopleTypes ??
+            orgLevel.enabled_mobile_people_types ??
+            cfgSource.enabledMobilePeopleTypes ??
+            cfgSource.enabled_mobile_people_types,
           verticalConfig:
             result.organization?.vertical_config ??
             result.organization?.verticalConfig ??

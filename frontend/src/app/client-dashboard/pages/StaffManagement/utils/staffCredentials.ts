@@ -12,8 +12,24 @@ import {
   type OrgUserRecord,
   type StaffWorkType,
 } from "../../../contexts/OrgConfigContext";
-import { type StaffFormData } from "../types/staffForm";
 import { type StaffMember } from "../types/staffTypes";
+
+/**
+ * Minimal shape staffIdentitySource/buildStaffCredentials actually need.
+ * Both StaffFormData (the create/edit form) and StaffMember (an existing
+ * directory row, for the "Generate Credentials" row action) structurally
+ * satisfy this, so identity resolution and credential building stay in
+ * exactly one place for both callers.
+ */
+export interface StaffCredentialSource {
+  name: string;
+  email?: string;
+  phone?: string;
+  personCode?: string;
+  branchId: number;
+  staffType: StaffWorkType;
+  moduleAccess: string[];
+}
 
 // ─── Login credential helpers ────────────────────────────────────────────────
 // Dashboard-created employees receive branch-scoped credentials.
@@ -50,7 +66,7 @@ export const safeSlug = (value: string): string =>
 // from elsewhere). The phone value is used as-is — not reformatted — so it
 // matches character-for-character what the backend stores on client_staff
 // and matches against at mobile login time.
-export const staffIdentitySource = (data: StaffFormData): string => {
+export const staffIdentitySource = (data: StaffCredentialSource): string => {
   const emailLocalPart = data.email?.trim().split("@")[0];
   if (emailLocalPart) return emailLocalPart;
 
@@ -61,7 +77,7 @@ export const staffIdentitySource = (data: StaffFormData): string => {
 };
 
 export const buildStaffCredentials = (
-  data: StaffFormData,
+  data: StaffCredentialSource,
   staffId: string,
   userId: string,
   branchName: string,

@@ -14,6 +14,11 @@
  * This file is framework-agnostic and intentionally has no React imports.
  */
 
+import {
+  readShiftEnabledPeopleTypes,
+  resolveSupportsShift,
+} from "./shiftSupport";
+
 export type Primitive = string | number | boolean | null | undefined;
 export type RecordLike = Record<string, unknown>;
 export type PeopleType = string;
@@ -537,25 +542,25 @@ function resolveFeatures(
     hasAnyBranchItems(config.roles) ||
     workforce;
 
-  // Match templateRendering.ts logic: check shiftEnabledPeopleTypes list
-  // If list exists and has items, only enable for types in that list
-  // Otherwise fall back to non-student logic
+  // Same rule as templateRendering.ts (shared via shiftSupport.ts): a saved
+  // list is authoritative even when empty; only a never-configured org falls
+  // back to "non-students use shifts".
   const verticalConfig = isRecord(config.verticalConfig)
     ? config.verticalConfig
     : isRecord(config.vertical_config)
       ? config.vertical_config
       : {};
-  const shiftEnabledList = uniqueLower(
-    config.shiftEnabledPeopleTypes ??
-      config.shift_enabled_people_types ??
-      verticalConfig.shiftEnabledPeopleTypes ??
-      verticalConfig.shift_enabled_people_types,
-    [],
+  const shiftEnabledList = readShiftEnabledPeopleTypes(
+    config.shiftEnabledPeopleTypes,
+    config.shift_enabled_people_types,
+    verticalConfig.shiftEnabledPeopleTypes,
+    verticalConfig.shift_enabled_people_types,
   );
-  const supportsShift =
-    shiftEnabledList.length > 0
-      ? shiftEnabledList.includes(normalizeKey(selectedPeopleType))
-      : !student;
+  const supportsShift = resolveSupportsShift(
+    shiftEnabledList,
+    selectedPeopleType,
+    !student,
+  );
 
   const payrollEnabled = moduleEnabled(config, "payroll");
   const leaveEnabled =

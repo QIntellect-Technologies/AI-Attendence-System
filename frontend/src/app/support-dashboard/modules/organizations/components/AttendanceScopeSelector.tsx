@@ -88,19 +88,26 @@ function sameScope(a: PeopleType[], b: PeopleType[]): boolean {
 function buildScopeOptions(
   available: PeopleType[],
   labels?: Record<string, string>,
+  allowNone: boolean = false,
 ): ScopeOption[] {
   if (available.length === 0) return [];
 
+  const noneOption: ScopeOption = {
+    key: "none",
+    label: "None",
+    description: "Mobile App access is disabled for everyone in this organization.",
+    value: [],
+  };
+
   if (available.length === 1) {
     const only = available[0];
-    return [
-      {
-        key: String(only),
-        label: `${displayLabel(labels, only)} only`,
-        description: `Biometric attendance will be enabled for ${displayLabel(labels, only)}.`,
-        value: [only],
-      },
-    ];
+    const soleOption: ScopeOption = {
+      key: String(only),
+      label: `${displayLabel(labels, only)} only`,
+      description: `Biometric attendance will be enabled for ${displayLabel(labels, only)}.`,
+      value: [only],
+    };
+    return allowNone ? [soleOption, noneOption] : [soleOption];
   }
 
   const singleOptions: ScopeOption[] = available.map((peopleType) => ({
@@ -110,15 +117,16 @@ function buildScopeOptions(
     value: [peopleType],
   }));
 
-  return [
-    ...singleOptions,
-    {
-      key: "all",
-      label: available.map((peopleType) => displayLabel(labels, peopleType)).join(" + "),
-      description: "Biometric attendance will be enabled for all selected template people types.",
-      value: available,
-    },
-  ];
+  const allOption: ScopeOption = {
+    key: "all",
+    label: available.map((peopleType) => displayLabel(labels, peopleType)).join(" + "),
+    description: "Biometric attendance will be enabled for all selected template people types.",
+    value: available,
+  };
+
+  return allowNone
+    ? [...singleOptions, allOption, noneOption]
+    : [...singleOptions, allOption];
 }
 
 /**
@@ -148,8 +156,8 @@ export default function AttendanceScopeSelector({
   );
 
   const options = useMemo(
-    () => buildScopeOptions(available, labels),
-    [available, labels],
+    () => buildScopeOptions(available, labels, !required),
+    [available, labels, required],
   );
 
   if (!available.length) {

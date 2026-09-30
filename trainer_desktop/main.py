@@ -39,6 +39,15 @@ def main() -> None:
         "package for operator verification at import time on the local node — has no "
         "effect on matching, which is always people_type + person_code.",
     )
+    parser.add_argument(
+        "--default-people-type",
+        dest="default_people_type",
+        default=None,
+        help="People type (e.g. student, staff, teacher) to apply to any row whose CSV "
+        "has no people_type column — such as a client-facing export that omits metadata "
+        "on purpose. Required in that case; the trainer will refuse to guess. A row that "
+        "does have its own people_type value in the CSV always uses that instead.",
+    )
     args = parser.parse_args()
 
     enrollment_folder = Path(args.input_folder).expanduser().resolve()
@@ -52,7 +61,12 @@ def main() -> None:
     else:
         csv_path = _default_csv_path(enrollment_folder).resolve()
 
-    result = process_enrollment_folder(enrollment_folder, csv_path, branch_label=args.branch_label)
+    result = process_enrollment_folder(
+        enrollment_folder,
+        csv_path,
+        branch_label=args.branch_label,
+        default_people_type=args.default_people_type,
+    )
 
     logger.info("Rows: %s", result.total_rows)
     logger.info("Trained: %s", len(result.successes))

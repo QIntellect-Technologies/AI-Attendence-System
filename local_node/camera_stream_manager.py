@@ -2195,6 +2195,16 @@ class _CameraState:
     camera_name: str
     camera_location: str
     camera_type: str = "nvr"
+    # This camera's business-context tags (see support_db_camera_assignments
+    # .py's camera_context_assignments table, synced down via get_node_config
+    # -> _local_node_camera_view -> camera_config.normalize_camera). Empty
+    # lists mean "no tag" -> recognize everyone, matching pre-existing
+    # behavior. Deliberately excluded from _camera_signature: changing a
+    # camera's tag doesn't require restarting its reader/processor threads,
+    # so sync_cameras refreshes these three fields in place instead.
+    department_ids: list[str] = field(default_factory=list)
+    class_ids: list[str] = field(default_factory=list)
+    section_ids: list[str] = field(default_factory=list)
     device_index: int = 0
     rtsp_url: str = ""
     rtsp_url_fallback: str = ""
@@ -2274,6 +2284,27 @@ class CameraStreamManager:
     # ── lifecycle ────────────────────────────────────────────────────────
 
     @staticmethod
+    def _camera_allows_match(state: _CameraState, match: dict[str, Any]) -> bool:
+        """Business-context gate: does this camera's department/class/section
+        tagging (see _CameraState.department_ids/class_ids/section_ids)
+        permit marking attendance for this matched person? A camera with no
+        tags at all has no restriction and allows everyone — the same
+        behavior as before this feature existed. A tagged camera allows the
+        match if it shares at least one id, in any of the three categories
+        (a camera can carry several tags — e.g. a hallway camera relevant to
+        two sections, or one tagged to both a department and a class)."""
+        camera_tags = set(state.department_ids) | set(state.class_ids) | set(state.section_ids)
+        if not camera_tags:
+            return True
+        match_tags = {
+            match.get("department_id") or "",
+            match.get("class_id") or "",
+            match.get("section_id") or "",
+        }
+        match_tags.discard("")
+        return bool(camera_tags & match_tags)
+
+    @staticmethod
     def _camera_signature(camera: dict[str, Any]) -> tuple:
         """Fields that require a reader/processor restart if changed."""
         return (
@@ -2313,6 +2344,12 @@ class CameraStreamManager:
                         existing.device_index,
                     )
                     if existing_signature == new_signature:
+                        # Threads don't need a restart, but context tags can
+                        # still have changed (a re-tag doesn't touch any
+                        # signature field) — refresh them on the live state.
+                        existing.department_ids = list(camera.get("department_ids") or [])
+                        existing.class_ids = list(camera.get("class_ids") or [])
+                        existing.section_ids = list(camera.get("section_ids") or [])
                         continue  # unchanged — leave the running threads alone
                     self._stop_camera_locked(camera_id)
                     change_type = "updated"
@@ -2352,6 +2389,9 @@ class CameraStreamManager:
             device_index=device_index,
             rtsp_url=rtsp_url,
             rtsp_url_fallback=rtsp_url_fallback,
+            department_ids=list(camera.get("department_ids") or []),
+            class_ids=list(camera.get("class_ids") or []),
+            section_ids=list(camera.get("section_ids") or []),
         )
         state.reader_thread = threading.Thread(
             target=self._run_reader, args=(state,), name=f"camera-reader-{camera_id}", daemon=True,
@@ -2962,6 +3002,10 @@ class CameraStreamManager:
             if not match:
                 continue
 
+            if not self._camera_allows_match(state, match):
+                perf_stats.count(state.camera_id, "detect.match_outside_camera_context")
+                continue
+
             person_key = f'{match["people_type"]}:{match["person_code"]}'
             if now - state.last_seen_by_person.get(person_key, 0) < DUPLICATE_LOG_SECONDS:
                 continue
@@ -3020,9 +3064,12 @@ class CameraStreamManager:
             # nothing new to publish.
             if row.get("event_type") in (
                 "locked_by_manual_override", "stray_ignored", "outside_checkout_window_ignored",
+                "check_in_pre_shift_ignored", "stray_after_checkout", "check_out_capture_disabled",
             ):
                 continue
-            if row.get("sync_status") != "held_for_review":
+            if row.get("event_type") == "check_out_unconfirmed" and row.get("check_out_hold_reason") == "early":
+                continue
+            if row.get("sync_status") not in ("held_for_review", "checkout_pending_window"):
                 event_type = row.get("event_type", "check_in")
                 is_check_out = event_type == "check_out"
                 snapshot_b64 = self._encode_snapshot(frame, bbox)

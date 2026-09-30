@@ -354,6 +354,7 @@ def get_runtime_identity(config: dict[str, Any] | None = None) -> dict[str, Any]
         "node_id": cfg.get("node_id"),
         "node_label": cfg.get("node_label"),
         "hostname": cfg.get("hostname"),
+        "attendance_workflows": cfg.get("attendance_workflows") or {},
     }
 
 

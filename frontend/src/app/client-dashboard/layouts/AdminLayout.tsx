@@ -33,10 +33,12 @@ import { useAuth } from "../contexts/useAuth";
 import { OrgBranch, useOrg } from "../contexts/OrgConfigContext";
 import { T } from "../components/ui/theme";
 import { resolvePeopleRenderingModel } from "../utils/templateRendering";
-import { useAuthenticatedImageUrl } from "../hooks/useAuthenticatedImageUrl";
+import { Avatar } from "../components/ui/Avatar";
+import { PLATFORM_BRAND } from "../config/platformBrand";
 import { getEnabledModules, MODULE_REGISTRY } from "../config/moduleRegistry";
 import DashboardTabBar from "../components/ui/DashboardTabBar";
 import { getUnreadNotificationCount } from "../pages/Notifications/api/notificationApi";
+import { useDocumentTitle } from "../../../shared/hooks/useDocumentTitle";
 import {
   Sidebar,
   SidebarGroup,
@@ -142,8 +144,8 @@ function getUserBranchId(user: AuthUser | null): number | null {
 function getUserAllowedBranchIds(user: AuthUser | null): number[] {
   const explicit = Array.isArray(user?.allowedBranchIds)
     ? user.allowedBranchIds
-        .map(Number)
-        .filter((n) => Number.isFinite(n) && n > 0)
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0)
     : [];
   if (explicit.length > 0) return [...new Set(explicit)];
   const branchId = getUserBranchId(user);
@@ -314,81 +316,100 @@ function buildSidebarGroups({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// USER AVATAR CHIP
+// IDENTITY CHIP (header) + PLATFORM LOGO (sidebar)
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface UserChipProps {
-  name: string;
-  email: string;
+interface IdentityChipProps {
+  title: string;
+  subtitle: string;
   image: string | null;
-  role: string;
+  /** "logo" = organization (rounded, contained); "avatar" = a person. */
+  variant?: "logo" | "avatar";
 }
 
-const UserChip: React.FC<UserChipProps> = ({ name, email, image, role }) => {
-  const initial = name.trim().charAt(0).toUpperCase() || "A";
-  // Photo routes require an Authorization header the browser can't attach
-  // to a plain <img src> — see useAuthenticatedImageUrl's docstring.
-  const photoSrc = useAuthenticatedImageUrl(image || null);
-
+/**
+ * Header identity block. The header always renders the ORGANIZATION here
+ * (name, logo, contact email) regardless of who is signed in; the signed-in
+ * person is shown only on the My Account button and page.
+ */
+const IdentityChip: React.FC<IdentityChipProps> = ({
+  title,
+  subtitle,
+  image,
+  variant = "logo",
+}) => {
+  const textStyle: React.CSSProperties = {
+    maxWidth: 170,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  };
   return (
     <div
       style={{ display: "flex", alignItems: "center", gap: 9, paddingLeft: 8 }}
     >
-      <div
+      <Avatar
+        src={image}
+        label={title}
+        size={36}
+        shape={variant === "logo" ? "rounded" : "circle"}
+        fit={variant === "logo" ? "contain" : "cover"}
+        fallback={variant === "logo" ? <Fingerprint size={18} color={T.teal600} /> : undefined}
+      />
+      <div style={{ minWidth: 0 }}>
+        <p
+          title={title}
+          style={{ margin: 0, fontSize: 12, fontWeight: 800, color: T.head, ...textStyle }}
+        >
+          {title}
+        </p>
+        {subtitle && (
+          <p
+            title={subtitle}
+            style={{ margin: "2px 0 0", fontSize: 11, color: T.muted, ...textStyle }}
+          >
+            {subtitle}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/** Vendor mark for the sidebar; falls back to the default tile if the file is missing. */
+const PlatformLogo: React.FC = () => {
+  const [failed, setFailed] = useState(false);
+  if (PLATFORM_BRAND.logoSrc && !failed) {
+    return (
+      <img
+        src={PLATFORM_BRAND.logoSrc}
+        alt={PLATFORM_BRAND.name}
+        onError={() => setFailed(true)}
         style={{
           width: 36,
           height: 36,
-          borderRadius: "50%",
-          background: T.teal100,
-          color: T.teal700,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontWeight: 900,
-          fontSize: 13,
-          overflow: "hidden",
+          borderRadius: 8,
+          objectFit: "contain",
+          background: "#fff",
           flexShrink: 0,
         }}
-      >
-        {photoSrc ? (
-          <img
-            src={photoSrc}
-            alt={name}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-        ) : (
-          initial
-        )}
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <p
-          style={{
-            margin: 0,
-            fontSize: 12,
-            fontWeight: 800,
-            color: T.head,
-            maxWidth: 140,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {name}
-        </p>
-        <p
-          style={{
-            margin: "2px 0 0",
-            fontSize: 11,
-            color: T.muted,
-            maxWidth: 140,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {email || role || "Administrator"}
-        </p>
-      </div>
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: 8,
+        background: `linear-gradient(135deg, ${T.teal600}, ${T.teal700})`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      <Fingerprint size={18} color="#fff" />
     </div>
   );
 };
@@ -464,6 +485,9 @@ export default function AdminLayout() {
 
   const navigate = useNavigate();
   const location = useLocation();
+
+  useDocumentTitle("Dashboard");
+
   const {
     cfg,
     activeBranchId,
@@ -532,9 +556,9 @@ export default function AdminLayout() {
     const filteredModules = isStaffDashboard
       ? resolvedModules
       : resolvedModules.filter((module) => {
-          if (module.key === "branches") return visibleBranches.length > 1;
-          return true;
-        });
+        if (module.key === "branches") return visibleBranches.length > 1;
+        return true;
+      });
 
     if (!isStaffDashboard) {
       const branchesModule = MODULE_REGISTRY.find(
@@ -626,7 +650,6 @@ export default function AdminLayout() {
   );
 
   const displayName = adminRecord?.name || user?.name || "User";
-  const displayEmail = adminRecord?.email || user?.email || "";
   const displayImage =
     user?.profileImageUrl ||
     user?.avatarUrl ||
@@ -634,7 +657,15 @@ export default function AdminLayout() {
     adminRecord?.avatarUrl ||
     "";
   const brandName = cfg.orgName || "OrgFlow ERP";
-  const brandLogo = user?.companyLogo || cfg.logo || null;
+  const brandLogo = cfg.logo || user?.companyLogo || null;
+  const orgChip = (
+    <IdentityChip
+      variant="logo"
+      title={brandName}
+      subtitle={cfg.orgEmail || ""}
+      image={brandLogo}
+    />
+  );
 
   // Notifications
   const currentUserId = toTenantId(user?.id);
@@ -679,38 +710,6 @@ export default function AdminLayout() {
   const canAccessSettings =
     !isStaffDashboard || getUserAllowedModules(user).includes("settings");
 
-  // Logo element
-  const logoElement = brandLogo ? (
-    <img
-      src={brandLogo}
-      alt="Organization logo"
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 8,
-        objectFit: "contain",
-        background: "#fff",
-        border: `1px solid ${T.border}`,
-        flexShrink: 0,
-      }}
-    />
-  ) : (
-    <div
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 8,
-        background: `linear-gradient(135deg, ${T.teal600}, ${T.teal700})`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <Fingerprint size={18} color="#fff" />
-    </div>
-  );
-
   const handleLogout = () => {
     logout();
     navigate("/");
@@ -729,8 +728,8 @@ export default function AdminLayout() {
       {/* ── REUSABLE SIDEBAR ── */}
       <Sidebar
         groups={sidebarGroups}
-        logo={logoElement}
-        brandName={brandName}
+        logo={<PlatformLogo />}
+        brandName={PLATFORM_BRAND.name}
         brandSubtext={isStaffDashboard ? "Staff Panel" : "Admin Panel"}
         onLogout={handleLogout}
         mobileOpen={mobileSidebarOpen}
@@ -770,12 +769,7 @@ export default function AdminLayout() {
               <SidebarHamburger onClick={() => setMobileSidebarOpen(true)} />
             </div>
             <div className="admin-dashboard-header__mobile-account">
-              <UserChip
-                name={displayName}
-                email={displayEmail}
-                image={brandLogo}
-                role={user?.role ?? ""}
-              />
+              {orgChip}
             </div>
           </div>
 
@@ -874,7 +868,6 @@ export default function AdminLayout() {
                 width: 38,
                 height: 38,
                 borderRadius: 10,
-                border: `1px solid ${T.border}`,
                 background: "#fff",
                 display: "flex",
                 alignItems: "center",
@@ -882,16 +875,16 @@ export default function AdminLayout() {
                 cursor: "pointer",
               }}
             >
-              <UserCircle2 size={18} color={T.muted} />
+              <Avatar
+                src={displayImage}
+                label={displayName}
+                size={30}
+                fallback={<UserCircle2 size={18} color={T.muted} />}
+              />
             </button>
 
             <div className="admin-dashboard-header__desktop-account">
-              <UserChip
-                name={displayName}
-                email={displayEmail}
-                image={displayImage}
-                role={user?.role ?? ""}
-              />
+              {orgChip}
             </div>
           </div>
         </header>

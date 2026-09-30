@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g, send_file
 from support_auth import require_support_auth, require_capability, login_internal_user, logout_internal_user
 import support_db as db
+import support_db_attendance_settings as settings_db
 import login_throttle
 from logger_config import get_logger
 from pathlib import Path
@@ -243,6 +244,34 @@ def update_organization_staff_type_scope(org_id):
     return _handle(_run)
 
 
+@support_bp.route("/organizations/<org_id>/mobile-scope", methods=["PATCH", "PUT"])
+@require_capability("orgs:write")
+def update_organization_mobile_scope(org_id):
+    """
+    Support-only endpoint.
+
+    Sets which people families (student/staff) this org is commercially
+    entitled to give Mobile App access to. Client Dashboard must never call
+    this — same contract as the staff-type-scope route above. Unlike
+    staff-type-scope, an empty array is valid (Mobile App fully disabled).
+    """
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        enabled_mobile_people_types = payload.get("enabled_mobile_people_types")
+
+        if not isinstance(enabled_mobile_people_types, list):
+            return _err("enabled_mobile_people_types must be an array", 400)
+
+        org = db.update_organization_mobile_scope(
+            org_id=org_id,
+            enabled_mobile_people_types=enabled_mobile_people_types,
+            updated_by=g.support_user["id"],
+        )
+        return _ok({"organization": org})
+
+    return _handle(_run)
+
+
 @support_bp.route("/organizations/<org_id>/archive", methods=["PATCH"])
 @require_capability("orgs:lifecycle")
 def archive_organization(org_id):
@@ -422,6 +451,48 @@ def set_branch_module_people_types_route(org_id, branch_id):
         payload = request.get_json(silent=True) or {}
         config = db.set_branch_module_people_types(org_id, branch_id, payload)
         return _ok({"module_people_types": config})
+
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/attendance-workflow",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def get_attendance_workflow_route(org_id, branch_id):
+    """
+    Support-only endpoint. Returns every people_type that has attendance
+    enabled on this branch, with its attendance_workflow, in a single call,
+    so the UI can render a selector per people_type without one request each.
+    """
+    def _run():
+        settings = settings_db.list_attendance_workflows(org_id, branch_id)
+        return _ok({"capture_settings": settings})
+
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/people-types/<people_type>/attendance-workflow",
+    methods=["PATCH"],
+)
+@require_capability("branches:write")
+def set_attendance_workflow_route(org_id, branch_id, people_type):
+    """
+    Support-only endpoint.
+
+    Sets whether this branch+people_type's local node marks attendance
+    scenario-based (hold-for-review) or simple (auto-confirm) — see
+    local_node.attendance_marking_scenario / attendance_marking_simple.
+    Client Dashboard must never call this — same contract as mobile-scope
+    and module-people-types above.
+    """
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        workflow = payload.get("attendance_workflow")
+        settings = settings_db.set_attendance_workflow(org_id, branch_id, people_type, workflow)
+        return _ok({"capture_settings": settings})
 
     return _handle(_run)
 
@@ -946,4 +1017,154 @@ def reset_org_license_activation_route(license_id):
         )
         return _ok({"license": license_row, "message": "License activation reset successfully."})
 
+    return _handle(_run)
+
+
+# ═════════════════════════════════════════════════════════════
+# CAMERA ↔ NODE / CONTEXT ASSIGNMENT
+# ═════════════════════════════════════════════════════════════
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/nodes",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_active_nodes_route(org_id, branch_id):
+    def _run():
+        return _ok({"nodes": db.list_branch_active_nodes(org_id, branch_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/cameras/assignments",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_camera_assignments(org_id, branch_id):
+    def _run():
+        return _ok({"cameras": db.list_branch_cameras_with_assignment(org_id, branch_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/cameras/<camera_id>/assign-node",
+    methods=["POST"],
+)
+@require_capability("branches:write")
+def assign_camera_to_node_route(org_id, branch_id, camera_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        node_id = str(payload.get("node_id") or "").strip()
+        if not node_id:
+            return _err("node_id is required", 400)
+        return _ok({"camera": db.assign_camera_to_node(org_id, branch_id, camera_id, node_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/cameras/<camera_id>/assign-node",
+    methods=["DELETE"],
+)
+@require_capability("branches:write")
+def unassign_camera_from_node_route(org_id, branch_id, camera_id):
+    def _run():
+        return _ok({"camera": db.unassign_camera_from_node(org_id, branch_id, camera_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/cameras/<camera_id>/context-assignments",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_camera_context_assignments_route(org_id, branch_id, camera_id):
+    def _run():
+        include_inactive = request.args.get("include_inactive") == "true"
+        return _ok({"assignments": db.list_camera_context_assignments(
+            org_id, branch_id, camera_id=camera_id, include_inactive=include_inactive
+        )})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/context-assignments",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_context_assignments_route(org_id, branch_id):
+    """Every context assignment for the branch in one call — lets the
+    camera-assignment screen load all cameras' tags up front instead of
+    firing one request per camera."""
+    def _run():
+        include_inactive = request.args.get("include_inactive") == "true"
+        return _ok({"assignments": db.list_camera_context_assignments(
+            org_id, branch_id, include_inactive=include_inactive
+        )})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/departments",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_departments_route(org_id, branch_id):
+    def _run():
+        return _ok({"departments": db.list_branch_departments(org_id, branch_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/classes",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_classes_route(org_id, branch_id):
+    def _run():
+        return _ok({"classes": db.list_branch_classes(org_id, branch_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/classes/<class_id>/sections",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_class_sections_route(org_id, branch_id, class_id):
+    def _run():
+        return _ok({"sections": db.list_class_sections(org_id, branch_id, class_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/sections",
+    methods=["GET"],
+)
+@require_capability("branches:read")
+def list_branch_sections_route(org_id, branch_id):
+    def _run():
+        return _ok({"sections": db.list_branch_sections(org_id, branch_id)})
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/cameras/<camera_id>/context-assignments",
+    methods=["POST"],
+)
+@require_capability("branches:write")
+def create_camera_context_assignment_route(org_id, branch_id, camera_id):
+    def _run():
+        payload = request.get_json(silent=True) or {}
+        return _ok({"assignment": db.create_camera_context_assignment(org_id, branch_id, camera_id, payload)}, 201)
+    return _handle(_run)
+
+
+@support_bp.route(
+    "/organizations/<org_id>/branches/<branch_id>/context-assignments/<assignment_id>",
+    methods=["DELETE"],
+)
+@require_capability("branches:write")
+def deactivate_camera_context_assignment_route(org_id, branch_id, assignment_id):
+    def _run():
+        return _ok({"assignment": db.deactivate_camera_context_assignment(org_id, branch_id, assignment_id)})
     return _handle(_run)

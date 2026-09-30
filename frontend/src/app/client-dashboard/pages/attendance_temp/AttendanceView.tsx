@@ -37,7 +37,8 @@ import {
   type AttendanceRecordEdit,
 } from "./api/attendanceApi";
 import { useOrg } from "../../contexts/OrgConfigContext";
-import { useModule } from "../../contexts/ModuleContext";
+import { useModule, type LeaveRequest } from "../../contexts/ModuleContext";
+import { isModuleEnabled } from "../../utils/moduleAccess";
 import {
   useAttendanceBranchSummaries,
   type BranchAttendanceSummary,
@@ -61,7 +62,10 @@ import {
   readColumnValue,
   type TemplateColumn,
 } from "../../utils/templateColumns";
-import { resolveModulePeopleTypes } from "../../utils/templateRendering";
+import {
+  isStudentPeopleType,
+  resolveModulePeopleTypes,
+} from "../../utils/templateRendering";
 
 import {
   DAY_STATUS_LABELS,
@@ -239,6 +243,9 @@ interface ApiAttendance {
    *  AttendanceTimingFields for the shared definition/migration note. */
   capture_channel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
   captureChannel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  /** Physical camera id — resolved to a display name against cfg.cameras. */
+  camera_id?: string | number | null;
+  cameraId?: string | number | null;
   branchId?: number;
   branch_id?: number | string;
   staffId?: string | number;
@@ -430,8 +437,6 @@ interface AttendanceExportRow {
   late: number;
   leaves: number;
   absents: number;
-  offDays: number;
-  restDays: number;
   attendanceRate: string;
   firstCheckIn: string;
   lastCheckOut: string;
@@ -573,6 +578,31 @@ const getStaffCode = (staffMember: AttendanceStaff): string => {
 
   const text = String(value ?? "").trim();
   return text || "—";
+};
+
+
+const countApprovedLeaveDays = (
+  staffMember: AttendanceStaff,
+  dates: string[],
+  leaveRecords: LeaveRequest[],
+): number => {
+  const staffId = String(staffMember.id);
+  const staffLeaves = leaveRecords.filter((leave) => {
+    if (String(leave.status ?? "").toLowerCase() !== "approved") return false;
+    const leaveStaffId = String(
+      leave.staffId ?? leave.staff_id ?? leave.userId ?? leave.user_id ?? "",
+    );
+    return leaveStaffId === staffId;
+  });
+  if (staffLeaves.length === 0) return 0;
+
+  return dates.filter((date) =>
+    staffLeaves.some(
+      (leave) =>
+        date >= (leave.startDate ?? leave.start_date ?? "") &&
+        date <= (leave.endDate ?? leave.end_date ?? ""),
+    ),
+  ).length;
 };
 
 const getStaffDesignation = (staffMember: AttendanceStaff): string =>
@@ -1065,7 +1095,7 @@ const CAPTURE_CHANNEL_LABELS: Record<
   { label: string; className: string }
 > = {
   local_node: {
-    label: "Local Node",
+    label: "On-Site",
     className: "bg-indigo-50 text-indigo-600 border-indigo-100",
   },
   cloud: {
@@ -1089,6 +1119,21 @@ function captureChannelBadge(
   return (
     CAPTURE_CHANNEL_LABELS[value as keyof typeof CAPTURE_CHANNEL_LABELS] ?? null
   );
+}
+
+/**
+ * Resolves a raw camera_id to its human name via cfg.cameras (already
+ * hydrated org-wide). Falls back to the raw id if not found, rather than
+ * hiding a real value behind "—".
+ */
+function resolveCameraLabel(
+  cameraId: string | number | null | undefined,
+  camerasById: Map<string, string>,
+): string | null {
+  if (cameraId === null || cameraId === undefined || cameraId === "") {
+    return null;
+  }
+  return camerasById.get(String(cameraId)) ?? String(cameraId);
 }
 
 const normalizeAttendanceForView = (
@@ -1138,6 +1183,7 @@ const normalizeAttendanceForView = (
   check_out_status: record.check_out_status ?? record.checkOutStatus ?? null,
   notes: record.notes ?? null,
   capture_channel: record.capture_channel ?? record.captureChannel ?? null,
+  camera_id: record.camera_id ?? record.cameraId ?? null,
   day_status: record.day_status ?? record.dayStatus ?? null,
   dayStatus: record.day_status ?? record.dayStatus ?? null,
   check_out_payroll_decision:
@@ -1325,6 +1371,9 @@ export default function AttendanceView() {
   // 404/400 from /api/client/bootstrap). Reading localStorage directly here
   // would silently ignore that guard and risk showing stale/other-tenant data.
   const { organizationId, cfg } = useOrg();
+  const moduleCtx = useModule();
+  const leaveRecords = moduleCtx.leave.allItems ?? moduleCtx.leave.items ?? [];
+  const leaveModuleEnabled = isModuleEnabled(cfg.modules, "leave");
   const organizationIdForApi = organizationId ? cleanId(organizationId) : null;
   const useRealApi =
     Boolean(organizationIdForApi) ||
@@ -1438,6 +1487,31 @@ export default function AttendanceView() {
     () => dailyAttendanceColumns.filter((column) => column.key !== "action"),
     [dailyAttendanceColumns],
   );
+
+  // Payroll decisions only exist when the org purchased the Payroll module
+  // AND for payroll-eligible people (staff, workers, ...) -- never students.
+  // The whole column is dropped when the module is missing or the scope is
+  // student-only; in a mixed scope ("all") it stays for the non-student rows
+  // and student rows render an empty cell (see isPayrollApplicable below).
+  // Backend enforces the same rules.
+  const showPayrollDecisionColumn =
+    isModuleEnabled(cfg.modules, "payroll") && !peopleModel.isStudentScope;
+  const isPayrollApplicable = (member: unknown): boolean =>
+    !isStudentPeopleType(
+      (member as any)?.peopleType ?? (member as any)?.people_type,
+    );
+
+  // Flattened id → display-name lookup for the Camera column, built once
+  // from cfg.cameras (already hydrated org-wide by OrgConfigContext).
+  const camerasById = useMemo(() => {
+    const map = new Map<string, string>();
+    Object.values(cfg.cameras).forEach((branchCameras) => {
+      branchCameras.forEach((camera) => {
+        map.set(String(camera.id), camera.name);
+      });
+    });
+    return map;
+  }, [cfg.cameras]);
 
   const rangeAttendanceColumns = useMemo(
     () =>
@@ -2005,6 +2079,7 @@ export default function AttendanceView() {
                 "",
               notes: realRecord.notes ?? null,
               captureChannel: realRecord.capture_channel ?? null,
+              cameraId: realRecord.camera_id ?? null,
               dayStatus: realRecord.day_status ?? null,
               // Which column holds the decision depends on BOTH day_status
               // and capture_channel -- only a mobile-sourced 'late' row is
@@ -2035,6 +2110,7 @@ export default function AttendanceView() {
             workDuration: "",
             notes: null,
             captureChannel: null,
+            cameraId: null,
             dayStatus: null,
             payrollDecision: null,
             isPresent: false,
@@ -2106,15 +2182,11 @@ export default function AttendanceView() {
       const onTimeDays = records.filter(
         (record) => record.isPresent && !record.isLate,
       ).length;
-      const leaveDays = records.filter((record) =>
-        String(record.status).toUpperCase().includes("LEAVE"),
-      ).length;
-      const offDays = records.filter((record) =>
-        String(record.status).toUpperCase().includes("OFF"),
-      ).length;
-      const restDays = records.filter((record) =>
-        String(record.status).toUpperCase().includes("REST"),
-      ).length;
+     const leaveDays = countApprovedLeaveDays(
+        member,
+        records.map((record) => record.date),
+        leaveRecords,
+      );
 
       const branchTimezone = getBranchTimezone(branchId, branches);
       return {
@@ -2132,8 +2204,6 @@ export default function AttendanceView() {
         late: summary.lateDays,
         leaves: leaveDays,
         absents: summary.absentDays,
-        offDays,
-        restDays,
         attendanceRate: `${summary.attendanceRate}%`,
         firstCheckIn: selectedDayRecord?.inTime
           ? formatTimeForDisplay(selectedDayRecord.inTime, branchTimezone)
@@ -2183,16 +2253,16 @@ export default function AttendanceView() {
       { header: "Present", key: "present" as keyof AttendanceExportRow },
       { header: "On-Time", key: "onTime" as keyof AttendanceExportRow },
       { header: "Late", key: "late" as keyof AttendanceExportRow },
-      { header: "Leaves", key: "leaves" as keyof AttendanceExportRow },
+       ...(leaveModuleEnabled
+        ? [{ header: "Leaves", key: "leaves" as keyof AttendanceExportRow }]
+        : []),
       { header: "Absents", key: "absents" as keyof AttendanceExportRow },
-      { header: "Off Days", key: "offDays" as keyof AttendanceExportRow },
-      { header: "Rest Days", key: "restDays" as keyof AttendanceExportRow },
       {
         header: "Attendance Rate",
         key: "attendanceRate" as keyof AttendanceExportRow,
       },
     ],
-    [attendanceTemplateColumns, shouldHideTimeColumns],
+    [attendanceTemplateColumns, shouldHideTimeColumns, leaveModuleEnabled],
   );
 
   const formatExportPeriod = (date?: string | null): string =>
@@ -2738,15 +2808,24 @@ export default function AttendanceView() {
                      * on an already-classified day, distinct from Day Status
                      * itself. See derivePayrollDecisionBadge; currently only
                      * ever populated for local-node rows. */}
-                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                      Decision
-                    </th>
+                    {showPayrollDecisionColumn && (
+                      <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                        Decision
+                      </th>
+                    )}
                     {/* Same "fixed column" reasoning as Notes just above --
                      * capture_channel isn't part of peopleModel.attendanceColumns
                      * either. Shows which surface (local node / cloud / mobile
                      * app) actually captured this row. */}
                     <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                       Channel
+                    </th>
+                    {/* Same "fixed column" reasoning as Notes above --
+                     * camera_id isn't part of peopleModel.attendanceColumns
+                     * either. Shows the specific camera that recognized
+                     * this person, resolved to a name via camerasById. */}
+                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                      Camera
                     </th>
                     {/* Action (Edit/Save/Mark Absent) is intentionally last —
                      * see visibleDailyAttendanceColumns above. */}
@@ -2970,12 +3049,32 @@ export default function AttendanceView() {
                             );
                           })()}
                         </td>
+                        {showPayrollDecisionColumn && (
+                          <td className="px-6 py-4 text-center">
+                            {(() => {
+                              const badge = isPayrollApplicable(member)
+                                ? derivePayrollDecisionBadge({
+                                    dayStatus: todayRecord?.dayStatus,
+                                    payrollDecision: todayRecord?.payrollDecision,
+                                  })
+                                : null;
+                              return badge ? (
+                                <span
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
+                                >
+                                  {badge.label}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              );
+                            })()}
+                          </td>
+                        )}
                         <td className="px-6 py-4 text-center">
                           {(() => {
-                            const badge = derivePayrollDecisionBadge({
-                              dayStatus: todayRecord?.dayStatus,
-                              payrollDecision: todayRecord?.payrollDecision,
-                            });
+                            const badge = captureChannelBadge(
+                              todayRecord?.captureChannel,
+                            );
                             return badge ? (
                               <span
                                 className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
@@ -2989,14 +3088,13 @@ export default function AttendanceView() {
                         </td>
                         <td className="px-6 py-4 text-center">
                           {(() => {
-                            const badge = captureChannelBadge(
-                              todayRecord?.captureChannel,
+                            const cameraLabel = resolveCameraLabel(
+                              todayRecord?.cameraId,
+                              camerasById,
                             );
-                            return badge ? (
-                              <span
-                                className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
-                              >
-                                {badge.label}
+                            return cameraLabel ? (
+                              <span className="text-sm text-gray-700">
+                                {cameraLabel}
                               </span>
                             ) : (
                               <span className="text-gray-300 text-sm">—</span>
@@ -3101,7 +3199,7 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={dailyAttendanceColumns.length + 4}
+                        colSpan={dailyAttendanceColumns.length + (showPayrollDecisionColumn ? 5 : 4)}
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">
@@ -3166,10 +3264,10 @@ export default function AttendanceView() {
                         { key: "totalDays", label: "Total Days" },
                         { key: "present", label: "Present" },
                         { key: "late", label: "Late" },
-                        { key: "leaves", label: "Leaves" },
+                        ...(leaveModuleEnabled
+                          ? [{ key: "leaves", label: "Leaves" }]
+                          : []),
                         { key: "absents", label: "Absents" },
-                        { key: "offDays", label: "Off Days" },
-                        { key: "restDays", label: "Rest Days" },
                         { key: "attendanceRate", label: "Attendance Rate" },
                       ].map((column) => (
                         <th
@@ -3183,16 +3281,12 @@ export default function AttendanceView() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {paginatedAttendanceRows.map(
-                      ({ staff: member, records, summary }) => {
-                        const leaveDays = records.filter((record) =>
-                          String(record.status).toUpperCase().includes("LEAVE"),
-                        ).length;
-                        const offDays = records.filter((record) =>
-                          String(record.status).toUpperCase().includes("OFF"),
-                        ).length;
-                        const restDays = records.filter((record) =>
-                          String(record.status).toUpperCase().includes("REST"),
-                        ).length;
+                        ({ staff: member, records, summary }) => {
+                        const leaveDays = countApprovedLeaveDays(
+                          member,
+                          records.map((record) => record.date),
+                          leaveRecords,
+                        );
                         return (
                           <tr
                             key={String(member.id)}
@@ -3225,17 +3319,13 @@ export default function AttendanceView() {
                             <td className="px-6 py-4 text-sm font-semibold text-orange-600">
                               {summary.lateDays}
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {leaveDays}
-                            </td>
+                             {leaveModuleEnabled && (
+                              <td className="px-6 py-4 text-sm text-gray-600">
+                                {leaveDays}
+                              </td>
+                            )}
                             <td className="px-6 py-4 text-sm font-semibold text-rose-600">
                               {summary.absentDays}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {offDays}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {restDays}
                             </td>
                             <td className="px-6 py-4 text-sm font-bold text-gray-900">
                               {summary.attendanceRate}%
@@ -3247,7 +3337,11 @@ export default function AttendanceView() {
                     {attendanceRows.length === 0 && (
                       <tr>
                         <td
-                          colSpan={rangeAttendanceColumns.length + 10}
+                          colSpan={
+                            rangeAttendanceColumns.length +
+                            7 +
+                            (leaveModuleEnabled ? 1 : 0)
+                          }
                           className="px-6 py-16 text-center"
                         >
                           <div className="flex flex-col items-center gap-3 text-gray-400">

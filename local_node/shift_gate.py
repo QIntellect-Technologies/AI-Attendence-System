@@ -222,6 +222,21 @@ def _resolve_window(
     return {**branch_window, **personal_window}
 
 
+def capture_check_out_enabled(
+    people_type: str, person_code: str | None, config: dict[str, Any] | None = None,
+) -> bool:
+    """Whether this person's resolved shift window wants checkout capture at
+    all. Defaults to True when no window is configured or the field is
+    unset. Set 'capture_check_out': false on a shift to make
+    attendance_marking_simple skip the checkout leg for that person
+    entirely."""
+    cfg = config or load_config()
+    window = _resolve_window(cfg, people_type, person_code)
+    if not window:
+        return True
+    return bool(window.get("capture_check_out", True))
+
+
 def is_check_in_window_closed(
     people_type: str,
     event_dt_utc: datetime,

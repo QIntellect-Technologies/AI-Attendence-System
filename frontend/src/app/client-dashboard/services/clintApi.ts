@@ -69,8 +69,8 @@ export async function fetchClientJson<T>(
     throw new Error(
       String(
         (data as { message?: unknown; error?: unknown }).message ||
-          (data as { message?: unknown; error?: unknown }).error ||
-          "Request failed.",
+        (data as { message?: unknown; error?: unknown }).error ||
+        "Request failed.",
       ),
     );
   }
@@ -98,4 +98,24 @@ export async function loadClientBootstrap<T>(
   return fetchClientJson<T>(
     `/api/client/bootstrap?organization_id=${encodeURIComponent(String(organizationId))}`,
   );
+}
+
+
+export async function saveOrganizationLogo(
+  logo: string,
+  fileName: string,
+): Promise<{ success: boolean; logo: string | null }> {
+  return fetchClientJson("/api/client/organization/logo", {
+    method: "PUT",
+    body: JSON.stringify({ logo, file_name: fileName }),
+  });
+}
+
+export async function removeOrganizationLogo(): Promise<{
+  success: boolean;
+  logo: string | null;
+}> {
+  return fetchClientJson("/api/client/organization/logo", {
+    method: "DELETE",
+  });
 }

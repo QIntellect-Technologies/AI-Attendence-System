@@ -311,6 +311,20 @@ def delete_shift(org_id: str, branch_id: str, shift_id: str) -> bool:
     _get_branch_owned_by_org(org_id, branch_key)
     sb = get_supabase()
 
+    default_for = (
+        sb.table("attendance_capture_settings")
+        .select("people_type")
+        .eq("org_id", str(org_id))
+        .eq("default_shift_id", str(shift_id))
+        .limit(1)
+        .execute()
+    )
+    if default_for.data:
+        raise ValueError(
+            f"This shift is the branch default for {default_for.data[0]['people_type']} — "
+            "choose another default shift before deleting it"
+        )
+
     # Unassign every tier pointing at this shift before deleting, so no
     # attendance write ever resolves a dangling shift reference. Previously
     # this only cleared client_staff.shift_id_ref; departments and

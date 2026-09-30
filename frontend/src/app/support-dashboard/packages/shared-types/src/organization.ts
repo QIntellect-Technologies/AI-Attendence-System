@@ -144,6 +144,15 @@ export interface Organization {
    */
   enabled_staff_types?: StaffWorkType[];
 
+  /**
+   * Support-owned commercial scope: which people families ("student",
+   * "staff") this organization is entitled to give Mobile App access to.
+   * Drives whether Staff Type Scope is askable and whether login
+   * credentials get generated for that family in the Client Dashboard.
+   * Defaults to none for organizations created before this field existed.
+   */
+  enabled_mobile_people_types?: PeopleType[];
+
   attendance_mode: AttendanceMode;
   node_offline_threshold_seconds: number | null;
   max_branches: number;
@@ -176,6 +185,7 @@ export interface CreateOrganizationPayload {
   business_type?: BusinessType;
   attendance_people_types?: PeopleType[];
   enabled_staff_types?: StaffWorkType[];
+  enabled_mobile_people_types?: PeopleType[];
   people_kind?: PeopleKind;
   terminology_overrides?: TerminologyOverrides;
   attendance_mode: AttendanceMode;
@@ -198,6 +208,7 @@ export interface UpdateOrganizationPayload {
   people_kind?: PeopleKind;
   terminology_overrides?: TerminologyOverrides | null;
   enabled_staff_types?: StaffWorkType[];
+  enabled_mobile_people_types?: PeopleType[];
   attendance_mode?: AttendanceMode;
   node_offline_threshold_seconds?: number | null;
   max_branches?: number;
@@ -214,6 +225,11 @@ export interface UpdateOrganizationTemplatePayload {
 export interface UpdateOrganizationStaffTypeScopePayload {
   id: string;
   enabled_staff_types: StaffWorkType[];
+}
+
+export interface UpdateOrganizationMobileScopePayload {
+  id: string;
+  enabled_mobile_people_types: PeopleType[];
 }
 
 export interface ArchiveOrganizationPayload {
@@ -332,6 +348,7 @@ export interface MarkInvoicePaidPayload {
 export type NodeStatus = "online" | "offline" | "never_connected" | string;
 
 export interface NodeHealth {
+  id: string;
   branch_id: string;
   branch_name: string;
   node_id: string | null;

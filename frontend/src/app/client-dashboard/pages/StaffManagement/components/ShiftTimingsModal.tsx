@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/ShiftTimingsModal.tsx
+ * pages/StaffManagement/components/ShiftTimingsModal.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Branch shift CRUD. Draft rows (id prefixed "draft-") exist only in local
  * state until Save, which is what tells the save handler whether a row needs

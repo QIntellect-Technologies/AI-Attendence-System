@@ -1,5 +1,5 @@
 /**
- * modules/staff/components/StaffAttendanceOverridesPanel.tsx
+ * pages/StaffManagement/components/StaffAttendanceOverridesPanel.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Per-person manual attendance instructions, rendered inside the profile
  * drawer. Reads and writes the same manual_attendance_instructions table as

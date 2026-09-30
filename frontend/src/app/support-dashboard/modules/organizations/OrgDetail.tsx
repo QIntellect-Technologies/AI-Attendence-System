@@ -21,6 +21,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Building2,
+  Camera,
   CheckCircle2,
   KeyRound,
   Loader2,
@@ -35,6 +36,7 @@ import {
   RotateCcw,
   ShieldAlert,
   Trash2,
+  Workflow,
 } from "lucide-react";
 import {
   branchesApi,
@@ -46,8 +48,10 @@ import {
   organizationsApi,
 } from "./api/organizationsApi";
 import {
+  useUpdateOrganization,
   useUpdateOrganizationTemplate,
   useUpdateOrganizationStaffTypeScope,
+  useUpdateOrganizationMobileScope,
   useVerticalTemplates,
 } from "./hooks/useOrganizations";
 import BusinessTemplateSelect from "./components/BusinessTemplateSelect";
@@ -68,6 +72,8 @@ import type {
   UpdateBranchPayload,
 } from "../../packages/shared-types/src/organization";
 import InstallTokenModal from "../../components/InstallTokenModal";
+import CameraAssignmentModal from "../../components/CameraAssignmentModal";
+import AttendanceWorkflowModal from "./components/AttendanceWorkflowModal";
 import {
   getModulePeopleTypesForBranch,
   normalizePeopleType,
@@ -114,6 +120,7 @@ const T = {
   text: "#334155",
   textBody: "#334155",
   textMuted: "#64748b",
+  muted: "#6b7d8f",
   textLight: "#94a3b8",
   red: "#ef4444",
   red50: "#fef2f2",
@@ -165,13 +172,13 @@ function statusChip(status?: string) {
     : ["pending", "grace_period"].includes(normalized)
       ? T.amber
       : [
-            "inactive",
-            "suspended",
-            "overdue",
-            "offline",
-            "failed",
-            "error",
-          ].includes(normalized)
+        "inactive",
+        "suspended",
+        "overdue",
+        "offline",
+        "failed",
+        "error",
+      ].includes(normalized)
         ? T.red
         : T.textMuted;
   const bg =
@@ -436,9 +443,14 @@ function OverviewTab({
     useUpdateOrganizationTemplate();
   const { updateOrganizationStaffTypeScope, isUpdatingStaffTypeScope } =
     useUpdateOrganizationStaffTypeScope();
+  const { updateOrganizationMobileScope, isUpdatingMobileScope } =
+    useUpdateOrganizationMobileScope();
+  const { updateOrganization, isUpdating: isUpdatingTrainerCsv } =
+    useUpdateOrganization();
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
   const [isEditingStaffTypeScope, setIsEditingStaffTypeScope] = useState(false);
+  const [isEditingMobileScope, setIsEditingMobileScope] = useState(false);
   const [deleteReason, setDeleteReason] = useState(org.delete_reason || "");
   const [enabledStaffTypes, setEnabledStaffTypes] = useState<
     ("office" | "field")[]
@@ -447,6 +459,9 @@ function OverviewTab({
       ? org.enabled_staff_types
       : ["office", "field"],
   );
+  const [enabledMobilePeopleTypes, setEnabledMobilePeopleTypes] = useState<
+    PeopleType[]
+  >(Array.isArray(org.enabled_mobile_people_types) ? org.enabled_mobile_people_types : []);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState({
     name: org.name || "",
@@ -466,9 +481,9 @@ function OverviewTab({
     PeopleType[]
   >(
     org.attendance_people_types ||
-      org.vertical_config?.attendance_people_types ||
-      org.enabled_people_types ||
-      [],
+    org.vertical_config?.attendance_people_types ||
+    org.enabled_people_types ||
+    [],
   );
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [pendingProfilePayload, setPendingProfilePayload] =
@@ -530,9 +545,9 @@ function OverviewTab({
     setBusinessType(org.business_type || "company");
     setAttendancePeopleTypes(
       org.attendance_people_types ||
-        org.vertical_config?.attendance_people_types ||
-        org.enabled_people_types ||
-        [],
+      org.vertical_config?.attendance_people_types ||
+      org.enabled_people_types ||
+      [],
     );
   }, [org]);
 
@@ -546,10 +561,10 @@ function OverviewTab({
   const selectedDropCount = dropSelection.length;
   const requiredDropCount = pendingProfilePayload?.max_branches
     ? Math.max(
-        0,
-        dropCandidateBranches.length -
-          Number(pendingProfilePayload.max_branches),
-      )
+      0,
+      dropCandidateBranches.length -
+      Number(pendingProfilePayload.max_branches),
+    )
     : 0;
 
   const saveProfile = async () => {
@@ -698,6 +713,20 @@ function OverviewTab({
       setIsEditingStaffTypeScope(false);
     } catch (err) {
       setError(extractApiError(err, "Failed to update staff type scope"));
+    }
+  };
+
+  const saveMobileScope = async () => {
+    setError(null);
+    try {
+      const updated = await updateOrganizationMobileScope(
+        org.id,
+        enabledMobilePeopleTypes,
+      );
+      onOrgUpdated(updated);
+      setIsEditingMobileScope(false);
+    } catch (err) {
+      setError(extractApiError(err, "Failed to update mobile app scope"));
     }
   };
 
@@ -958,9 +987,9 @@ function OverviewTab({
                   setBusinessType(org.business_type || "company");
                   setAttendancePeopleTypes(
                     org.attendance_people_types ||
-                      org.vertical_config?.attendance_people_types ||
-                      org.enabled_people_types ||
-                      [],
+                    org.vertical_config?.attendance_people_types ||
+                    org.enabled_people_types ||
+                    [],
                   );
                   setIsEditingTemplate(false);
                 }}
@@ -1090,20 +1119,19 @@ function OverviewTab({
       </SectionCard>
 
       <SectionCard
-        title="Staff Type Scope"
+        title="Mobile App Access"
         action={
-          isEditingStaffTypeScope ? (
+          isEditingMobileScope ? (
             <div style={{ display: "flex", gap: 8 }}>
               <button
                 type="button"
                 onClick={() => {
-                  setEnabledStaffTypes(
-                    Array.isArray(org.enabled_staff_types) &&
-                      org.enabled_staff_types.length
-                      ? org.enabled_staff_types
-                      : ["office", "field"],
+                  setEnabledMobilePeopleTypes(
+                    Array.isArray(org.enabled_mobile_people_types)
+                      ? org.enabled_mobile_people_types
+                      : [],
                   );
-                  setIsEditingStaffTypeScope(false);
+                  setIsEditingMobileScope(false);
                 }}
                 style={secondaryButton()}
               >
@@ -1111,8 +1139,8 @@ function OverviewTab({
               </button>
               <button
                 type="button"
-                onClick={saveStaffTypeScope}
-                disabled={isUpdatingStaffTypeScope}
+                onClick={saveMobileScope}
+                disabled={isUpdatingMobileScope}
                 style={primaryButton()}
               >
                 <Save size={14} /> Save Scope
@@ -1121,7 +1149,7 @@ function OverviewTab({
           ) : (
             <button
               type="button"
-              onClick={() => setIsEditingStaffTypeScope(true)}
+              onClick={() => setIsEditingMobileScope(true)}
               style={secondaryButton()}
             >
               <Pencil size={14} /> Change Scope
@@ -1129,18 +1157,17 @@ function OverviewTab({
           )
         }
       >
-        {isEditingStaffTypeScope ? (
+        {isEditingMobileScope ? (
           <div style={{ display: "grid", gap: 12 }}>
             <div style={{ display: "grid", gap: 8 }}>
-              <div style={labelStyle}>Staff Attendance Enabled For</div>
+              <div style={labelStyle}>Mobile App Enabled For</div>
               <AttendanceScopeSelector
-                availablePeopleTypes={["office", "field"]}
-                value={enabledStaffTypes}
-                onChange={(next) =>
-                  setEnabledStaffTypes(next as ("office" | "field")[])
-                }
-                labels={{ office: "Office Staff", field: "Field Staff" }}
-                disabled={isUpdatingStaffTypeScope}
+                availablePeopleTypes={enabledPeopleTypes}
+                value={enabledMobilePeopleTypes}
+                onChange={(next) => setEnabledMobilePeopleTypes(next)}
+                labels={templateLabels}
+                disabled={isUpdatingMobileScope}
+                required={false}
               />
             </div>
 
@@ -1156,19 +1183,15 @@ function OverviewTab({
               }}
             >
               Commercial, Support-owned scope based on what this client is
-              paying for. It controls which staff work types (Office/Field) the
-              Client Dashboard's Staff Management can add — separate from
-              biometric attendance scope above, and from module entitlements on
-              the Modules tab.
+              paying for. It controls which people families can be given
+              Mobile App access, whether Staff Type Scope is askable below,
+              and whether login credentials get generated for that family in
+              the Client Dashboard.
             </div>
           </div>
-        ) : (
+        ) : enabledMobilePeopleTypes.length > 0 ? (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {(Array.isArray(org.enabled_staff_types) &&
-            org.enabled_staff_types.length
-              ? org.enabled_staff_types
-              : ["office", "field"]
-            ).map((type) => (
+            {enabledMobilePeopleTypes.map((type) => (
               <span
                 key={type}
                 style={{
@@ -1180,12 +1203,156 @@ function OverviewTab({
                   fontWeight: 900,
                 }}
               >
-                {type === "field" ? "Field Staff" : "Office Staff"}
+                {unitLabel(templateLabels, type)}
               </span>
             ))}
           </div>
+        ) : (
+          <div style={{ fontSize: 12, fontWeight: 700, color: T.muted }}>
+            Mobile App is disabled for this organization.
+          </div>
         )}
       </SectionCard>
+
+      <SectionCard
+        title="Trainer CSV Export"
+        action={
+          <button
+            type="button"
+            onClick={async () => {
+              setError(null);
+              try {
+                const updated = await updateOrganization({
+                  id: org.id,
+                  vertical_config: {
+                    ...org.vertical_config,
+                    trainer_csv_export_enabled: !org.vertical_config?.trainer_csv_export_enabled,
+                  },
+                });
+                onOrgUpdated(updated);
+              } catch (err) {
+                setError(extractApiError(err, "Failed to update trainer CSV export"));
+              }
+            }}
+            disabled={isUpdatingTrainerCsv}
+            style={org.vertical_config?.trainer_csv_export_enabled ? primaryButton() : secondaryButton()}
+          >
+            {isUpdatingTrainerCsv ? (
+              <Loader2 size={14} />
+            ) : org.vertical_config?.trainer_csv_export_enabled ? (
+              <CheckCircle2 size={14} />
+            ) : (
+              <Plus size={14} />
+            )}
+            {org.vertical_config?.trainer_csv_export_enabled ? "Disable" : "Enable"}
+          </button>
+        }
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: T.muted }}>
+          Shows the "Trainer CSV" export button on this org's People
+          Management page (used to feed the face-recognition trainer).
+        </div>
+      </SectionCard>
+
+      {enabledMobilePeopleTypes.includes("staff") && (
+        <SectionCard
+          title="Staff Type Scope"
+          action={
+            isEditingStaffTypeScope ? (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnabledStaffTypes(
+                      Array.isArray(org.enabled_staff_types) &&
+                        org.enabled_staff_types.length
+                        ? org.enabled_staff_types
+                        : ["office", "field"],
+                    );
+                    setIsEditingStaffTypeScope(false);
+                  }}
+                  style={secondaryButton()}
+                >
+                  <X size={14} /> Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveStaffTypeScope}
+                  disabled={isUpdatingStaffTypeScope}
+                  style={primaryButton()}
+                >
+                  <Save size={14} /> Save Scope
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsEditingStaffTypeScope(true)}
+                style={secondaryButton()}
+              >
+                <Pencil size={14} /> Change Scope
+              </button>
+            )
+          }
+        >
+          {isEditingStaffTypeScope ? (
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={labelStyle}>Staff Attendance Enabled For</div>
+                <AttendanceScopeSelector
+                  availablePeopleTypes={["office", "field"]}
+                  value={enabledStaffTypes}
+                  onChange={(next) =>
+                    setEnabledStaffTypes(next as ("office" | "field")[])
+                  }
+                  labels={{ office: "Office Staff", field: "Field Staff" }}
+                  disabled={isUpdatingStaffTypeScope}
+                />
+              </div>
+
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  background: T.amber50,
+                  color: T.amber,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  lineHeight: 1.5,
+                }}
+              >
+                Commercial, Support-owned scope based on what this client is
+                paying for. It controls which staff work types (Office/Field) the
+                Client Dashboard's Staff Management can add — separate from
+                biometric attendance scope above, and from module entitlements on
+                the Modules tab.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {(Array.isArray(org.enabled_staff_types) &&
+                org.enabled_staff_types.length
+                ? org.enabled_staff_types
+                : ["office", "field"]
+              ).map((type) => (
+                <span
+                  key={type}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    background: T.teal50,
+                    color: T.teal600,
+                    fontSize: 12,
+                    fontWeight: 900,
+                  }}
+                >
+                  {type === "field" ? "Field Staff" : "Office Staff"}
+                </span>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      )}
     </div>
   );
 }
@@ -1293,9 +1460,9 @@ function ModulesTab({
         ?.enabled_people_types,
     )
       ? (
-          (org?.vertical_config as Record<string, unknown> | null)
-            ?.enabled_people_types as unknown[]
-        ).filter(Boolean)
+        (org?.vertical_config as Record<string, unknown> | null)
+          ?.enabled_people_types as unknown[]
+      ).filter(Boolean)
       : [];
     const combined = [...fromOrg, ...fromVertical]
       .map((value) => normalizePeopleType(value))
@@ -1595,6 +1762,10 @@ function BranchesTab({
   const [generatingBranchId, setGeneratingBranchId] = useState<string | null>(
     null,
   );
+  const [cameraAssignmentBranch, setCameraAssignmentBranch] =
+    useState<Branch | null>(null);
+  const [attendanceWorkflowBranch, setAttendanceWorkflowBranch] =
+    useState<Branch | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [editingBranchId, setEditingBranchId] = useState<string | null>(null);
   const [savingBranchId, setSavingBranchId] = useState<string | null>(null);
@@ -1808,8 +1979,8 @@ function BranchesTab({
                 style={{
                   display: "grid",
                   gridTemplateColumns: localAttendance
-                    ? "1fr 1fr 150px 110px auto auto"
-                    : "1fr 1fr 160px 120px auto",
+                    ? "1fr 1fr 150px 110px auto auto auto auto auto"
+                    : "1fr 1fr 160px 120px auto auto auto auto",
                   gap: 10,
                   alignItems: "center",
                   padding: 12,
@@ -1847,6 +2018,24 @@ function BranchesTab({
                     {generating ? "Generating…" : "Install Token"}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setCameraAssignmentBranch(branch)}
+                  disabled={Boolean(editingBranchId)}
+                  style={secondaryButton()}
+                  title="Assign this branch's cameras to a node"
+                >
+                  <Camera size={14} /> Cameras
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAttendanceWorkflowBranch(branch)}
+                  disabled={Boolean(editingBranchId)}
+                  style={secondaryButton()}
+                  title="Configure this branch's per-people-type attendance workflow"
+                >
+                  <Workflow size={14} /> Workflow
+                </button>
                 <button
                   type="button"
                   onClick={() => startEditBranch(branch)}
@@ -1960,6 +2149,22 @@ function BranchesTab({
         )}
       </SectionCard>
       {token && <InstallTokenModal token={token} onClose={clear} />}
+      {cameraAssignmentBranch && (
+        <CameraAssignmentModal
+          orgId={org.id}
+          branchId={cameraAssignmentBranch.id}
+          branchName={cameraAssignmentBranch.name}
+          onClose={() => setCameraAssignmentBranch(null)}
+        />
+      )}
+      {attendanceWorkflowBranch && (
+        <AttendanceWorkflowModal
+          orgId={org.id}
+          branchId={attendanceWorkflowBranch.id}
+          branchName={attendanceWorkflowBranch.name}
+          onClose={() => setAttendanceWorkflowBranch(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2184,7 +2389,7 @@ function MonitoringTab({ state }: { state: LoadState<NodeHealth[]> }) {
       <div style={{ display: "grid", gap: 10 }}>
         {state.data.map((node) => (
           <div
-            key={node.branch_id}
+            key={node.id}
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 120px 1fr 140px",
@@ -2732,9 +2937,9 @@ function DataAccessTab({
               color: T.red,
               opacity:
                 !isSuperAdmin ||
-                isSaving ||
-                isDeleted ||
-                confirmName.trim() !== org.name
+                  isSaving ||
+                  isDeleted ||
+                  confirmName.trim() !== org.name
                   ? 0.55
                   : 1,
             }}

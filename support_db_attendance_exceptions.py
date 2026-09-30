@@ -119,6 +119,58 @@ def _append_note(existing: Optional[str], addition: Optional[str]) -> Optional[s
     return f"{existing} | {addition}"
 
 
+# ─── Payroll eligibility (students never have payroll decisions) ────────
+
+_STAFF_ID_CHUNK = 200
+
+
+def _payroll_ineligible_staff_ids(sb, staff_ids) -> set[str]:
+    """Subset of staff_ids whose people_type has no payroll (students).
+    One batched lookup; fails open (empty set) if people_type isn't
+    migrated in, preserving pre-existing behaviour."""
+    from support_db_staff import people_type_needs_payroll_decision
+
+    ids = sorted({str(i) for i in staff_ids if i})
+    ineligible: set[str] = set()
+    try:
+        for start in range(0, len(ids), _STAFF_ID_CHUNK):
+            rows = (
+                sb.table("client_staff")
+                .select("id, people_type")
+                .in_("id", ids[start:start + _STAFF_ID_CHUNK])
+                .execute()
+            ).data or []
+            ineligible.update(
+                str(r["id"]) for r in rows
+                if not people_type_needs_payroll_decision(r.get("people_type"))
+            )
+    except Exception:
+        logger.exception("Payroll eligibility lookup failed; treating all as eligible")
+        return set()
+    return ineligible
+
+
+def _org_has_payroll_module(sb, org_id: str) -> bool:
+    """True when the org has an ACTIVE 'payroll' module purchased. Without
+    it there is no payroll to feed, so no payroll decisions are created,
+    listed or accepted. Fails open (True) on a lookup error so a transient
+    DB blip can't silently drop payroll notifications for paying orgs."""
+    try:
+        rows = (
+            sb.table("organization_modules")
+            .select("module_name")
+            .eq("org_id", str(org_id))
+            .eq("module_name", "payroll")
+            .eq("status", "active")
+            .limit(1)
+            .execute()
+        ).data or []
+        return bool(rows)
+    except Exception:
+        logger.exception("Payroll module lookup failed for org=%s; assuming enabled", org_id)
+        return True
+
+
 # ─── Branch name (exception-path only, kept off the hot per-mark path) ───
 
 def get_branch_name_for_notification(org_id: str, branch_id: Optional[str]) -> str:
@@ -745,6 +797,8 @@ def notify_payroll_decision_pending(
     the payroll-decision queue instead of the classification screen -- this
     row is already classified; only the payroll effect is still undecided.
     """
+    if not _org_has_payroll_module(get_supabase(), org_id):
+        return
     branch_name = get_branch_name_for_notification(org_id, branch_id)
     where = f" at {branch_name}" if branch_name else ""
     label = day_status.replace("_", " ")
@@ -1063,6 +1117,8 @@ def _notify_payroll_decision_needed(
         return
     try:
         sb = get_supabase()
+        if str(staff_id) in _payroll_ineligible_staff_ids(sb, [staff_id]):
+            return
         staff_row = (
             sb.table("client_staff").select("name").eq("id", str(staff_id)).limit(1).execute()
         )
@@ -1465,6 +1521,7 @@ def list_pending_exceptions(org_id: str, branch_id: Optional[str] = None, limit:
 
 _LOCAL_NODE_RESOLVED_STATUSES = {"half_day", "short_leave", "late", "overtime"}
 _PAYROLL_DECISIONS = {"include", "exclude"}
+_PENDING_MAX_PAGES = 5
 
 _PAYROLL_DECISION_NOTE_TEXT = {
     "include": "Included in payroll.",
@@ -1508,6 +1565,8 @@ def list_local_node_payroll_pending(
     columns.
     """
     sb = get_supabase()
+    if not _org_has_payroll_module(sb, str(org_id)):
+        return []
     safe_limit = max(1, min(int(limit or 200), 1000))
     local_node_statuses = ",".join(sorted(_LOCAL_NODE_RESOLVED_STATUSES))
     query = (
@@ -1533,13 +1592,22 @@ def list_local_node_payroll_pending(
             "check_in_payroll_decision.is.null)"
         )
         .order("timestamp", desc=True)
-        .limit(safe_limit)
     )
     if branch_id:
         query = query.eq("branch_id", str(branch_id))
 
     try:
-        result = query.execute()
+        # Page until safe_limit payroll-eligible rows are collected, so
+        # student rows can't crowd real ones out of a fixed-size window.
+        kept: list[dict] = []
+        for page_index in range(_PENDING_MAX_PAGES):
+            start = page_index * safe_limit
+            page = query.range(start, start + safe_limit - 1).execute().data or []
+            ineligible = _payroll_ineligible_staff_ids(sb, (r.get("staff_id") for r in page))
+            kept.extend(r for r in page if str(r.get("staff_id")) not in ineligible)
+            if len(kept) >= safe_limit or len(page) < safe_limit:
+                break
+        return kept[:safe_limit]
     except Exception as exc:
         if _is_missing_column(exc, "check_out_payroll_decision") or _is_missing_column(exc, "check_in_payroll_decision"):
             logger.warning(
@@ -1549,7 +1617,6 @@ def list_local_node_payroll_pending(
             )
             return []
         raise
-    return result.data or []
 
 def _find_overtime_request_for_attendance(sb, org_id: str, attendance_id: str) -> Optional[dict]:
     """Locates the overtime_requests row _on_overtime_decided created for a
@@ -1662,7 +1729,7 @@ def set_local_node_payroll_decision(
     org_key = str(org_id)
     existing_result = (
         sb.table("attendance")
-        .select("id, notes, day_status, capture_channel")
+        .select("id, notes, day_status, capture_channel, staff_id")
         .eq("id", str(attendance_id))
         .eq("org_id", org_key)
         .limit(1)
@@ -1671,6 +1738,9 @@ def set_local_node_payroll_decision(
     if not existing_result.data:
         raise ValueError("Attendance record not found for this organization")
     existing = existing_result.data[0]
+
+    if str(existing.get("staff_id")) in _payroll_ineligible_staff_ids(sb, [existing.get("staff_id")]):
+        raise ValueError("Payroll decisions don't apply to students")
 
     capture_channel = existing.get("capture_channel")
     day_status = existing.get("day_status")

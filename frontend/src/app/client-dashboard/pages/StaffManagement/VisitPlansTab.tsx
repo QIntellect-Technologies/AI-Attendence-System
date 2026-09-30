@@ -44,7 +44,6 @@ import {
   Save,
   CheckCircle,
   Clock,
-  Loader2,
   AlertTriangle,
   Navigation,
   ListChecks,
@@ -60,6 +59,7 @@ import {
   confirmDialog,
 } from "../../utils/notifications";
 import { T } from "../../components/ui/theme";
+import { Spinner } from "../../components/ui/Spinner";
 import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
 import {
@@ -154,17 +154,6 @@ type StopFormState = typeof emptyStopForm;
 
 // ─── Shared bits ────────────────────────────────────────────────────────────
 
-const Spinner: React.FC<{ size?: number; color?: string }> = ({
-  size = 14,
-  color = T.muted,
-}) => (
-  <Loader2
-    size={size}
-    color={color}
-    style={{ animation: "vp-spin 0.8s linear infinite" }}
-  />
-);
-
 const ErrorBanner: React.FC<{ message: string }> = ({ message }) => (
   <div
     style={{
@@ -241,17 +230,6 @@ const VisitPlansTab = React.forwardRef<VisitPlansTabHandle, VisitPlansTabProps>(
     // PlanDetailPanel's `key` below so a remount forces it to re-fetch,
     // rather than plumbing a second ref down into that child component.
     const [refreshToken, setRefreshToken] = useState(0);
-
-    // Inject the spinner keyframe once — this component may render before
-    // any other part of the app has defined one.
-    useEffect(() => {
-      if (document.getElementById("vp-spin-keyframes")) return;
-      const style = document.createElement("style");
-      style.id = "vp-spin-keyframes";
-      style.textContent =
-        "@keyframes vp-spin { to { transform: rotate(360deg); } }";
-      document.head.appendChild(style);
-    }, []);
 
     const fieldStaff = useMemo(
       () => staffRows.filter((s) => s.staffType === "field"),

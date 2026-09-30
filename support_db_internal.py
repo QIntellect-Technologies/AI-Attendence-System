@@ -287,7 +287,7 @@ def list_support_node_health_page(page=1, page_size=25, search: str | None = Non
     branch_ids = [str(row.get('id')) for row in branches if row.get('id')]
     orgs = _support_org_lookup([str(row.get('org_id')) for row in branches])
 
-    node_by_branch: dict[str, dict] = {}
+    nodes_by_branch: dict[str, list[dict]] = {}
     if branch_ids:
         try:
             keys_result = _execute_supabase(
@@ -301,7 +301,7 @@ def list_support_node_health_page(page=1, page_size=25, search: str | None = Non
                 ),
             )
             for key in keys_result.data or []:
-                node_by_branch[str(key.get('branch_id'))] = dict(key or {})
+                nodes_by_branch.setdefault(str(key.get('branch_id')), []).append(dict(key or {}))
         except Exception as exc:
             if not _delete_error_is_schema_mismatch(exc, 'node_api_keys'):
                 raise
@@ -311,14 +311,14 @@ def list_support_node_health_page(page=1, page_size=25, search: str | None = Non
         org = orgs.get(str(branch.get('org_id'))) or {}
         if _support_lower(org.get('status')) == 'deleted' or org.get('deleted_at'):
             continue
-        node = node_by_branch.get(str(branch.get('id'))) or {}
         threshold_seconds = _resolve_node_offline_threshold_seconds(org)
-        last_seen = node.get('last_seen_at')
-        node_status, minutes_since_seen = _compute_node_status(last_seen, threshold_seconds)
-        payload = node.get('last_heartbeat_payload') if isinstance(node.get('last_heartbeat_payload'), dict) else {}
+        for node in nodes_by_branch.get(str(branch.get('id'))) or [{}]:
+            last_seen = node.get('last_seen_at')
+            node_status, minutes_since_seen = _compute_node_status(last_seen, threshold_seconds)
+            payload = node.get('last_heartbeat_payload') if isinstance(node.get('last_heartbeat_payload'), dict) else {}
 
-        item = {
-            'id': str(branch.get('id')),
+            item = {
+                'id': str(branch.get('id')),
             'branch_id': str(branch.get('id')),
             'branch_name': branch.get('name') or 'Branch',
             'org_id': str(branch.get('org_id') or ''),
@@ -340,12 +340,12 @@ def list_support_node_health_page(page=1, page_size=25, search: str | None = Non
             'last_error': payload.get('last_error'),
             'agent_version': payload.get('agent_version'),
             'hostname': payload.get('hostname'),
-        }
-        if clean_status and clean_status not in {'all', 'visible'} and _support_lower(item.get('status')) != clean_status:
-            continue
-        if search_mode and not _support_search_match(item, clean_search, ('branch_name', 'organization_name', 'node_id', 'node_label', 'hostname', 'last_error')):
-            continue
-        enriched.append(item)
+            }
+            if clean_status and clean_status not in {'all', 'visible'} and _support_lower(item.get('status')) != clean_status:
+                continue
+            if search_mode and not _support_search_match(item, clean_search, ('branch_name', 'organization_name', 'node_id', 'node_label', 'hostname', 'last_error')):
+                continue
+            enriched.append(item)
 
     if search_mode or clean_status:
         return _support_filter_page_rows(enriched, page_number, size)

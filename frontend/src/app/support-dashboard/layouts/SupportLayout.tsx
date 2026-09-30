@@ -23,6 +23,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useSupportAuth } from "../contexts/SupportAuthContext";
+import { useDocumentTitle } from "../../../shared/hooks/useDocumentTitle";
 
 const T = {
   navy900: "#0a2540",
@@ -250,7 +251,10 @@ const Sidebar: React.FC = () => {
   );
 };
 
-const SupportLayout: React.FC = () => (
+const SupportLayout: React.FC = () => {
+  useDocumentTitle("Support Console");
+
+  return (
   <div
     style={{
       display: "flex",
@@ -264,6 +268,7 @@ const SupportLayout: React.FC = () => (
       <Outlet />
     </main>
   </div>
-);
+  );
+};
 
 export default SupportLayout;

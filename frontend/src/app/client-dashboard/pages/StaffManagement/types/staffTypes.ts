@@ -122,7 +122,7 @@
 
 
 /**
- * modules/staff/types/staffTypes.ts
+ * pages/StaffManagement/types/staffTypes.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Local Staff data contract — the StaffMember shape the directory UI works
  * with, plus the small unions and option types that hang off it. This is the
@@ -172,6 +172,13 @@ export interface StaffMember {
    * departmentId field. null/undefined means "unassigned".
    */
   departmentId?: string | null;
+  /**
+   * Students hold a class (+ optional section) instead of a department.
+   * Real backend UUIDs (classes.id / sections.id), used by the Trainer
+   * enrollment CSV export so recognition can be gated per camera context.
+   */
+  classId?: string | null;
+  sectionId?: string | null;
   designationId?: string | null;
   designationName?: string;
   role: string;
@@ -200,6 +207,8 @@ export interface StaffMember {
   shift: string;
   shiftId: ShiftDefinition["id"];
   shiftLabel: string;
+  /** client_staff.shift_id_ref — the real `shifts` row this person is assigned to. */
+  shiftIdRef?: string | null;
   shiftStart: string;
   shiftEnd: string;
 

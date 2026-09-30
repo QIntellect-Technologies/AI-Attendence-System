@@ -61,6 +61,8 @@ NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS = NODE_OFFLINE_THRESHOLD_MIN_SECONDS  # 4
 
 _VALID_STAFF_WORK_TYPES = ('office', 'field')
 
+_VALID_MOBILE_PEOPLE_TYPES = ('student', 'staff')
+
 _SUPABASE_RETRYABLE_MARKERS = (
     'remoteprotocolerror',
     'server disconnected',

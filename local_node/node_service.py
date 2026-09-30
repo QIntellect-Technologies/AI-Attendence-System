@@ -297,6 +297,8 @@ class NodeService:
                 sync_updates["shift_windows"] = runtime.get("shift_windows") or {}
             if "staff_shift_windows" in runtime:
                 sync_updates["staff_shift_windows"] = runtime.get("staff_shift_windows") or {}
+            if "attendance_workflows" in runtime:
+                sync_updates["attendance_workflows"] = runtime.get("attendance_workflows") or {}
             # Persist the camera list too — this is what run_cycle falls back to
             # via get_enabled_cameras(cfg) when offline. Without this, cfg never
             # carries cameras at all, so the very first failed fetch makes the

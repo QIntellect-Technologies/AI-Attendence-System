@@ -1972,6 +1972,7 @@ import secrets
 import string
 import hashlib
 import uuid
+import base64
 import os
 import re
 from urllib.parse import urlparse
@@ -3098,7 +3099,13 @@ def _merge_operational_config(
     # the client both check camelCase first, snake_case as a fallback.
     merged['shifts'] = saved.get('shifts') or []
     merged['staffShiftDefinitions'] = saved.get('staffShiftDefinitions') or saved.get('shifts') or []
-    shift_enabled_people_types = saved.get('shift_enabled_people_types') or saved.get('shiftEnabledPeopleTypes') or []
+    # Tri-state, see the frontend's utils/shiftSupport.ts: None = never
+    # configured (client falls back to its defaults), [] = explicitly no
+    # people type uses shifts. `or []` here used to collapse the two, so
+    # unchecking every box could never take effect.
+    shift_enabled_people_types = saved.get('shift_enabled_people_types')
+    if shift_enabled_people_types is None:
+        shift_enabled_people_types = saved.get('shiftEnabledPeopleTypes')
     merged['shiftEnabledPeopleTypes'] = shift_enabled_people_types
     merged['shift_enabled_people_types'] = shift_enabled_people_types
 
@@ -3452,6 +3459,108 @@ def _normalize_local_node_camera_row(camera: dict, org_id: str, branch_id: str) 
         'updated_at': datetime.now(timezone.utc).isoformat(),
     }
 
+
+def _camera_identity(name: object, channel: object) -> tuple[str, str]:
+    """Fallback identity for a camera whose id the client did not send back."""
+    try:
+        channel_key = str(int(channel))
+    except (TypeError, ValueError):
+        channel_key = str(channel or '').strip()
+    return (str(name or '').strip().lower(), channel_key)
+
+def _reconcile_branch_cameras(sb, org_id: str, branch_id: str, incoming: list[dict]) -> int:
+    """Make branch_cameras match `incoming` WITHOUT recreating rows.
+
+    The old sync deleted every camera of the branch and re-inserted it. That
+    minted new ids and dropped assigned_node_id (Camera -> Node) plus any
+    camera_context_assignments, so every Settings save left all cameras
+    unassigned and the local node with nothing to process. Here:
+
+      * existing rows are updated in place (matched by id, else name+channel),
+        so id, assigned_node_id and context tags survive;
+      * genuinely new cameras are inserted;
+      * cameras that are no longer in the list are deleted;
+      * `enabled` / `public_rtsp_url` are only overwritten when the client
+        actually sent them (the dashboard's live-camera view omits both, and
+        the old code silently re-enabled every disabled camera).
+
+    assigned_node_id is never written here; it is owned by
+    support_db_camera_assignments.
+    """
+    existing = (
+        sb.table('branch_cameras')
+        .select('id, camera_name, channel')
+        .eq('organization_id', str(org_id))
+        .eq('branch_id', str(branch_id))
+        .execute()
+        .data
+        or []
+    )
+    by_id = {str(row['id']): row for row in existing}
+    by_identity: dict[tuple[str, str], list[str]] = {}
+    for row in existing:
+        by_identity.setdefault(
+            _camera_identity(row.get('camera_name'), row.get('channel')), []
+        ).append(str(row['id']))
+
+    kept: set[str] = set()
+    to_insert: list[dict] = []
+    written = 0
+
+    for camera in incoming:
+        if not isinstance(camera, dict):
+            continue
+        row = _normalize_local_node_camera_row(camera, str(org_id), str(branch_id))
+
+        sent_id = str(camera.get('id') or '').strip()
+        match = sent_id if sent_id in by_id and sent_id not in kept else None
+        if match is None:
+            for candidate in by_identity.get(_camera_identity(row['camera_name'], row['channel']), []):
+                if candidate not in kept:
+                    match = candidate
+                    break
+
+        if match is None:
+            to_insert.append(row)
+            continue
+
+        kept.add(match)
+        update = {k: v for k, v in row.items() if k not in ('organization_id', 'branch_id')}
+        if _first_present(camera, 'enabled', 'is_enabled', 'isEnabled') is None:
+            update.pop('enabled', None)
+        # A webcam must always carry a NULL public URL (DB CHECK constraint), so
+        # for webcams the normalised None is written on purpose.
+        if row['camera_type'] != 'webcam' and _first_present(camera, 'public_rtsp_url', 'publicRtspUrl') is None:
+            update.pop('public_rtsp_url', None)
+        (
+            sb.table('branch_cameras')
+            .update(update)
+            .eq('id', match)
+            .eq('organization_id', str(org_id))
+            .eq('branch_id', str(branch_id))
+            .execute()
+        )
+        written += 1
+
+    stale = [camera_id for camera_id in by_id if camera_id not in kept]
+    if stale:
+        (
+            sb.table('branch_cameras')
+            .delete()
+            .in_('id', stale)
+            .eq('organization_id', str(org_id))
+            .eq('branch_id', str(branch_id))
+            .execute()
+        )
+
+    if to_insert:
+        inserted = sb.table('branch_cameras').insert(to_insert).execute()
+        if not inserted.data:
+            raise RuntimeError('Failed to save branch camera configuration')
+        written += len(inserted.data)
+
+    return written
+
 def _sync_local_node_camera_config(
     sb,
     *,
@@ -3508,19 +3617,10 @@ def _sync_local_node_camera_config(
         if not network_result.data:
             raise RuntimeError('Failed to save branch network configuration')
 
-        # Onboarding is source of truth for cameras for this branch.
-        sb.table('branch_cameras').delete().eq('organization_id', str(org_id)).eq('branch_id', branch_id).execute()
-
-        camera_rows = [
-            _normalize_local_node_camera_row(camera, str(org_id), branch_id)
-            for camera in branch_cameras
-            if isinstance(camera, dict)
-        ]
-        if camera_rows:
-            camera_result = sb.table('branch_cameras').insert(camera_rows).execute()
-            if not camera_result.data:
-                raise RuntimeError('Failed to save branch camera configuration')
-            synced_cameras += len(camera_result.data)
+        # The submitted list is the source of truth for WHICH cameras exist on
+        # this branch; existing rows are reconciled in place (see helper) so
+        # node assignments survive.
+        synced_cameras += _reconcile_branch_cameras(sb, str(org_id), branch_id, branch_cameras)
 
         synced_branches += 1
 
@@ -3535,6 +3635,7 @@ def _extract_company_profile(config: dict, org: dict) -> dict:
 
     return {
         'orgName': org.get('name') or config.get('orgName') or '',
+        'orgEmail': org.get('contact_email') or '',
         'bizType': (
             org.get('business_type')
             or org.get('org_type')
@@ -3740,15 +3841,21 @@ def save_client_onboarding_config(
     # bootstrap — the Shift tab/fields could never actually be enabled for
     # students (or disabled for a workforce type) regardless of what was
     # checked here.
-    shift_enabled_people_types = sorted({
-        _normalize_people_type(value)
-        for value in (
-            config.get('shiftEnabledPeopleTypes')
-            or config.get('shift_enabled_people_types')
-            or []
-        )
-        if str(value or '').strip()
-    })
+    # None (key absent) = leave the stored value untouched, so an unrelated
+    # Settings save can never silently flip "never configured" into "none".
+    # An empty list IS a real choice ("no people type uses shifts") and is kept.
+    raw_shift_enabled = config.get('shiftEnabledPeopleTypes')
+    if raw_shift_enabled is None:
+        raw_shift_enabled = config.get('shift_enabled_people_types')
+    shift_enabled_people_types = (
+        None
+        if raw_shift_enabled is None
+        else sorted({
+            _normalize_people_type(value)
+            for value in raw_shift_enabled
+            if str(value or '').strip()
+        })
+    )
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -3761,12 +3868,13 @@ def save_client_onboarding_config(
         'departments': normalized_departments,
         'roles': normalized_roles,
         'shifts': [],
-        'shift_enabled_people_types': shift_enabled_people_types,
         'cameras': normalized_cameras,
         'network': network_config,
         'completed_at': now,
         'updated_at': now,
     }
+    if shift_enabled_people_types is not None:
+        payload['shift_enabled_people_types'] = shift_enabled_people_types
 
     saved = sb.table('client_onboarding_configs').upsert(
         payload,
@@ -4090,3 +4198,103 @@ def change_own_dashboard_password(account_type: str, user_id: str, new_password:
         return update_client_user_profile(str(user_id), {'new_password': new_password})
  
     raise ValueError('Unsupported account type for password change')
+
+
+_LOGO_MAX_BYTES = 300 * 1024  # keeps client_onboarding_configs.company_profile light; mirrors utils/imageToDataUrl.ts's client-side cap
+_LOGO_DATA_URL_RE = re.compile(r'^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$', re.DOTALL)
+_LOGO_MIME_SNIFFERS: dict[str, Callable[[bytes], bool]] = {
+    # Declared MIME is caller-controlled -- these magic-byte checks are what's
+    # actually trusted. SVG is rejected on purpose: the logo also gets baked
+    # into generated PDF/Excel exports, which don't render SVG.
+    'image/png': lambda b: b.startswith(b'\x89PNG\r\n\x1a\n'),
+    'image/jpeg': lambda b: b.startswith(b'\xff\xd8\xff'),
+    'image/webp': lambda b: b.startswith(b'RIFF') and b[8:12] == b'WEBP',
+}
+
+def _validate_logo_data_url(raw: str) -> str:
+    """Validate a company-logo data URL and return it unchanged if it passes.
+
+    Mirrors utils/imageToDataUrl.ts's client-side downscaling, but the
+    server never trusts the client -- a caller could hit
+    PUT /api/client/organization/logo directly with any payload, so the
+    declared MIME type, the 300 KB cap, and the actual file bytes are all
+    re-checked here rather than assumed from what the frontend sent.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError('logo is required')
+
+    match = _LOGO_DATA_URL_RE.match(raw.strip())
+    if not match:
+        raise ValueError('logo must be a base64 data URL')
+
+    mime, encoded = match.group(1).lower(), match.group(2)
+    sniffer = _LOGO_MIME_SNIFFERS.get(mime)
+    if sniffer is None:
+        raise ValueError('Logo must be a PNG, JPEG or WebP image')
+
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise ValueError('logo is not valid base64') from exc
+
+    if not decoded:
+        raise ValueError('logo is empty')
+    if len(decoded) > _LOGO_MAX_BYTES:
+        raise ValueError('Logo must be smaller than 300KB')
+    if not sniffer(decoded):
+        raise ValueError('File contents do not match the declared image type')
+
+    return f'data:{mime};base64,{encoded}'
+
+def save_organization_logo(
+    org_id: str,
+    logo: Optional[str],
+    file_name: str = '',
+) -> Optional[str]:
+    """Set (logo = data URL) or remove (logo = None) an organization's
+    company logo.
+
+    Unlike save_client_onboarding_config, this touches only
+    company_profile.{logo,logoDataUrl,logoFileName} on the existing
+    client_onboarding_configs row via a plain UPDATE. It never upserts the
+    full onboarding payload, so departments/roles/cameras/network/shifts
+    for the org are left exactly as they were -- a logo change should
+    never risk reverting unrelated Settings state.
+    """
+    if not str(org_id or '').strip():
+        raise ValueError('org_id is required')
+
+    existing = get_client_onboarding_config(str(org_id))
+    if not existing:
+        # No row yet means the org hasn't finished onboarding. Upserting one
+        # here just to hold a logo would create a config row missing every
+        # other section save_client_onboarding_config normally fills in,
+        # which get_client_bootstrap and the local-node camera sync don't
+        # expect -- so this fails clearly instead of writing a partial row.
+        raise ValueError('Complete dashboard setup before changing the company logo.')
+
+    company_profile = existing.get('company_profile')
+    company_profile = dict(company_profile) if isinstance(company_profile, dict) else {}
+
+    if logo is None:
+        company_profile.pop('logo', None)
+        company_profile.pop('logoDataUrl', None)
+        company_profile.pop('logoFileName', None)
+        new_logo: Optional[str] = None
+    else:
+        new_logo = _validate_logo_data_url(logo)
+        company_profile['logo'] = new_logo
+        company_profile['logoDataUrl'] = new_logo
+        company_profile['logoFileName'] = str(file_name or '')[:255]
+
+    updated = _execute_supabase(
+        'save_organization_logo',
+        lambda: get_supabase().table('client_onboarding_configs').update({
+            'company_profile': company_profile,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('org_id', str(org_id)),
+    )
+    if not updated.data:
+        raise RuntimeError('Failed to update organization logo')
+
+    return new_logo

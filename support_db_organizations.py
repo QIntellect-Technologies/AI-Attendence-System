@@ -23,7 +23,7 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache, get_internal_user_by_id
+from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, _VALID_MOBILE_PEOPLE_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache, get_internal_user_by_id
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -468,6 +468,59 @@ def update_organization_staff_type_scope(
         client
         .table("organizations")
         .update({"enabled_staff_types": normalized})
+        .eq("id", str(org_id))
+        .execute()
+    )
+
+    rows = getattr(result, "data", None) or []
+    if not rows:
+        raise ValueError("Organization not found.")
+
+    _invalidate_tenant_meta_cache(str(org_id))
+    return _attach_status(rows[0])
+
+def _normalize_mobile_scope(values) -> list[str]:
+    """Validate + de-duplicate a mobile-app scope list, preserving order.
+
+    Raises ValueError on anything outside ('student', 'staff') so a support
+    agent gets an immediate 400 instead of silently saving a scope no client
+    UI knows how to render. An empty list is valid here (unlike staff-type
+    scope) — an organization can have Mobile App disabled for everyone.
+    """
+    if not isinstance(values, list):
+        raise ValueError("enabled_mobile_people_types must be an array of 'student'/'staff'")
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in values:
+        key = str(raw or '').strip().lower()
+        if key not in _VALID_MOBILE_PEOPLE_TYPES:
+            raise ValueError(f"Invalid mobile people type '{raw}'. Must be 'student' or 'staff'.")
+        if key not in seen:
+            seen.add(key)
+            normalized.append(key)
+    return normalized
+
+def update_organization_mobile_scope(
+    org_id,
+    enabled_mobile_people_types,
+    updated_by=None,
+) -> dict:
+    """
+    Support-only: sets which people families (student/staff) this client is
+    commercially entitled to give Mobile App access to. Drives whether Staff
+    Type Scope is askable and whether login credentials get generated for
+    that family in the Client Dashboard. Purely a Support-owned scope — the
+    client dashboard reads this value, it never writes it (same contract as
+    update_organization_staff_type_scope above).
+    """
+    normalized = _normalize_mobile_scope(enabled_mobile_people_types)
+
+    client = get_supabase()
+    result = (
+        client
+        .table("organizations")
+        .update({"enabled_mobile_people_types": normalized})
         .eq("id", str(org_id))
         .execute()
     )

@@ -4343,8 +4343,10 @@ import {
   Users,
 } from "lucide-react";
 import { useAuth } from "../../contexts/useAuth";
+import { useOrg } from "../../contexts/OrgConfigContext";
+import { peopleFamilyForType } from "../../utils/templateRendering";
+import { readShiftEnabledPeopleTypes } from "../../utils/shiftSupport";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
-import { AttendanceSettingsScreens } from "../attendance_temp/settings/AttendanceSettingsScreens";
 import DepartmentDesignationEditor from "./DepartmentDesignationEditor";
 import ClassSectionEditor from "./ClassSectionEditor";
 import {
@@ -5187,19 +5189,35 @@ function configFromBootstrap(
       keyMap,
       normalizeDesignationItem,
     ),
+    // data.config.cameras (built server-side by _live_cameras_by_branch) is
+    // the live branch_cameras projection — the ONLY camera source whose
+    // `id` matches branch_cameras.id, the id space assigned_node_id, node
+    // config, and live status all key off. saved.cameras (onboarding_config
+    // JSONB) is a write-only snapshot of whatever this editor last POSTed;
+    // its ids are client-generated (makeId("camera")) and never match a
+    // real row. Preferring it here (the old order) meant every save fed
+    // fake ids back to the backend's camera reconciler, which then had to
+    // fall back to matching by (name, channel) identity — a match that
+    // silently breaks the moment a camera is renamed or re-channeled,
+    // deleting and re-inserting the row and wiping its node assignment.
+    // saved.cameras is kept only as a last-resort fallback for a org that
+    // predates _live_cameras_by_branch and hasn't loaded bootstrap since.
     cameras: normalizeBranchRecord<CameraItem>(
-      saved.cameras || data.config?.cameras,
+      data.config?.cameras || saved.cameras,
       branches,
       keyMap,
       normalizeCameraItem,
     ),
     network: networkByBranch(rawNetwork, branches, keyMap),
-    shiftEnabledPeopleTypes: readStringList(
-      (saved.shiftEnabledPeopleTypes as unknown) ||
-      saved.shift_enabled_people_types ||
-      data.config?.shiftEnabledPeopleTypes ||
-      data.config?.shift_enabled_people_types,
-    ),
+    // undefined = never configured; [] = explicitly none. Both must survive the
+    // round-trip, so this cannot go through readStringList (drops empty lists).
+    shiftEnabledPeopleTypes:
+      readShiftEnabledPeopleTypes(
+        saved.shiftEnabledPeopleTypes,
+        saved.shift_enabled_people_types,
+        data.config?.shiftEnabledPeopleTypes,
+        data.config?.shift_enabled_people_types,
+      ) ?? undefined,
   };
 }
 
@@ -5455,61 +5473,6 @@ function WorkforceStructureEditor({
             }
           />
         </div>
-      </div>
-    </ConfigCard>
-  );
-}
-
-function ShiftSchedulingEditor({
-  activePeopleTypes,
-  shiftEnabledPeopleTypes,
-  setShiftEnabledPeopleTypes,
-  terminology,
-}: {
-  activePeopleTypes: string[];
-  shiftEnabledPeopleTypes: string[] | undefined;
-  setShiftEnabledPeopleTypes: (
-    updater: React.SetStateAction<string[] | undefined>,
-  ) => void;
-  terminology: Terminology;
-}) {
-  const current = shiftEnabledPeopleTypes || [];
-
-  const toggle = (peopleType: string) => {
-    const normalized = normalizeKey(peopleType);
-    setShiftEnabledPeopleTypes((prev) => {
-      const existing = prev || [];
-      return existing.includes(normalized)
-        ? existing.filter((v) => v !== normalized)
-        : [...existing, normalized];
-    });
-  };
-
-  if (!activePeopleTypes || activePeopleTypes.length === 0) return null;
-
-  return (
-    <ConfigCard icon={<ShieldCheck size={18} />} title="Shift Scheduling">
-      <p style={{ margin: "6px 0 12px", color: C.textSub }}>
-        Enable shift-based attendance for the people types below. These settings
-        are saved as part of the onboarding config and are template-aware.
-      </p>
-      <div style={{ display: "grid", gap: 10 }}>
-        {activePeopleTypes.map((pt) => {
-          const normalized = normalizeKey(pt);
-          return (
-            <label
-              key={pt}
-              style={{ display: "flex", alignItems: "center", gap: 10 }}
-            >
-              <input
-                type="checkbox"
-                checked={current.includes(normalized)}
-                onChange={() => toggle(pt)}
-              />
-              <span style={{ fontSize: 14 }}>{titleCase(pt)}</span>
-            </label>
-          );
-        })}
       </div>
     </ConfigCard>
   );
@@ -5935,6 +5898,7 @@ function ProfileSettingsEditor({
 export default function Settings() {
   const auth = useAuth() as unknown as AuthContext;
   const { user, refreshUser } = auth;
+  const { refreshOrgConfig } = useOrg();
   const organizationId = user?.organization_id || user?.organizationId;
 
   // Access gate: staff without the "settings" module grant never reach this
@@ -6129,6 +6093,9 @@ export default function Settings() {
       setBranches(nextBranches);
       setConfig(configFromBootstrap(data, nextBranches));
       if (refreshUser && user.id) await refreshUser(user.id);
+      // The rest of the dashboard (tabs, columns, filters) reads OrgConfigContext,
+      // which otherwise stays stale until the next tab-focus refresh or reload.
+      await refreshOrgConfig();
       setSavedMessage(
         "Configurations saved successfully!",
       );
@@ -6317,21 +6284,6 @@ export default function Settings() {
               terminology={terminology}
             />
           ) : null} */}
-
-          <ShiftSchedulingEditor
-            activePeopleTypes={activePeopleTypes}
-            shiftEnabledPeopleTypes={config.shiftEnabledPeopleTypes}
-            setShiftEnabledPeopleTypes={(updater) =>
-              setConfig((prev) => ({
-                ...prev,
-                shiftEnabledPeopleTypes:
-                  typeof updater === "function"
-                    ? (updater(prev.shiftEnabledPeopleTypes) as string[])
-                    : (updater as string[]),
-              }))
-            }
-            terminology={terminology}
-          />
 
           <CameraSettingsEditor
             branches={branches}

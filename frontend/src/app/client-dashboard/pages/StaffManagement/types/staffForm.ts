@@ -145,7 +145,7 @@
 
 
 /**
- * modules/staff/types/staffForm.ts
+ * pages/StaffManagement/types/staffForm.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Add/Edit form contract. Kept separate from StaffModal so the validation,
  * payload-building and credential helpers can depend on the form shape
