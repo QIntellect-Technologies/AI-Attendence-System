@@ -1,7 +1,7 @@
 import { supportApiClient } from "../../../api/supportApiClient";
 import type { InstallTokenResult } from "../../../hooks/useInstallToken";
 
-export interface GlobalBranchRow { id: string; branch_id: string; org_id: string; organization_id: string; organization_name: string; organization_email?: string | null; organization_status?: string | null; name: string; location?: string | null; max_staff_capacity?: number | null; fallback_active?: boolean; attendance_mode?: string | null; status?: string }
+export interface GlobalBranchRow { id: string; branch_id: string; org_id: string; organization_id: string; organization_name: string; organization_email?: string | null; organization_status?: string | null; name: string; location?: string | null; max_staff_capacity?: number | null; fallback_active?: boolean; attendance_mode?: string | null; client_category?: string | null; status?: string }
 export interface PageMeta { page: number; page_size: number; total: number; total_pages: number; has_more: boolean }
 interface Envelope { success: boolean; branches: GlobalBranchRow[]; page: PageMeta }
 interface InstallTokenEnvelope { success: boolean; install_token: InstallTokenResult }

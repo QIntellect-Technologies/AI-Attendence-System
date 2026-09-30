@@ -15,6 +15,8 @@ const COLORS: Record<string, { bg: string; fg: string }> = {
   never_connected: { bg: "#f1f5f9", fg: "#64748b" },
   local: { bg: "#f3e8ff", fg: "#7c3aed" },
   cloud: { bg: "#dbeafe", fg: "#2563eb" },
+  hybrid: { bg: "#f3e8ff", fg: "#7c3aed" },
+  on_premise: { bg: "#d1fae5", fg: "#047857" },
 };
 
 function label(value: string): string {

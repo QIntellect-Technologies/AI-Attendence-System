@@ -24,6 +24,12 @@ import {
 } from "lucide-react";
 import { useOrganizations } from "./hooks/useOrganizations";
 import { CreateOrganizationModal } from "./components/CreateOrganizationModal";
+import {
+  DEPLOYMENT_LABELS,
+  getDeploymentModel,
+  type DeploymentFields,
+  type DeploymentModel,
+} from "./deployment";
 import type { OrgStatus } from "../../packages/shared-types/src/organization";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -115,27 +121,36 @@ const StatusBadge: React.FC<{ status: OrgStatus }> = ({ status }) => {
   );
 };
 
-const AttendanceModeChip: React.FC<{ mode: "cloud" | "local" }> = ({
-  mode,
-}) => (
-  <span
-    style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 4,
-      background: mode === "cloud" ? "#eff6ff" : "#f5f3ff",
-      color: mode === "cloud" ? "#2563eb" : "#7c3aed",
-      borderRadius: 6,
-      padding: "3px 8px",
-      fontSize: 10,
-      fontWeight: 800,
-      textTransform: "uppercase",
-    }}
-  >
-    {mode === "cloud" ? <Cloud size={10} /> : <Server size={10} />}
-    {mode}
-  </span>
-);
+const DEPLOYMENT_CHIP_COLORS: Record<
+  DeploymentModel,
+  { background: string; color: string }
+> = {
+  cloud: { background: "#eff6ff", color: "#2563eb" },
+  hybrid: { background: "#f5f3ff", color: "#7c3aed" },
+  on_premise: { background: "#ecfdf5", color: "#047857" },
+};
+
+const DeploymentChip: React.FC<{ org: DeploymentFields }> = ({ org }) => {
+  const model = getDeploymentModel(org);
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        ...DEPLOYMENT_CHIP_COLORS[model],
+        borderRadius: 6,
+        padding: "3px 8px",
+        fontSize: 10,
+        fontWeight: 800,
+        textTransform: "uppercase",
+      }}
+    >
+      {model === "cloud" ? <Cloud size={10} /> : <Server size={10} />}
+      {DEPLOYMENT_LABELS[model]}
+    </span>
+  );
+};
 
 type OrganizationStatusFilter =
   | "all"
@@ -384,7 +399,7 @@ export default function OrganizationsPage() {
                   {[
                     "Organization",
                     "Contact",
-                    "Mode",
+                    "Deployment",
                     "Branches",
                     "Status",
                     "Actions",
@@ -481,7 +496,7 @@ export default function OrganizationsPage() {
                     </td>
 
                     <td style={{ padding: "13px 16px" }}>
-                      <AttendanceModeChip mode={org.attendance_mode} />
+                      <DeploymentChip org={org} />
                     </td>
 
                     <td style={{ padding: "13px 16px", textAlign: "center" }}>

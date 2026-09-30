@@ -23,7 +23,7 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, _VALID_MOBILE_PEOPLE_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache, get_internal_user_by_id
+from support_db_core import _ORG_CACHE, _VALID_STAFF_WORK_TYPES, _VALID_MOBILE_PEOPLE_TYPES, NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _attach_status, _cache_get, _cache_set, _execute_supabase, _invalidate_tenant_meta_cache, get_internal_user_by_id, is_on_prem_org
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -187,10 +187,18 @@ def create_organization(payload: dict, created_by: str) -> dict:
     payload = _with_vertical_defaults(payload)
     sb = get_supabase()
 
-    attendance_mode = payload.get('attendance_mode', 'cloud')
-    threshold = payload.get('node_offline_threshold_seconds')
+    client_category = str(payload.get('client_category') or 'saas').strip().lower()
+    if client_category not in ('saas', 'on_prem'):
+        raise ValueError("client_category must be 'saas' or 'on_prem'")
+    is_on_prem = client_category == 'on_prem'
 
-    if attendance_mode == 'local' and not threshold:
+    # On-Premise (Licensed): recognition and reporting stay on the customer's
+    # machine, so the org is always 'local', a single site, and never
+    # heartbeats (no offline threshold applies).
+    attendance_mode = 'local' if is_on_prem else payload.get('attendance_mode', 'cloud')
+    threshold = None if is_on_prem else payload.get('node_offline_threshold_seconds')
+
+    if attendance_mode == 'local' and not is_on_prem and not threshold:
         raise ValueError('node_offline_threshold_seconds is required for local mode')
 
     if attendance_mode == 'local' and threshold is not None:
@@ -222,7 +230,8 @@ def create_organization(payload: dict, created_by: str) -> dict:
         'terminology_overrides':        payload.get('terminology_overrides') or {},
         'attendance_mode':              attendance_mode,
         'node_offline_threshold_seconds': threshold,
-        'max_branches':                 _validate_org_max_branches(
+        'client_category':              client_category,
+        'max_branches':                 1 if is_on_prem else _validate_org_max_branches(
             payload.get('max_branches', 1)
             if payload.get('max_branches') not in (None, '')
             else 1
@@ -279,6 +288,12 @@ def update_organization(org_id: str, payload: dict) -> dict:
         'max_branches',
     }
     update_data = {k: v for k, v in payload.items() if k in allowed}
+
+    # On-Premise (Licensed) terms are fixed at creation: always local, one
+    # site, no heartbeat threshold. Drop them so a stale client cannot alter them.
+    if is_on_prem_org(current_org):
+        for locked_field in ('attendance_mode', 'node_offline_threshold_seconds', 'max_branches'):
+            update_data.pop(locked_field, None)
 
     if not update_data:
         raise ValueError('No valid fields to update')
@@ -938,4 +953,47 @@ def permanently_delete_organization(
         'delete_reason': clean_reason,
         'branch_ids': branch_ids,
         'tables': results,
+    }
+
+
+def build_node_config_payload(org: dict, branch: dict | None) -> dict:
+    """Single source of truth for the org+branch fields handed to an
+    on-prem node, regardless of which flow got them there
+    (activate_node_with_install_token, claim_org_license, or a future
+    heartbeat-based config refresh).
+
+    Previously each of those call sites hand-rolled its own overlapping
+    dict and drifted out of sync (contact_phone and enabled_staff_types
+    were silently missing from some responses; branch max_staff_capacity
+    was wrongly aliased to the org's vertical_config.max_users in one
+    caller). Fix once, here, so every consumer gets the same shape.
+
+    `branch` may be None (e.g. an org that hasn't had its branch created
+    yet) — every branch-derived field degrades to a safe default rather
+    than raising, since callers may still want the org-level fields even
+    when branch provisioning hasn't happened.
+    """
+    vertical_cfg = org.get('vertical_config') if isinstance(org.get('vertical_config'), dict) else {}
+    max_capacity = (
+        vertical_cfg.get('max_users')
+        or vertical_cfg.get('max_capacity')
+        or org.get('max_capacity')
+        or org.get('max_users')
+    )
+    branch = branch or {}
+    return {
+        'organization_name': org.get('name'),
+        'org_name': org.get('name'),
+        'contact_email': org.get('contact_email'),
+        'contact_phone': org.get('contact_phone'),
+        'business_type': org.get('business_type') or org.get('biz_type') or 'company',
+        'primary_people_type': org.get('primary_people_type') or 'staff',
+        'enabled_staff_types': org.get('enabled_staff_types') or ['office', 'field'],
+        'vertical_config': vertical_cfg,
+        'max_capacity': max_capacity,
+        'max_users': max_capacity,
+        'branch_id': branch.get('id') or branch.get('branch_id'),
+        'branch_name': branch.get('name'),
+        'branch_location': branch.get('location'),
+        'branch_max_staff_capacity': branch.get('max_staff_capacity'),
     }

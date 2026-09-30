@@ -22,7 +22,7 @@ from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import _BRANCH_CACHE, _cache_get, _cache_set, _ensure_org_client_access, _execute_supabase, _invalidate_tenant_meta_cache, _validate_branch_timezone
+from support_db_core import _BRANCH_CACHE, _cache_get, _cache_set, _ensure_org_client_access, _execute_supabase, _invalidate_tenant_meta_cache, _validate_branch_timezone, require_deployment
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -383,6 +383,7 @@ def create_client_branch_install_token(
 
     if str(org.get('attendance_mode') or '').strip().lower() != 'local':
         raise ValueError('Node installer is available only for local attendance mode')
+    require_deployment(org, on_prem=False, action='Node installer')
 
     branch = _get_branch_owned_by_org(org_id, str(branch_id))
     allowed_branch_ids = {str(item) for item in (session.get('allowedBranchIds') or []) if item}

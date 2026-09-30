@@ -412,6 +412,30 @@ def _ensure_org_client_access(org_id: str, action: str = 'This action') -> dict:
         raise ValueError(f'{action} is blocked because organization status is {status}.')
     return org
 
+
+class OrgDeploymentError(ValueError):
+    """An action does not match the organization's deployment model.
+
+    Subclasses ValueError so every existing `except ValueError` still
+    handles it (400); the support routes map it to 409 Conflict.
+    """
+
+
+def is_on_prem_org(org: dict) -> bool:
+    """On-Premise (Licensed): recognition and reporting run locally.
+    Every other org (client_category 'saas') is Cloud or Hybrid."""
+    return str((org or {}).get('client_category') or '').strip().lower() == 'on_prem'
+
+
+def require_deployment(org: dict, *, on_prem: bool, action: str) -> None:
+    """Raise OrgDeploymentError unless the org is (on_prem=True) or is not
+    (on_prem=False) an On-Premise (Licensed) organization."""
+    if is_on_prem_org(org) == on_prem:
+        return
+    if on_prem:
+        raise OrgDeploymentError(f'{action} is only available for On-Premise (Licensed) organizations.')
+    raise OrgDeploymentError(f'{action} is not available for On-Premise (Licensed) organizations.')
+
 def _json_dict(value) -> dict:
     if isinstance(value, dict):
         return value

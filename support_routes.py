@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g, send_file
 from support_auth import require_support_auth, require_capability, login_internal_user, logout_internal_user
 import support_db as db
+from support_db_core import OrgDeploymentError
 import support_db_attendance_settings as settings_db
 import login_throttle
 from logger_config import get_logger
@@ -49,6 +50,9 @@ def _handle(fn):
     """Wrap route body and keep predictable Flask envelopes."""
     try:
         return fn()
+    except OrgDeploymentError as e:
+        logger.warning(f"Support route deployment-model conflict: {e}")
+        return _err(str(e), 409)
     except ValueError as e:
         logger.warning(f"Support route validation error: {e}")
         return _err(str(e), 400)

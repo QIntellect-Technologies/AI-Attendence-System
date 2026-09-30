@@ -10,6 +10,7 @@
  */
 
 export type AttendanceMode = "cloud" | "local";
+export type ClientCategory = "saas" | "on_prem";
 
 /**
  * Office vs. field staff — a commercial scope owned by Support, not the
@@ -154,6 +155,7 @@ export interface Organization {
   enabled_mobile_people_types?: PeopleType[];
 
   attendance_mode: AttendanceMode;
+  client_category?: ClientCategory;
   node_offline_threshold_seconds: number | null;
   max_branches: number;
   status: OrgStatus;
@@ -189,6 +191,7 @@ export interface CreateOrganizationPayload {
   people_kind?: PeopleKind;
   terminology_overrides?: TerminologyOverrides;
   attendance_mode: AttendanceMode;
+  client_category?: ClientCategory;
   node_offline_threshold_seconds?: number | null;
   max_branches: number;
 }

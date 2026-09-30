@@ -689,4 +689,65 @@ export const nodeHealthApi = {
       .then((r) => r.data.node_health),
 } as const;
 
+export interface OrgLicense {
+  id: string;
+  org_id: string;
+  jti: string;
+  expires_at: string;
+  issued_at: string;
+  issued_by: string;
+  invoice_id?: string | null;
+  status: "active" | "superseded" | "revoked" | string;
+  token?: string;
+  revoked_at?: string | null;
+  revoked_by?: string | null;
+  activated_node_id?: string | null;
+  activated_hostname?: string | null;
+  activated_at?: string | null;
+}
+
+interface LicensesEnvelope {
+  success: boolean;
+  licenses: OrgLicense[];
+}
+
+interface LicenseEnvelope {
+  success: boolean;
+  license: OrgLicense;
+}
+
+export const licensesApi = {
+  list: (orgId: string): Promise<OrgLicense[]> =>
+    supportApiClient
+      .get<LicensesEnvelope>(`${BASE}/${encodeId(orgId)}/licenses`)
+      .then((r) => r.data.licenses || []),
+
+  issue: (
+    orgId: string,
+    payload: {
+      expires_at: string;
+      invoice_id?: string | null;
+    },
+  ): Promise<OrgLicense> =>
+    supportApiClient
+      .post<LicenseEnvelope>(`${BASE}/${encodeId(orgId)}/license`, payload)
+      .then((r) => r.data.license),
+
+  revoke: (licenseId: string): Promise<OrgLicense> =>
+    supportApiClient
+      .patch<LicenseEnvelope>(
+        `/v1/support/licenses/${encodeId(licenseId)}/revoke`,
+        {},
+      )
+      .then((r) => r.data.license),
+
+  resetActivation: (licenseId: string): Promise<OrgLicense> =>
+    supportApiClient
+      .post<LicenseEnvelope>(
+        `/v1/support/licenses/${encodeId(licenseId)}/reset-activation`,
+        {},
+      )
+      .then((r) => r.data.license),
+} as const;
+
 void ({} as { s: Subscription; p: PeopleType });

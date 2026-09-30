@@ -42,6 +42,8 @@ import {
   branchesApi,
   extractApiError,
   invoicesApi,
+  licensesApi,
+  type OrgLicense,
   modulesApi,
   MODULE_DEFINITIONS,
   nodeHealthApi,
@@ -79,12 +81,14 @@ import {
   normalizePeopleType,
 } from "../../../client-dashboard/utils/templateRendering";
 import TimezoneSelect from "./components/TimezoneSelect";
+import { DEPLOYMENT_LABELS, getDeploymentModel, isOnPremOrg } from "./deployment";
 
 type Tab =
   | "overview"
   | "modules"
   | "branches"
   | "billing"
+  | "licenses"
   | "monitoring"
   | "data_access"
   | "invite";
@@ -101,10 +105,19 @@ const TABS: Array<{ key: Tab; label: string }> = [
   { key: "modules", label: "Module Entitlements" },
   { key: "branches", label: "Branches" },
   { key: "billing", label: "Billing" },
+  { key: "licenses", label: "License Tokens" },
   { key: "monitoring", label: "Live Monitoring" },
   { key: "data_access", label: "Data & Access" },
   { key: "invite", label: "Invite Client" },
 ];
+
+// On-Premise (Licensed) orgs have a single site and no heartbeating node, so
+// branch management and live monitoring do not apply. The License tab is the
+// mirror image: shown for On-Premise only.
+const ON_PREM_HIDDEN_TABS: ReadonlySet<Tab> = new Set<Tab>([
+  "branches",
+  "monitoring",
+]);
 
 const T = {
   teal600: "#0d9488",
@@ -427,6 +440,155 @@ function Meta({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function OnPremSiteCard({
+  org,
+  state,
+  setState,
+}: {
+  org: Organization;
+  state: LoadState<Branch[]>;
+  setState: React.Dispatch<React.SetStateAction<LoadState<Branch[]>>>;
+}) {
+  const site = state.data[0] ?? null;
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ max_staff_capacity: 1, timezone: "" });
+
+  useEffect(() => {
+    if (state.loaded || state.isLoading) return;
+    setState((s) => ({ ...s, isLoading: true, error: null }));
+    branchesApi
+      .list(org.id)
+      .then((data) =>
+        setState({ data, isLoading: false, error: null, loaded: true }),
+      )
+      .catch((err) =>
+        setState((s) => ({
+          ...s,
+          isLoading: false,
+          loaded: true,
+          error: extractApiError(err, "Failed to load site details"),
+        })),
+      );
+  }, [org.id, state.loaded, state.isLoading, setState]);
+
+  const startEdit = () => {
+    if (!site) return;
+    setDraft({
+      max_staff_capacity: Number(site.max_staff_capacity || 1),
+      timezone: site.timezone || "",
+    });
+    setError(null);
+    setIsEditing(true);
+  };
+
+  const save = async () => {
+    if (!site) return;
+    const capacity = Number(draft.max_staff_capacity || 0);
+    if (!Number.isFinite(capacity) || capacity < 1) {
+      setError("Site capacity must be at least 1.");
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      const updated = await branchesApi.update(org.id, site, {
+        max_staff_capacity: capacity,
+        timezone: draft.timezone,
+      });
+      setState((s) => ({
+        ...s,
+        data: s.data.map((b) => (b.id === updated.id ? updated : b)),
+      }));
+      setIsEditing(false);
+    } catch (err) {
+      setError(extractApiError(err, "Failed to update site"));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      title="Site & Capacity"
+      action={
+        isEditing ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setIsEditing(false)}
+              style={secondaryButton()}
+            >
+              <X size={14} /> Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={isSaving}
+              style={primaryButton()}
+            >
+              <Save size={14} /> {isSaving ? "Saving…" : "Save Site"}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={startEdit}
+            disabled={!site}
+            style={secondaryButton()}
+          >
+            <Pencil size={14} /> Edit Site
+          </button>
+        )
+      }
+    >
+      {error && <ErrorBox message={error} />}
+      {state.error && !site ? (
+        <ErrorBox message={state.error} />
+      ) : !site ? (
+        <LoadingBox label="Loading site…" />
+      ) : isEditing ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: 12,
+          }}
+        >
+          <EditField
+            label="Site Capacity"
+            type="number"
+            value={String(draft.max_staff_capacity)}
+            onChange={(value) =>
+              setDraft((d) => ({
+                ...d,
+                max_staff_capacity: Math.min(100000, Number(value) || 1),
+              }))
+            }
+          />
+          <TimezoneSelect
+            value={draft.timezone}
+            onChange={(timezone) => setDraft((d) => ({ ...d, timezone }))}
+            label="Timezone"
+          />
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: 12,
+          }}
+        >
+          <Meta label="Site Capacity" value={site.max_staff_capacity} />
+          <Meta label="Timezone" value={site.timezone || "—"} />
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 function OverviewTab({
   org,
   onOrgUpdated,
@@ -448,6 +610,7 @@ function OverviewTab({
   const { updateOrganization, isUpdating: isUpdatingTrainerCsv } =
     useUpdateOrganization();
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const onPrem = isOnPremOrg(org);
   const [isEditingTemplate, setIsEditingTemplate] = useState(false);
   const [isEditingStaffTypeScope, setIsEditingStaffTypeScope] = useState(false);
   const [isEditingMobileScope, setIsEditingMobileScope] = useState(false);
@@ -900,6 +1063,8 @@ function OverviewTab({
               apart on an existing org — the same redundancy that was removed
               from CreateOrganizationModal.
             */}
+            {!onPrem && (
+              <>
             <label>
               <span style={labelStyle}>Attendance Mode</span>
               <select
@@ -913,7 +1078,7 @@ function OverviewTab({
                 style={inputStyle}
               >
                 <option value="cloud">Cloud</option>
-                <option value="local">Local</option>
+                <option value="local">Hybrid</option>
               </select>
             </label>
 
@@ -947,6 +1112,8 @@ function OverviewTab({
                 />
               </>
             )}
+              </>
+            )}
           </div>
         ) : (
           <div
@@ -961,20 +1128,32 @@ function OverviewTab({
             <Meta label="Contact Phone" value={org.contact_phone || "—"} />
             <Meta label="Org Type" value={org.org_type || "—"} />
             <Meta
-              label="Attendance Mode"
-              value={String(org.attendance_mode || "—").toUpperCase()}
+              label="Deployment"
+              value={DEPLOYMENT_LABELS[getDeploymentModel(org)]}
             />
-            <Meta label="Max Branches" value={org.max_branches} />
-            <Meta
-              label="Node Offline Threshold (sec)"
-              value={org.node_offline_threshold_seconds ?? "Cloud mode"}
-            />
+            {!onPrem && (
+              <>
+                <Meta label="Max Branches" value={org.max_branches} />
+                <Meta
+                  label="Node Offline Threshold (sec)"
+                  value={org.node_offline_threshold_seconds ?? "Cloud mode"}
+                />
+              </>
+            )}
 
             <Meta label="Status" value={statusChip(org.status)} />
             <Meta label="Created" value={formatDate(org.created_at)} />
           </div>
         )}
       </SectionCard>
+
+      {onPrem && (
+        <OnPremSiteCard
+          org={org}
+          state={branchesState}
+          setState={setBranchesState}
+        />
+      )}
 
       <SectionCard
         title="Organization Template"
@@ -3194,6 +3373,467 @@ function InviteTab({ org }: { org: Organization }) {
   );
 }
 
+function LicensesTab({
+  orgId,
+  state,
+  setState,
+}: {
+  orgId: string;
+  state: LoadState<OrgLicense[]>;
+  setState: React.Dispatch<React.SetStateAction<LoadState<OrgLicense[]>>>;
+}) {
+  const [isIssuing, setIsIssuing] = useState(false);
+  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [expiresAt, setExpiresAt] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 16);
+  });
+  const [issuedToken, setIssuedToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+
+  const loadLicenses = useCallback(async () => {
+    setState((prev) => ({ ...prev, isLoading: true, error: null }));
+    try {
+      const rows = await licensesApi.list(orgId);
+      setState({ data: rows, isLoading: false, error: null, loaded: true });
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: extractApiError(err, "Failed to load licenses"),
+        loaded: true,
+      }));
+    }
+  }, [orgId, setState]);
+
+  useEffect(() => {
+    if (!state.loaded && !state.isLoading) {
+      void loadLicenses();
+    }
+  }, [state.loaded, state.isLoading, loadLicenses]);
+
+  const setExpiryDays = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    setExpiresAt(d.toISOString().slice(0, 16));
+  };
+
+  const handleIssue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsIssuing(true);
+    setError(null);
+    try {
+      const expiryIso = new Date(expiresAt).toISOString();
+      const res = await licensesApi.issue(orgId, { expires_at: expiryIso });
+      setIssuedToken(res.token || null);
+      setShowIssueModal(false);
+      await loadLicenses();
+    } catch (err) {
+      setError(extractApiError(err, "Failed to issue license"));
+    } finally {
+      setIsIssuing(false);
+    }
+  };
+
+  const handleRevoke = async (licenseId: string) => {
+    if (
+      !window.confirm(
+        "Are you sure you want to mark this license as revoked? (Note: already-issued offline tokens stay valid until expiration)",
+      )
+    )
+      return;
+    setActionBusyId(licenseId);
+    try {
+      await licensesApi.revoke(licenseId);
+      await loadLicenses();
+    } catch (err) {
+      setError(extractApiError(err, "Failed to revoke license"));
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleResetActivation = async (licenseId: string) => {
+    if (
+      !window.confirm(
+        "Are you sure you want to reset machine activation for this license? This will allow the license to be activated on a new machine.",
+      )
+    )
+      return;
+    setActionBusyId(licenseId);
+    try {
+      await licensesApi.resetActivation(licenseId);
+      await loadLicenses();
+    } catch (err) {
+      setError(extractApiError(err, "Failed to reset license activation"));
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const copyToken = () => {
+    if (!issuedToken) return;
+    void navigator.clipboard.writeText(issuedToken);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {error && <ErrorBox message={error} />}
+
+      {issuedToken && (
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 14,
+            background: T.teal50,
+            border: `1.5px solid ${T.teal600}`,
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: T.teal600,
+                fontWeight: 900,
+              }}
+            >
+              <CheckCircle2 size={18} />
+              <span>License Token Issued Successfully!</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIssuedToken(null)}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                color: T.textMuted,
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12,
+              color: T.textBody,
+              lineHeight: 1.5,
+            }}
+          >
+            Copy and send this token to the customer. It activates their
+            on-premises local dashboard completely offline:
+          </p>
+          <div
+            style={{
+              padding: "10px 12px",
+              background: "#fff",
+              border: `1px solid ${T.border}`,
+              borderRadius: 10,
+              fontFamily: "monospace",
+              fontSize: 11.5,
+              wordBreak: "break-all",
+              color: T.navy700,
+              maxHeight: 120,
+              overflowY: "auto",
+            }}
+          >
+            {issuedToken}
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={copyToken}
+              style={{
+                ...primaryButton(),
+                minHeight: 34,
+                padding: "0 14px",
+                fontSize: 12,
+              }}
+            >
+              {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+              {copied ? "Copied to Clipboard!" : "Copy License Token"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <SectionCard
+        title="Organization Licenses"
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setShowIssueModal(!showIssueModal);
+              setIssuedToken(null);
+            }}
+            style={primaryButton()}
+          >
+            <Plus size={14} /> Issue New License
+          </button>
+        }
+      >
+        {showIssueModal && (
+          <form
+            onSubmit={handleIssue}
+            style={{
+              marginBottom: 18,
+              padding: 16,
+              borderRadius: 12,
+              background: T.slate50,
+              border: `1px solid ${T.border}`,
+              display: "grid",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{ fontWeight: 900, color: T.textHeading, fontSize: 13 }}
+            >
+              Mint New Ed25519 Signed License Token
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                alignItems: "center",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: T.textMuted,
+                  textTransform: "uppercase",
+                }}
+              >
+                Quick Presets:
+              </span>
+              <button
+                type="button"
+                onClick={() => setExpiryDays(30)}
+                style={{ ...secondaryButton(), height: 28, fontSize: 11 }}
+              >
+                +30 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpiryDays(90)}
+                style={{ ...secondaryButton(), height: 28, fontSize: 11 }}
+              >
+                +90 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpiryDays(180)}
+                style={{ ...secondaryButton(), height: 28, fontSize: 11 }}
+              >
+                +180 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpiryDays(365)}
+                style={{ ...secondaryButton(), height: 28, fontSize: 11 }}
+              >
+                +1 Year
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: 12,
+              }}
+            >
+              <label>
+                <span style={labelStyle}>Expiry Date & Time (Local)</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowIssueModal(false)}
+                style={secondaryButton()}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isIssuing}
+                style={primaryButton()}
+              >
+                {isIssuing ? (
+                  <Loader2
+                    size={14}
+                    style={{ animation: "spin 1s linear infinite" }}
+                  />
+                ) : (
+                  <KeyRound size={14} />
+                )}
+                {isIssuing ? "Minting Token…" : "Mint & Issue License"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {state.isLoading && !state.loaded ? (
+          <div style={{ color: T.textMuted, fontSize: 13, padding: 12 }}>
+            <Loader2
+              size={16}
+              style={{
+                animation: "spin 1s linear infinite",
+                verticalAlign: "middle",
+                marginRight: 8,
+              }}
+            />
+            Loading organization licenses…
+          </div>
+        ) : state.data.length === 0 ? (
+          <div style={{ color: T.textMuted, fontSize: 13, padding: 12 }}>
+            No licenses have been issued for this organization yet. Click &quot;Issue New License&quot; above.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {state.data.map((lic) => {
+              const isLicActive = lic.status === "active";
+              const isLicExpired =
+                new Date(lic.expires_at).getTime() < Date.now();
+              const isClaimed = Boolean(lic.activated_node_id);
+              return (
+                <div
+                  key={lic.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: `1px solid ${T.border}`,
+                    background: isLicActive
+                      ? isLicExpired
+                        ? T.amber50
+                        : T.green50
+                      : T.slate50,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 900,
+                          color: T.text,
+                          fontSize: 13,
+                        }}
+                      >
+                        Expires: {formatDate(lic.expires_at)}
+                      </span>
+                      {statusChip(
+                        isLicExpired && isLicActive ? "expired" : lic.status,
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: T.textMuted }}>
+                      Issued: {formatDate(lic.issued_at)} · JTI:{" "}
+                      <code style={{ fontSize: 11 }}>
+                        {lic.jti.slice(0, 8)}…
+                      </code>
+                      {lic.invoice_id
+                        ? ` · Invoice: ${lic.invoice_id}`
+                        : ""}
+                    </div>
+                    <div style={{ fontSize: 11.5, marginTop: 2 }}>
+                      {isClaimed ? (
+                        <span style={{ color: T.teal600, fontWeight: 700 }}>
+                          ✓ Activated on: <strong>{lic.activated_hostname || lic.activated_node_id}</strong>
+                          {lic.activated_at ? ` (${formatDate(lic.activated_at)})` : ""}
+                        </span>
+                      ) : isLicActive ? (
+                        <span style={{ color: T.amber, fontWeight: 600 }}>
+                          • Available (1 machine activation remaining)
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {isLicActive && isClaimed && (
+                      <button
+                        type="button"
+                        onClick={() => void handleResetActivation(lic.id)}
+                        disabled={actionBusyId === lic.id}
+                        title="Reset machine activation so it can be claimed by a new/replacement machine"
+                        style={{
+                          ...secondaryButton(),
+                          height: 30,
+                          fontSize: 11,
+                        }}
+                      >
+                        {actionBusyId === lic.id ? "Resetting…" : "Reset Activation"}
+                      </button>
+                    )}
+                    {isLicActive && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRevoke(lic.id)}
+                        disabled={actionBusyId === lic.id}
+                        style={{
+                          ...secondaryButton(),
+                          color: T.red,
+                          borderColor: T.red,
+                          height: 30,
+                          fontSize: 11,
+                        }}
+                      >
+                        {actionBusyId === lic.id ? "Revoking…" : "Revoke"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
 export default function OrgDetail() {
   // Billing may read an organization (an invoice is meaningless without
   // knowing whose it is) but not its structural or lifecycle config. The
@@ -3204,19 +3844,22 @@ export default function OrgDetail() {
     String(auth.user?.role || "")
       .trim()
       .toLowerCase() === "super_admin";
-  const visibleTabs = useMemo(
-    () =>
-      isSuperAdmin
-        ? TABS
-        : TABS.filter((tab) => tab.key === "overview" || tab.key === "billing"),
-    [isSuperAdmin],
-  );
-
   const params = useParams<{ orgId?: string; id?: string }>();
   const navigate = useNavigate();
   const orgId = String(params.orgId || params.id || "");
 
   const [org, setOrg] = useState<Organization | null>(null);
+  const visibleTabs = useMemo(() => {
+    if (!isSuperAdmin) {
+      return TABS.filter(
+        (tab) => tab.key === "overview" || tab.key === "billing",
+      );
+    }
+    const onPrem = isOnPremOrg(org);
+    return TABS.filter((tab) =>
+      onPrem ? !ON_PREM_HIDDEN_TABS.has(tab.key) : tab.key !== "licenses",
+    );
+  }, [isSuperAdmin, org]);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [isLoadingOrg, setIsLoadingOrg] = useState(true);
   const [orgError, setOrgError] = useState<string | null>(null);
@@ -3225,6 +3868,9 @@ export default function OrgDetail() {
   );
   const [branches, setBranches] = useState<LoadState<Branch[]>>(emptyState([]));
   const [invoices, setInvoices] = useState<LoadState<Invoice[]>>(
+    emptyState([]),
+  );
+  const [licenses, setLicenses] = useState<LoadState<OrgLicense[]>>(
     emptyState([]),
   );
   const [nodeHealth, setNodeHealth] = useState<LoadState<NodeHealth[]>>(
@@ -3310,6 +3956,22 @@ export default function OrgDetail() {
           })),
         );
     }
+    if (activeTab === "licenses" && !licenses.loaded && !licenses.isLoading) {
+      setLicenses((s) => ({ ...s, isLoading: true, error: null }));
+      licensesApi
+        .list(orgId)
+        .then((data) =>
+          setLicenses({ data, isLoading: false, error: null, loaded: true }),
+        )
+        .catch((err) =>
+          setLicenses((s) => ({
+            ...s,
+            isLoading: false,
+            error: extractApiError(err, "Failed to load licenses"),
+            loaded: true,
+          })),
+        );
+    }
     if (
       activeTab === "monitoring" &&
       !nodeHealth.loaded &&
@@ -3339,6 +4001,8 @@ export default function OrgDetail() {
     branches.isLoading,
     invoices.loaded,
     invoices.isLoading,
+    licenses.loaded,
+    licenses.isLoading,
     nodeHealth.loaded,
     nodeHealth.isLoading,
   ]);
@@ -3418,8 +4082,11 @@ export default function OrgDetail() {
                 }}
               >
                 {org.contact_email} ·{" "}
-                {String(org.attendance_mode).toUpperCase()} mode ·{" "}
-                {org.max_branches} branch limit · {statusChip(org.status)}
+                {DEPLOYMENT_LABELS[getDeploymentModel(org)]} ·{" "}
+                {isOnPremOrg(org)
+                  ? "Single site"
+                  : `${org.max_branches} branch limit`}{" "}
+                · {statusChip(org.status)}
               </p>
             </div>
           </div>
@@ -3548,6 +4215,9 @@ export default function OrgDetail() {
         )}
         {activeTab === "billing" && (
           <BillingTab orgId={org.id} state={invoices} setState={setInvoices} />
+        )}
+        {activeTab === "licenses" && (
+          <LicensesTab orgId={org.id} state={licenses} setState={setLicenses} />
         )}
         {activeTab === "monitoring" && <MonitoringTab state={nodeHealth} />}
         {activeTab === "data_access" && (

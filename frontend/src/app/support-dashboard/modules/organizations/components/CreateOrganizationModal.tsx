@@ -28,6 +28,7 @@ import type {
   AttendanceMode,
   BillingCycle,
   BusinessType,
+  ClientCategory,
   Organization,
   PeopleKind,
   PeopleType,
@@ -38,6 +39,13 @@ import type {
 import BusinessTemplateSelect from "./BusinessTemplateSelect";
 import AttendanceScopeSelector from "./AttendanceScopeSelector";
 import TimezoneSelect from "./TimezoneSelect";
+import {
+  DEPLOYMENT_FIELDS,
+  DEPLOYMENT_LABELS,
+  getDeploymentModel,
+  isOnPremOrg,
+  type DeploymentModel,
+} from "../deployment";
 
 type BranchDraft = {
   /**
@@ -74,6 +82,7 @@ type FormState = {
   enabled_mobile_people_types: PeopleType[];
   people_kind: PeopleKind;
   attendance_mode: AttendanceMode;
+  client_category: ClientCategory;
   node_offline_threshold_seconds: number;
   max_branches: number;
   selected_modules: ClientModuleKey[];
@@ -330,6 +339,7 @@ function defaultFormState(): FormState {
     enabled_mobile_people_types: [],
     people_kind: "staff",
     attendance_mode: "cloud",
+    client_category: "saas",
     node_offline_threshold_seconds: 10,
     max_branches: 1,
     selected_modules: ["employees", "attendance"],
@@ -452,7 +462,10 @@ function validateForm(state: FormState): string | null {
   if (!state.attendance_people_types.length) {
     return "Select who will use biometric attendance for this organization.";
   }
-  if (state.attendance_mode === "local") {
+  if (
+    state.attendance_mode === "local" &&
+    state.client_category !== "on_prem"
+  ) {
     if (
       state.node_offline_threshold_seconds < 5 ||
       state.node_offline_threshold_seconds > 300
@@ -525,6 +538,7 @@ export const CreateOrganizationModal: React.FC<
 
   const peopleLabel = PEOPLE_KIND_LABELS[form.people_kind] || "People";
   const canAddBranch = form.branches.length < form.max_branches;
+  const isOnPrem = isOnPremOrg(form);
 
   const handleTemplateChange = (businessType: string) => {
     const nextTemplate = templates.find(
@@ -563,8 +577,9 @@ export const CreateOrganizationModal: React.FC<
         enabled_staff_types: form.enabled_staff_types,
         people_kind: primaryPeopleKind,
         attendance_mode: form.attendance_mode,
+        client_category: form.client_category,
         node_offline_threshold_seconds:
-          form.attendance_mode === "local"
+          form.attendance_mode === "local" && !isOnPrem
             ? form.node_offline_threshold_seconds
             : undefined,
         max_branches: form.max_branches,
@@ -897,26 +912,39 @@ export const CreateOrganizationModal: React.FC<
               )}
 
               <Field
-                label="Attendance Mode"
-                helper="Support-owned. Client cannot change it."
+                label="Deployment"
+                helper="Support-owned. Hybrid recognizes locally and reports to the cloud; On-Premise runs both locally under a license."
               >
                 <select
-                  value={form.attendance_mode}
-                  onChange={(e) =>
+                  value={getDeploymentModel(form)}
+                  onChange={(e) => {
+                    const model = e.target.value as DeploymentModel;
                     dispatch({
                       type: "PATCH",
                       patch: {
-                        attendance_mode: e.target.value as AttendanceMode,
+                        ...DEPLOYMENT_FIELDS[model],
+                        ...(model === "on_premise"
+                          ? {
+                              max_branches: 1,
+                              branches: form.branches.slice(0, 1),
+                            }
+                          : {}),
                       },
-                    })
-                  }
+                    });
+                  }}
                   style={inputStyle}
                 >
-                  <option value="cloud">Cloud</option>
-                  <option value="local">Local</option>
+                  {(Object.keys(DEPLOYMENT_LABELS) as DeploymentModel[]).map(
+                    (model) => (
+                      <option key={model} value={model}>
+                        {DEPLOYMENT_LABELS[model]}
+                      </option>
+                    ),
+                  )}
                 </select>
               </Field>
 
+              {!isOnPrem && (
               <Field
                 label="Max Branches"
                 helper="Paid branch limit. Support can adjust this; the client cannot."
@@ -938,8 +966,9 @@ export const CreateOrganizationModal: React.FC<
                   style={inputStyle}
                 />
               </Field>
+              )}
 
-              {form.attendance_mode === "local" && (
+              {form.attendance_mode === "local" && !isOnPrem && (
                 <Field
                   label="Node Offline Threshold Seconds"
                   helper="Fallback can activate after this heartbeat gap (5–300 seconds)."
@@ -1040,13 +1069,15 @@ export const CreateOrganizationModal: React.FC<
             >
               <div>
                 <h3 style={{ ...sectionTitleStyle, marginBottom: 3 }}>
-                  3. Branches & Capacity
+                  {isOnPrem ? "3. Site & Capacity" : "3. Branches & Capacity"}
                 </h3>
                 <p style={{ margin: 0, fontSize: 11, color: T.textMuted }}>
                   Capacity remains stored as max_staff_capacity for
                   compatibility, but UI labels follow the template.
                 </p>
               </div>
+              {!isOnPrem && (
+                <>
               <button
                 type="button"
                 onClick={() => dispatch({ type: "ADD_BRANCH" })}
@@ -1082,6 +1113,8 @@ export const CreateOrganizationModal: React.FC<
                   restriction.
                 </span>
               )}
+                </>
+              )}
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
@@ -1090,7 +1123,9 @@ export const CreateOrganizationModal: React.FC<
                   key={`branch-${index}`}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1.1fr 1fr 1.1fr 0.7fr auto",
+                    gridTemplateColumns: isOnPrem
+                      ? "1fr 1fr"
+                      : "1.1fr 1fr 1.1fr 0.7fr auto",
                     gap: 10,
                     alignItems: "end",
                     padding: 12,
@@ -1099,6 +1134,8 @@ export const CreateOrganizationModal: React.FC<
                     background: T.slate50,
                   }}
                 >
+                  {!isOnPrem && (
+                    <>
                   <Field label={`Branch ${index + 1} Name`}>
                     <input
                       value={branch.name}
@@ -1128,6 +1165,8 @@ export const CreateOrganizationModal: React.FC<
                       style={inputStyle}
                     />
                   </Field>
+                    </>
+                  )}
 
                   <TimezoneSelect
                     value={branch.timezone}
@@ -1161,6 +1200,7 @@ export const CreateOrganizationModal: React.FC<
                     />
                   </Field>
 
+                  {!isOnPrem && (
                   <button
                     type="button"
                     onClick={() => dispatch({ type: "REMOVE_BRANCH", index })}
@@ -1181,6 +1221,7 @@ export const CreateOrganizationModal: React.FC<
                   >
                     <Trash2 size={14} />
                   </button>
+                  )}
                 </div>
               ))}
             </div>

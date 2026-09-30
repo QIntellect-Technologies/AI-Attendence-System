@@ -92,7 +92,7 @@ def _support_org_lookup(org_ids: list[str]) -> dict[str, dict]:
         lambda: (
             get_supabase()
             .table('organizations')
-            .select('id,name,contact_email,contact_phone,business_type,attendance_mode,max_branches,archived_at,deleted_at')
+            .select('id,name,contact_email,contact_phone,business_type,attendance_mode,client_category,max_branches,archived_at,deleted_at')
             .in_('id', keys)
         ),
     )
@@ -165,6 +165,7 @@ def list_support_branches_page(page=1, page_size=25, search: str | None = None, 
             'organization_email': org.get('contact_email'),
             'organization_status': org.get('status'),
             'attendance_mode': org.get('attendance_mode'),
+            'client_category': org.get('client_category'),
             'status': branch_status,
             'dropped_at': row.get('dropped_at'),
             'drop_reason': row.get('drop_reason'),

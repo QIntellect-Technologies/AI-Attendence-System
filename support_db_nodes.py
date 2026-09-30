@@ -27,7 +27,7 @@ from support_db_camera_assignments import list_camera_context_assignments
 from logger_config import get_logger
 
 logger = get_logger(__name__)
-from support_db_core import NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _ensure_org_client_access, _execute_supabase
+from support_db_core import NODE_OFFLINE_THRESHOLD_DEFAULT_SECONDS, NODE_OFFLINE_THRESHOLD_MAX_SECONDS, NODE_OFFLINE_THRESHOLD_MIN_SECONDS, _ensure_org_client_access, _execute_supabase, require_deployment
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -335,6 +335,7 @@ def create_branch_install_token(
 
     if str(org.get("attendance_mode") or "").strip().lower() != "local":
         raise ValueError("Node installer is available only for local attendance mode")
+    require_deployment(org, on_prem=False, action="Node installer")
 
     branch = _get_branch_owned_by_org(org_key, branch_key)
 
@@ -413,6 +414,7 @@ def activate_node_with_install_token(
     org_id = str(token_row.get('org_id'))
     branch_id = str(token_row.get('branch_id'))
     org = get_organization(org_id)
+    require_deployment(org, on_prem=False, action='Install-token activation')
     branch = _get_branch_owned_by_org(org_id, branch_id)
 
     node_api_key = _token('qia_node')

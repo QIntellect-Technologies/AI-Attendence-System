@@ -3,6 +3,7 @@ import { Download, GitBranch, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useInstallToken } from "../../hooks/useInstallToken";
 import InstallTokenModal from "../../components/InstallTokenModal";
+import { getDeploymentModel, isOnPremOrg } from "../organizations/deployment";
 import {
   SupportPageShell,
   supportTheme,
@@ -40,7 +41,7 @@ export default function BranchesPage() {
   );
 
   const handleGenerateToken = async (branch: GlobalBranchRow) => {
-    if (!isLocalAttendance(branch.attendance_mode)) return;
+    if (!isLocalAttendance(branch.attendance_mode) || isOnPremOrg(branch)) return;
     setGeneratingBranchId(branch.id);
     await generate(branch.org_id, branch.branch_id || branch.id);
     setGeneratingBranchId(null);
@@ -101,7 +102,7 @@ export default function BranchesPage() {
     {
       key: "attendance_mode",
       header: "Mode",
-      render: (row) => <SupportStatusBadge value={row.attendance_mode} />,
+      render: (row) => <SupportStatusBadge value={getDeploymentModel(row)} />,
     },
     {
       key: "capacity",
@@ -129,7 +130,7 @@ export default function BranchesPage() {
       key: "actions",
       header: "Actions",
       render: (row) =>
-        isLocalAttendance(row.attendance_mode) ? (
+        isLocalAttendance(row.attendance_mode) && !isOnPremOrg(row) ? (
           <button
             type="button"
             style={actionStyle}

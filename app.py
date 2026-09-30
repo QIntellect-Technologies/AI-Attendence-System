@@ -128,6 +128,7 @@ app.register_blueprint(internal_bp)
 from support_routes import support_bp
 from tenant_routes import tenant_bp
 import support_db as support_cp_db
+from support_db_core import OrgDeploymentError
 import support_db_payroll
 from supabase_client import get_supabase
 from support_db_fast import (
@@ -6198,6 +6199,61 @@ def v1_node_heartbeat():
     except Exception as e:
         logger.exception('Node heartbeat failed')
         return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
+
+
+# ─── Node License Verification Routes ────────────────────────────
+@app.route('/v1/node/license/claim', methods=['POST'])
+def v1_node_license_claim():
+    """One-time claim: binds the license JTI to the requesting machine's node_id."""
+    data = request.get_json(silent=True) or {}
+    jti = str(data.get('jti') or '').strip()
+    node_id = str(data.get('node_id') or '').strip()
+    if not jti or not node_id:
+        msg = 'jti and node_id are required'
+        return jsonify({'success': False, 'error': msg, 'message': msg}), 400
+    try:
+        result = support_cp_db.claim_org_license(
+            jti=jti,
+            node_id=node_id,
+            hostname=str(data.get('hostname') or '').strip() or None,
+            org_id=str(data.get('org_id') or '').strip() or None,
+        )
+        return jsonify(result), 200
+    except OrgDeploymentError as exc:
+        return jsonify({'success': False, 'error': str(exc), 'message': str(exc),
+                        'code': 'DEPLOYMENT_MODEL_MISMATCH'}), 409
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc), 'message': str(exc),
+                        'code': 'LICENSE_ALREADY_CLAIMED'}), 400
+    except Exception as exc:
+        logger.exception('License claim failed')
+        return jsonify({'success': False, 'error': str(exc), 'message': str(exc)}), 500
+
+
+@app.route('/v1/node/license/check', methods=['POST'])
+@app.route('/v1/license/check', methods=['POST'])
+def v1_license_check():
+    """Revocation / status check for a license token."""
+    data = request.get_json(silent=True) or {}
+    jti = str(data.get('jti') or '').strip()
+    if not jti:
+        return jsonify({'success': False, 'error': 'jti is required'}), 400
+    try:
+        result = support_cp_db.check_license_status(
+            jti=jti, org_id=str(data.get('org_id') or '').strip() or None)
+        is_revoked = bool(result.get('is_revoked'))
+        return jsonify({
+            'success': True,
+            'is_revoked': is_revoked,
+            'is_active': bool(result.get('is_active')),
+            'status': result.get('status'),
+            'message': 'This license token has been revoked by Support.' if is_revoked else None,
+            **{k: v for k, v in result.items()
+               if k not in ('is_revoked', 'is_active', 'status')},
+        }), 200
+    except Exception as exc:
+        logger.exception('License revocation check failed')
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 500
 
 
 @app.route('/v1/node/config', methods=['GET'])

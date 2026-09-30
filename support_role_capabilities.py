@@ -28,6 +28,7 @@ _CAPABILITIES = {
         'modules:read', 'modules:write',
         'nodes:read',
         'internal_users:read', 'internal_users:write',
+        'licenses:read', 'licenses:write',
     },
     'billing': {
         'orgs:read',
