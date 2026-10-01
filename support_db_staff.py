@@ -713,6 +713,8 @@ def _client_staff_safe(
         'shiftId': str(shift_id_ref) if shift_id_ref else (row.get('shift_id') or 'morning'),
         'shift_id_ref': str(shift_id_ref) if shift_id_ref else None,
         'shiftIdRef': str(shift_id_ref) if shift_id_ref else None,
+        'check_in_grace_override': row.get('check_in_grace_override'),
+        'checkInGraceOverride': row.get('check_in_grace_override'),
         'shift_is_active': (resolved_shift['is_active'] if resolved_shift else None),
         'shiftIsActive': (resolved_shift['is_active'] if resolved_shift else None),
         'shift_label': shift_label,

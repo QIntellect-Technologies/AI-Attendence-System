@@ -26,6 +26,13 @@ import { toastSuccess, toastError, toastInfo } from "../../utils/notifications";
 import { useNavigate, useParams } from "react-router-dom";
 import { listStaffPage } from "../StaffManagement/api/staffApi";
 import {
+  getCaptureSettings,
+  listBranchShifts,
+  type CaptureSettings,
+  type ShiftRecord,
+} from "../StaffManagement/api/attendanceSettingsApi";
+import { fetchLiveCameras } from "../LiveAttendance/api/liveStreamApi";
+import {
   getTodayAttendance as getTodayNodeAttendance,
   type AttendanceRecord as NodeAttendanceRecord,
 } from "./api/attendanceEventsApi";
@@ -75,10 +82,8 @@ import {
 
 import {
   Clock,
-  CheckCircle,
   UserX,
   Users,
-  AlertCircle,
   MapPin,
   ArrowUpRight,
   ClipboardCheck,
@@ -190,6 +195,8 @@ interface AttendanceStaff {
   jobTitle?: string;
   empId?: string;
   userId?: string | number;
+  shiftIdRef?: string | null;
+  checkInGraceOverride?: number | string | null;
   shiftStart?: string;
   shiftEnd?: string;
   [key: string]: unknown;
@@ -649,6 +656,12 @@ const getAttendanceSubgroupValue = (staffMember: AttendanceStaff): string =>
 
 type AttendanceTemplateColumn = TemplateColumn<Record<string, unknown>>;
 
+const ATTENDANCE_TABLE_HIDDEN_COLUMNS = new Set([
+  "department",
+  "designation",
+  "notes",
+]);
+
 type AttendanceCellContext = {
   member: AttendanceStaff;
   record?: {
@@ -708,6 +721,49 @@ function formatTimeForDisplay(
     // handled by getBranchTimezone() below, never by this catch.
     return String(value);
   }
+}
+
+function formatAttendanceArrivalStatus(
+  record: {
+    isPresent?: boolean;
+    isLate?: boolean;
+    inTime?: string | null;
+    notes?: string | null;
+  },
+  timeZone: string,
+  graceMinutes: number | null,
+): string {
+  if (!record.isPresent) return "Absent";
+  if (!record.isLate) return "Present / On-Time";
+
+  const shiftStart = record.notes?.match(
+    /after the\s+(\d{1,2}):(\d{2})(?::\d{2})?\s+shift start/i,
+  );
+  if (!shiftStart || !record.inTime || graceMinutes === null) return "Late";
+
+  const timeOnly = record.inTime.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  const localTime = timeOnly
+    ? null
+    : toDatetimeLocalValue(record.inTime, timeZone).match(/T(\d{2}):(\d{2})$/);
+  const actualMinutes = timeOnly
+    ? Number(timeOnly[1]) * 60 + Number(timeOnly[2])
+    : localTime
+      ? Number(localTime[1]) * 60 + Number(localTime[2])
+      : null;
+  if (actualMinutes === null) return "Late";
+
+  const scheduledMinutes = Number(shiftStart[1]) * 60 + Number(shiftStart[2]);
+  let lateMinutes = actualMinutes - scheduledMinutes - graceMinutes;
+  if (lateMinutes < 0) lateMinutes += 24 * 60;
+  if (lateMinutes <= 0) return "Late";
+  if (lateMinutes === 0) return "Late";
+
+  if (lateMinutes < 60) return `Late / ${lateMinutes} min`;
+  const hours = Math.floor(lateMinutes / 60);
+  const minutes = lateMinutes % 60;
+  return minutes > 0
+    ? `Late / ${hours} hr ${minutes} min`
+    : `Late / ${hours} hr`;
 }
 
 // FALLBACK_TIMEZONE now lives in ./utils/attendanceDisplay (imported
@@ -1006,6 +1062,9 @@ const normalizeStaffForAttendance = (
     shiftEnd: String(
       member.shiftEnd ?? member.shift_end ?? member.duty_end ?? "17:00",
     ),
+    shiftIdRef: member.shiftIdRef ?? member.shift_id_ref ?? null,
+    checkInGraceOverride:
+      member.checkInGraceOverride ?? member.check_in_grace_override ?? null,
   };
 };
 
@@ -1142,7 +1201,7 @@ function resolveCameraLabel(
   if (cameraId === null || cameraId === undefined || cameraId === "") {
     return null;
   }
-  return camerasById.get(String(cameraId)) ?? String(cameraId);
+  return camerasById.get(normalizeKey(cameraId)) ?? null;
 }
 
 const normalizeAttendanceForView = (
@@ -1390,6 +1449,9 @@ export default function AttendanceView() {
 
   const [apiStaff, setApiStaff] = useState<AttendanceStaff[]>([]);
   const [apiAttendance, setApiAttendance] = useState<ApiAttendance[]>([]);
+  const [checkInGraceByStaffId, setCheckInGraceByStaffId] = useState<
+    Map<string, number>
+  >(() => new Map());
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
@@ -1463,6 +1525,7 @@ export default function AttendanceView() {
       ),
     [peopleModel.attendanceColumns],
   );
+  const showBranchColumn = visibleBranches.length > 1;
 
   const attendanceTemplateFilters = useMemo(
     () => peopleModel.filters,
@@ -1493,8 +1556,14 @@ export default function AttendanceView() {
   // this excludes it from the config-driven pass and it's appended manually
   // after Notes/Channel in the table markup below.
   const visibleDailyAttendanceColumns = useMemo(
-    () => dailyAttendanceColumns.filter((column) => column.key !== "action"),
-    [dailyAttendanceColumns],
+    () =>
+      dailyAttendanceColumns.filter(
+        (column) =>
+          column.key !== "action" &&
+          !ATTENDANCE_TABLE_HIDDEN_COLUMNS.has(column.key) &&
+          (column.key !== "branch" || showBranchColumn),
+      ),
+    [dailyAttendanceColumns, showBranchColumn],
   );
 
   // Payroll decisions only exist when the org purchased the Payroll module
@@ -1510,17 +1579,49 @@ export default function AttendanceView() {
       (member as any)?.peopleType ?? (member as any)?.people_type,
     );
 
-  // Flattened id → display-name lookup for the Camera column, built once
-  // from cfg.cameras (already hydrated org-wide by OrgConfigContext).
+  const [liveCameraNamesById, setLiveCameraNamesById] = useState<
+    Map<string, string>
+  >(() => new Map());
+
+  useEffect(() => {
+    if (!organizationIdForApi) {
+      setLiveCameraNamesById(new Map());
+      return;
+    }
+
+    const controller = new AbortController();
+    setLiveCameraNamesById(new Map());
+    void fetchLiveCameras(
+      { organizationId: organizationIdForApi },
+      controller.signal,
+    )
+      .then((cameras) => {
+        if (controller.signal.aborted) return;
+        setLiveCameraNamesById(
+          new Map(
+            cameras.map((camera) => [normalizeKey(camera.id), camera.name]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLiveCameraNamesById(new Map());
+      });
+
+    return () => controller.abort();
+  }, [organizationIdForApi]);
+
+  // Prefer canonical branch_cameras names, while retaining hydrated config
+  // names as a fallback during API errors or initial loading.
   const camerasById = useMemo(() => {
     const map = new Map<string, string>();
     Object.values(cfg.cameras).forEach((branchCameras) => {
       branchCameras.forEach((camera) => {
-        map.set(String(camera.id), camera.name);
+        map.set(normalizeKey(camera.id), camera.name);
       });
     });
+    liveCameraNamesById.forEach((name, id) => map.set(id, name));
     return map;
-  }, [cfg.cameras]);
+  }, [cfg.cameras, liveCameraNamesById]);
 
   const rangeAttendanceColumns = useMemo(
     () =>
@@ -1528,9 +1629,11 @@ export default function AttendanceView() {
         (column) =>
           !["checkIn", "checkOut", "duration", "arrival", "action"].includes(
             column.key,
-          ),
+          ) &&
+          !ATTENDANCE_TABLE_HIDDEN_COLUMNS.has(column.key) &&
+          (column.key !== "branch" || showBranchColumn),
       ),
-    [attendanceTemplateColumns],
+    [attendanceTemplateColumns, showBranchColumn],
   );
 
   const attendanceDateParams = useMemo(() => {
@@ -1999,6 +2102,100 @@ export default function AttendanceView() {
     });
   }, [activeBranchId, isGlobal, peopleType, scopedBranchId, staff]);
 
+  useEffect(() => {
+    if (!useRealApi || !organizationIdForApi || staff.length === 0) {
+      setCheckInGraceByStaffId(new Map());
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCheckInGrace = async () => {
+      const uiBranchIds = Array.from(
+        new Set(
+          staff
+            .map((member) => Number(member.branchId))
+            .filter((branchId) => Number.isFinite(branchId) && branchId > 0),
+        ),
+      );
+      const timingByBranch = new Map<
+        number,
+        { shifts: ShiftRecord[]; settings: CaptureSettings | null }
+      >();
+
+      await Promise.all(
+        uiBranchIds.map(async (uiBranchId) => {
+          const backendBranchId = backendBranchIdForUi(branches, uiBranchId);
+          if (!backendBranchId) return;
+
+          const [shifts, settings] = await Promise.all([
+            listBranchShifts(
+              backendBranchId,
+              organizationIdForApi,
+              peopleType,
+            ).catch(() => []),
+            getCaptureSettings(
+              backendBranchId,
+              peopleType,
+              organizationIdForApi,
+            ).catch(() => null),
+          ]);
+          timingByBranch.set(uiBranchId, { shifts, settings });
+        }),
+      );
+
+      if (cancelled) return;
+
+      const graceByStaffId = new Map<string, number>();
+      staff.forEach((member) => {
+        const branchTiming = timingByBranch.get(Number(member.branchId));
+        if (!branchTiming) return;
+
+        const assignedShift = branchTiming.shifts.find(
+          (shift) => String(shift.id) === String(member.shiftIdRef ?? ""),
+        );
+        const staffOverride = member.checkInGraceOverride;
+        let rawGrace: unknown;
+
+        if (assignedShift) {
+          rawGrace =
+            staffOverride !== null &&
+            staffOverride !== undefined &&
+            staffOverride !== ""
+              ? staffOverride
+              : (assignedShift.grace_minutes ?? 0);
+        } else if (branchTiming.settings?.mode === "simple") {
+          rawGrace = branchTiming.settings.check_in_grace_minutes ?? 0;
+        } else if (
+          branchTiming.settings?.mode === "shift" &&
+          branchTiming.settings.default_shift_id
+        ) {
+          const defaultShift = branchTiming.shifts.find(
+            (shift) => shift.id === branchTiming.settings?.default_shift_id,
+          );
+          if (defaultShift) {
+            rawGrace =
+              branchTiming.settings.default_check_in_grace_override ??
+              defaultShift.grace_minutes ??
+              0;
+          }
+        }
+
+        const graceMinutes = Number(rawGrace);
+        if (Number.isFinite(graceMinutes) && graceMinutes >= 0) {
+          graceByStaffId.set(String(member.id), graceMinutes);
+        }
+      });
+
+      setCheckInGraceByStaffId(graceByStaffId);
+    };
+
+    void loadCheckInGrace();
+    return () => {
+      cancelled = true;
+    };
+  }, [branches, organizationIdForApi, peopleType, staff, useRealApi]);
+
   const groupCounts = useMemo(
     () => countByName(scopedStaff, getAttendanceGroupValue),
     [scopedStaff],
@@ -2037,6 +2234,7 @@ export default function AttendanceView() {
       )
       .map((staffMember) => {
         const staffBranchId = Number((staffMember as any).branchId);
+        const branchTimezone = getBranchTimezone(staffBranchId, branches);
         const dateRecords = filter.dates.map((date) => {
           const realRecord = attendance.find((record) => {
             const sameName =
@@ -2068,14 +2266,23 @@ export default function AttendanceView() {
               "HALF_DAY",
             ].includes(normalizedStatus);
             const isLate =
-              realRecord.arrival_status?.includes("Late") ||
+              normalizeKey(realRecord.arrival_status).includes("late") ||
+              normalizeKey(realRecord.check_in_status) === "late" ||
               normalizedStatus === "LATE";
             return {
               id: realRecord.id,
               date,
               status: normalizedStatus,
-              arrivalStatus:
-                realRecord.arrival_status ?? (isLate ? "Late" : "On-Time"),
+              arrivalStatus: formatAttendanceArrivalStatus(
+                {
+                  isPresent,
+                  isLate,
+                  inTime: realRecord.time ?? realRecord.check_in,
+                  notes: realRecord.notes,
+                },
+                branchTimezone,
+                checkInGraceByStaffId.get(String(staffMember.id)) ?? null,
+              ),
               checkInStatus: realRecord.check_in_status ?? null,
               inTime: realRecord.time ?? realRecord.check_in ?? "",
               outTime: realRecord.outTime ?? realRecord.check_out ?? "",
@@ -2170,6 +2377,8 @@ export default function AttendanceView() {
   }, [
     scopedStaff,
     attendance,
+    branches,
+    checkInGraceByStaffId,
     searchQuery,
     activeDept,
     activeSubgroup,
@@ -2244,6 +2453,7 @@ export default function AttendanceView() {
             column.exportable !== false &&
             column.key !== "action" &&
             column.key !== "branch" &&
+            column.key !== "department" &&
             column.key !== "uuid" &&
             !(shouldHideTimeColumns && isDetailTimingColumn)
           );
@@ -2256,20 +2466,32 @@ export default function AttendanceView() {
               column,
             ),
         })),
-      { header: "Month", key: "month" as keyof AttendanceExportRow },
-      { header: "Year", key: "year" as keyof AttendanceExportRow },
-      { header: "Total Days", key: "totalDays" as keyof AttendanceExportRow },
-      { header: "Present", key: "present" as keyof AttendanceExportRow },
-      { header: "On-Time", key: "onTime" as keyof AttendanceExportRow },
-      { header: "Late", key: "late" as keyof AttendanceExportRow },
-      ...(leaveModuleEnabled
-        ? [{ header: "Leaves", key: "leaves" as keyof AttendanceExportRow }]
+      ...(shouldHideTimeColumns
+        ? [
+            { header: "Month", key: "month" as keyof AttendanceExportRow },
+            { header: "Year", key: "year" as keyof AttendanceExportRow },
+            {
+              header: "Total Days",
+              key: "totalDays" as keyof AttendanceExportRow,
+            },
+            { header: "Present", key: "present" as keyof AttendanceExportRow },
+            { header: "On-Time", key: "onTime" as keyof AttendanceExportRow },
+            { header: "Late", key: "late" as keyof AttendanceExportRow },
+            ...(leaveModuleEnabled
+              ? [
+                  {
+                    header: "Leaves",
+                    key: "leaves" as keyof AttendanceExportRow,
+                  },
+                ]
+              : []),
+            { header: "Absents", key: "absents" as keyof AttendanceExportRow },
+            {
+              header: "Attendance Rate",
+              key: "attendanceRate" as keyof AttendanceExportRow,
+            },
+          ]
         : []),
-      { header: "Absents", key: "absents" as keyof AttendanceExportRow },
-      {
-        header: "Attendance Rate",
-        key: "attendanceRate" as keyof AttendanceExportRow,
-      },
     ],
     [attendanceTemplateColumns, shouldHideTimeColumns, leaveModuleEnabled],
   );
@@ -2334,8 +2556,6 @@ export default function AttendanceView() {
     totalStaff > 0 ? Math.round((presentCount / totalStaff) * 100) : 0;
   const onTimePct =
     presentCount > 0 ? Math.round((onTimeCount / presentCount) * 100) : 0;
-  const latePct =
-    presentCount > 0 ? Math.round((lateCount / presentCount) * 100) : 0;
   const absentPct =
     totalStaff > 0 ? Math.round((absentCount / totalStaff) * 100) : 0;
 
@@ -2463,12 +2683,6 @@ export default function AttendanceView() {
     setActiveStatus("all");
     filter.setMode("daily");
   }, [filter, isGlobal]);
-
-  const attendanceTitle = isGlobal
-    ? activeBranchId
-      ? `${data.branches.find((branch) => branch.branchId === activeBranchId)?.branchName} · Attendance`
-      : `All Branches · ${peopleModel.personPlural} Attendance`
-    : `${currentBranch?.name ?? ""} · Attendance`;
 
   const attendanceFilterSections = useMemo<DynamicFilterSection[]>(
     () => [
@@ -2732,58 +2946,6 @@ export default function AttendanceView() {
         style={{ marginBottom: 24 }}
       />
 
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold" style={{ color: "#1a699f" }}>
-          {attendanceTitle}
-        </h2>
-        <span className="text-xs text-gray-400">
-          {filter.label} · {attendanceRows.length} records
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-semibold" style={{ color: "#1a699f" }}>
-              {peopleModel.personPlural}
-            </p>
-            <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
-              <Users className="w-4 h-4 text-gray-500" />
-            </div>
-          </div>
-          <p className="text-3xl font-bold text-gray-900">{presentCount}</p>
-          <p className="text-xs text-gray-400 mt-1">{presentPct}% present</p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-semibold" style={{ color: "#1a699f" }}>
-              On-Time
-            </p>
-            <CheckCircle className="w-5 h-5 text-teal-600" />
-          </div>
-          <p className="text-3xl font-bold text-gray-900">{onTimeCount}</p>
-          <p className="text-xs text-gray-400 mt-1">
-            {onTimePct}% on-time rate
-          </p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-semibold" style={{ color: "#1a699f" }}>
-              Late / Absent
-            </p>
-            <AlertCircle className="w-5 h-5 text-orange-500" />
-          </div>
-          <p className="text-3xl font-bold text-gray-900">
-            {lateCount} / {absentCount}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {latePct}% late · {absentPct}% absent
-          </p>
-        </div>
-      </div>
-
       {filter.mode === "daily" && (
         <>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -2816,33 +2978,39 @@ export default function AttendanceView() {
                      * config-driven entry alone wouldn't be enough) — appended
                      * here so it renders regardless of that external column
                      * config until "notes" is added there directly. */}
+                    {/* Temporarily hidden:
                     <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                       Notes
                     </th>
+                    */}
                     {/* Same "fixed column" reasoning as Notes above. Shows the
                      * day-level outcome (Late / Short Leave / Half Day /
                      * Overtime, falling back to On Time / Early / Unscheduled
                      * for an unclassified day) — see deriveDayStatusBadge.
                      * Applies identically to local-node and mobile-app rows,
                      * since day_status is written by both pipelines. */}
+                    {/* Temporarily hidden:
                     <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                       Day Status
                     </th>
+                    */}
                     {/* Fixed column — the admin payroll include/exclude call
                      * on an already-classified day, distinct from Day Status
                      * itself. See derivePayrollDecisionBadge; currently only
                      * ever populated for local-node rows. */}
+                    {/* Temporarily hidden:
                     {showPayrollDecisionColumn && (
                       <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                         Decision
                       </th>
                     )}
+                    */}
                     {/* Same "fixed column" reasoning as Notes just above --
                      * capture_channel isn't part of peopleModel.attendanceColumns
                      * either. Shows which surface (local node / cloud / mobile
                      * app) actually captured this row. */}
                     <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                      Channel
+                      Attendance Method
                     </th>
                     {/* Same "fixed column" reasoning as Notes above --
                      * camera_id isn't part of peopleModel.attendanceColumns
@@ -2900,20 +3068,9 @@ export default function AttendanceView() {
                           if (column.key === "name") {
                             return (
                               <td key={column.key} className="px-6 py-4">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-9 h-9 rounded-full bg-teal-50 text-teal-700 flex items-center justify-center text-xs font-bold">
-                                    {member.name?.charAt(0)?.toUpperCase() ??
-                                      "?"}
-                                  </div>
-                                  <div>
-                                    <p className="text-sm font-semibold text-gray-900">
-                                      {member.name}
-                                    </p>
-                                    <p className="text-xs text-gray-400">
-                                      {getStaffCode(member)}
-                                    </p>
-                                  </div>
-                                </div>
+                                <p className="text-sm font-semibold text-gray-900">
+                                  {member.name}
+                                </p>
                               </td>
                             );
                           }
@@ -3024,6 +3181,7 @@ export default function AttendanceView() {
                             </td>
                           );
                         })}
+                        {/* Temporarily hidden Notes cell:
                         {(() => {
                           if (isEditingRow && rowDraft) {
                             return (
@@ -3056,6 +3214,8 @@ export default function AttendanceView() {
                             </td>
                           );
                         })()}
+                        */}
+                        {/* Temporarily hidden Day Status cell:
                         <td className="px-6 py-4 text-center">
                           {(() => {
                             const badge = deriveDayStatusBadge({
@@ -3074,6 +3234,8 @@ export default function AttendanceView() {
                             );
                           })()}
                         </td>
+                        */}
+                        {/* Temporarily hidden Decision cell:
                         {showPayrollDecisionColumn && (
                           <td className="px-6 py-4 text-center">
                             {(() => {
@@ -3096,6 +3258,7 @@ export default function AttendanceView() {
                             })()}
                           </td>
                         )}
+                          */}
                         <td className="px-6 py-4 text-center">
                           {(() => {
                             const badge = captureChannelBadge(
@@ -3225,10 +3388,7 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={
-                          dailyAttendanceColumns.length +
-                          (showPayrollDecisionColumn ? 5 : 4)
-                        }
+                        colSpan={visibleDailyAttendanceColumns.length + 3}
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">
