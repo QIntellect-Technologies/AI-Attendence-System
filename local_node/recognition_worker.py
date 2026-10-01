@@ -10,8 +10,10 @@ from local_node import local_db
 from local_node.config_store import load_config
 from local_node.logging_config import log_on_change
 from shared_face_engine import (
-    best_match_multi as _shared_best_match,
-    closest_candidate_multi as _shared_closest_candidate,
+    PreparedMultiCandidates,
+    best_match_multi_prepared as _shared_best_match,
+    closest_candidate_multi_prepared as _shared_closest_candidate,
+    prepare_multi_candidates,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 _cache_lock = threading.Lock()
 _cached_branch_id: str | None = None
 _cached_candidates: dict[str, np.ndarray] = {}
+_cached_prepared: PreparedMultiCandidates | None = None
 _cached_meta: dict[str, dict[str, Any]] = {}
 
 
@@ -31,7 +34,7 @@ def _build_cache(branch_id: str) -> None:
     appearance — a single mean vector can sit further from a real but
     atypical appearance (glasses, different lighting, a beard grown
     since enrollment) than that appearance is from a genuine match."""
-    global _cached_branch_id, _cached_candidates, _cached_meta
+    global _cached_branch_id, _cached_candidates, _cached_prepared, _cached_meta
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in local_db.get_all_embeddings(branch_id):
@@ -67,6 +70,7 @@ def _build_cache(branch_id: str) -> None:
 
     _cached_branch_id = branch_id
     _cached_candidates = candidates
+    _cached_prepared = prepare_multi_candidates(candidates)
     _cached_meta = meta
     logger.info(
         "recognition_worker: cache rebuilt for branch_id=%s -> %d enrolled candidate(s)",
@@ -79,9 +83,10 @@ def invalidate_cache() -> None:
     just local_db.import_embedding_package — see ui_server.py). Forces the
     next best_match() to rebuild from SQLite once, instead of serving
     stale aggregate embeddings until the node process restarts."""
-    global _cached_branch_id
+    global _cached_branch_id, _cached_prepared
     with _cache_lock:
         _cached_branch_id = None
+        _cached_prepared = None
 
 
 def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str, Any] | None:
@@ -96,6 +101,7 @@ def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str,
         if _cached_branch_id != branch_id:
             _build_cache(branch_id)
         candidates = _cached_candidates
+        prepared = _cached_prepared
         meta = _cached_meta
 
     logger.debug(
@@ -104,9 +110,9 @@ def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str,
         min_score,
         len(candidates),
     )
-    result = _shared_best_match(candidate, candidates, threshold=min_score)
+    result = _shared_best_match(candidate, prepared, threshold=min_score)
     if result is None:
-        closest = _shared_closest_candidate(candidate, candidates)
+        closest = _shared_closest_candidate(candidate, prepared)
         if closest is None:
             # This message has no varying content (just branch_id), so
             # log_on_change logs it once and stays silent for good — until

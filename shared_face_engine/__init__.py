@@ -30,12 +30,16 @@ from shared_face_engine.quality import (
 )
 from shared_face_engine.matching import (
     DEFAULT_MATCH_THRESHOLD,
+    PreparedMultiCandidates,
     best_match,
     best_match_multi,
+    best_match_multi_prepared,
     closest_candidate,
     closest_candidate_multi,
+    closest_candidate_multi_prepared,
     compare_embeddings,
     compute_aggregate_embedding,
+    prepare_multi_candidates,
     verify_against_vectors,
 )
 
@@ -52,12 +56,16 @@ __all__ = [
     "is_good_enrollment_face",
     "is_good_recognition_face",
     "DEFAULT_MATCH_THRESHOLD",
+    "PreparedMultiCandidates",
     "best_match",
     "best_match_multi",
+    "best_match_multi_prepared",
     "closest_candidate",
     "closest_candidate_multi",
+    "closest_candidate_multi_prepared",
     "compare_embeddings",
     "compute_aggregate_embedding",
+    "prepare_multi_candidates",
     "verify_against_vectors",
     "detect_spoofing"
 ]

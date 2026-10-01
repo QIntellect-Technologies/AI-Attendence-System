@@ -75,7 +75,7 @@ def detect_and_extract(
             "bbox": (int(x1), int(y1), int(x2), int(y2)),
             "conf": conf,
             "embedding": face.embedding,
-            "kps": None if kps is None else np.asarray(kps, dtype=float),
+            "kps": None if kps is None else np.asarray(kps, dtype=np.float32),
         })
     return results
 

@@ -1142,6 +1142,8 @@ export type StaffPayload = Partial<User> & {
   benefits?: string[];
   designation_id?: string | null;
   designationId?: string | null;
+  /** Display-only label used when a mutation response omits the joined name. */
+  designation_name?: string | null;
 
   shift_id?: string | null;
   shift_label?: string | null;

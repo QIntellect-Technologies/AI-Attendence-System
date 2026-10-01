@@ -1729,7 +1729,7 @@ MOTION_DECIMATE_TARGET_EDGE = 192
 # longest a fully idle (zero-motion) camera ever goes without a real
 # detection pass, so a person who has stopped moving in frame still gets
 # re-detected before their track would otherwise go stale and drop.
-IDLE_DETECT_INTERVAL_SECONDS = 1.5
+IDLE_DETECT_INTERVAL_SECONDS = 2.0
 
 # ── blank/no-signal frame detection ─────────────────────────────────────
 # A successfully decoded frame is not the same thing as a live picture.

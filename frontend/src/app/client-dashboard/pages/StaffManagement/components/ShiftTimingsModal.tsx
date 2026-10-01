@@ -27,6 +27,10 @@ import {
   type ShiftConflict,
 } from "../utils/shiftOverlap";
 
+function notifyOrgDataChanged(): void {
+  window.dispatchEvent(new Event("orgDataChanged"));
+}
+
 // ─── Shift Settings + Allocation ─────────────────────────────────────────────
 
 // A draft row can be a real backend shift (has a real UUID `id` from the
@@ -213,6 +217,7 @@ export const ShiftTimingsModal: FC<{
     try {
       await deleteShift(branchId, row.id, organizationId);
       setRows((items) => items.filter((item) => item.id !== row.id));
+      notifyOrgDataChanged();
       onSaved();
     } catch (error) {
       setRowErrors((prev) => ({
@@ -293,6 +298,7 @@ export const ShiftTimingsModal: FC<{
     setIsSaving(false);
     if (anySucceeded) {
       toastSuccess("Shift timings saved.");
+      notifyOrgDataChanged();
       onSaved();
     }
     // nextNotes is deliberately not toasted. The per-row bands already name

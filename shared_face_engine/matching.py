@@ -21,11 +21,20 @@ in shared_face_engine vs. face_processor.py did.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
 
 DEFAULT_MATCH_THRESHOLD = 0.60
+
+
+@dataclass(frozen=True)
+class PreparedMultiCandidates:
+    """Normalized enrollment matrix and owner key for multi-vector matching."""
+
+    matrix: np.ndarray
+    owner_ids: tuple[str, ...]
 
 
 def compute_aggregate_embedding(embeddings: Sequence[np.ndarray]) -> np.ndarray | None:
@@ -147,17 +156,61 @@ def _scan_candidates_multi(
 ) -> tuple[str, float] | None:
     """Same role as _scan_candidates, but each candidate maps to ALL of
     that person's stored enrollment vectors instead of one aggregate."""
-    best_id: str | None = None
-    best_similarity = -1.0
-    for candidate_id, vectors in candidates.items():
-        similarity = _max_similarity_to_person(test_embedding, vectors)
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_id = candidate_id
+    return _scan_prepared_multi(test_embedding, prepare_multi_candidates(candidates))
 
-    if best_id is None:
+
+def prepare_multi_candidates(
+    candidates: dict[str, Sequence[np.ndarray]],
+) -> PreparedMultiCandidates | None:
+    """Prepare multi-vector candidates once for repeated live matching."""
+    vector_rows: list[np.ndarray] = []
+    owner_ids: list[str] = []
+    for candidate_id, vectors in candidates.items():
+        for vector in vectors:
+            vector_rows.append(np.asarray(vector, dtype=np.float32))
+            owner_ids.append(candidate_id)
+
+    if not vector_rows:
         return None
-    return best_id, best_similarity
+
+    stored_matrix = np.asarray(vector_rows, dtype=np.float32)
+    stored_matrix = stored_matrix / (np.linalg.norm(stored_matrix, axis=1, keepdims=True) + 1e-6)
+    return PreparedMultiCandidates(stored_matrix, tuple(owner_ids))
+
+
+def _scan_prepared_multi(
+    test_embedding: np.ndarray,
+    prepared: PreparedMultiCandidates | None,
+) -> tuple[str, float] | None:
+    if prepared is None or not prepared.owner_ids:
+        return None
+
+    query = np.asarray(test_embedding, dtype=np.float32)
+    query = query / (np.linalg.norm(query) + 1e-6)
+    similarities = prepared.matrix @ query
+
+    # np.argmax returns the first maximum, preserving the previous
+    # dict/list traversal tie behavior.
+    best_row = int(np.argmax(similarities))
+    return prepared.owner_ids[best_row], float(similarities[best_row])
+
+
+def best_match_multi_prepared(
+    test_embedding: np.ndarray,
+    prepared: PreparedMultiCandidates | None,
+    threshold: float = DEFAULT_MATCH_THRESHOLD,
+) -> tuple[str, float] | None:
+    closest = _scan_prepared_multi(test_embedding, prepared)
+    if closest is None or closest[1] < threshold:
+        return None
+    return closest
+
+
+def closest_candidate_multi_prepared(
+    test_embedding: np.ndarray,
+    prepared: PreparedMultiCandidates | None,
+) -> tuple[str, float] | None:
+    return _scan_prepared_multi(test_embedding, prepared)
 
 
 def best_match_multi(
@@ -173,10 +226,11 @@ def best_match_multi(
     old aggregate cache did. If a branch's enrollment ever grows into the
     tens of thousands of vectors, this scan should move to an ANN index
     (e.g. faiss) instead of brute force — not a concern at current scale."""
-    closest = _scan_candidates_multi(test_embedding, candidates)
-    if closest is None or closest[1] < threshold:
-        return None
-    return closest
+    return best_match_multi_prepared(
+        test_embedding,
+        prepare_multi_candidates(candidates),
+        threshold=threshold,
+    )
 
 
 def closest_candidate_multi(
@@ -185,7 +239,10 @@ def closest_candidate_multi(
 ) -> tuple[str, float] | None:
     """Diagnostic-only counterpart to best_match_multi — same role as
     closest_candidate() for the multi-vector candidate shape."""
-    return _scan_candidates_multi(test_embedding, candidates)
+    return closest_candidate_multi_prepared(
+        test_embedding,
+        prepare_multi_candidates(candidates),
+    )
 
 
 def closest_candidate(

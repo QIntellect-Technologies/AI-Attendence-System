@@ -21,6 +21,7 @@ export const buildStaffApiPayload = (
   createdByUserId?: number | string | null,
   password?: string,
   peopleType = "staff",
+  designationName = "",
 ): StaffPayload => {
   const parsedLat = data.geofenceLat.trim() ? Number(data.geofenceLat) : null;
   const parsedLng = data.geofenceLng.trim() ? Number(data.geofenceLng) : null;
@@ -52,6 +53,7 @@ export const buildStaffApiPayload = (
         : undefined,
     department: data.department,
     designation_id: data.designationId || null,
+    designation_name: designationName || null,
     position: data.role,
     salary: data.salary,
     benefits: data.benefits,

@@ -1,4 +1,3 @@
-
 /**
  * pages/StaffManagement/StaffManagement.tsx
  * ─────────────────────────────────────────────────────────────────────────────
@@ -279,10 +278,10 @@ const StaffDirectory: FC = () => {
     const relevantBranches =
       isGlobalDashboard && branchFilter !== "all"
         ? visibleBranches.filter(
-          (branch) =>
-            (getBackendBranchId(branch) ?? String(branch.id)) ===
-            branchFilter,
-        )
+            (branch) =>
+              (getBackendBranchId(branch) ?? String(branch.id)) ===
+              branchFilter,
+          )
         : visibleBranches;
     return Array.from(
       new Set(
@@ -327,7 +326,11 @@ const StaffDirectory: FC = () => {
   );
 
   useEffect(() => {
-    if (peopleModel.isStudent || !organizationId || liveDepartments.length === 0) {
+    if (
+      peopleModel.isStudent ||
+      !organizationId ||
+      liveDepartments.length === 0
+    ) {
       setLiveDesignationNames([]);
       return;
     }
@@ -690,7 +693,7 @@ const StaffDirectory: FC = () => {
           status === "all"
             ? branchScopedItems.length
             : branchScopedItems.filter((member) => member.status === status)
-              .length,
+                .length,
       })),
     [branchScopedItems],
   );
@@ -772,8 +775,9 @@ const StaffDirectory: FC = () => {
     }
 
     if (roleFilter !== "all") {
-      list = list.filter((m) =>
-        (peopleModel.isStudent ? m.role : m.designationName) === roleFilter,
+      list = list.filter(
+        (m) =>
+          (peopleModel.isStudent ? m.role : m.designationName) === roleFilter,
       );
     }
 
@@ -787,13 +791,13 @@ const StaffDirectory: FC = () => {
 
       return sortDir === "asc"
         ? String(av ?? "").localeCompare(String(bv ?? ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        })
+            numeric: true,
+            sensitivity: "base",
+          })
         : String(bv ?? "").localeCompare(String(av ?? ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
+            numeric: true,
+            sensitivity: "base",
+          });
     });
   }, [
     scopedStaffItems,
@@ -825,24 +829,24 @@ const StaffDirectory: FC = () => {
   const staffFilterSections = useMemo<DynamicFilterSection[]>(
     () => [
       ...(templateFilterByKey.has("peopleType") &&
-        peopleModel.hasMultiplePeopleTypes
+      peopleModel.hasMultiplePeopleTypes
         ? ([
-          {
-            id: "peopleType",
-            type: "select",
-            label:
-              templateFilterByKey.get("peopleType")?.label ?? "People Type",
-            value: peopleModel.peopleType,
-            options: peopleModel.selectablePeopleTypes,
-            minWidth: 180,
-            onChange: (value: string) => {
-              setSelectedPeopleType(value);
-              setDeptFilter("all");
-              setRoleFilter("all");
-              setSelected(new Set());
+            {
+              id: "peopleType",
+              type: "select",
+              label:
+                templateFilterByKey.get("peopleType")?.label ?? "People Type",
+              value: peopleModel.peopleType,
+              options: peopleModel.selectablePeopleTypes,
+              minWidth: 180,
+              onChange: (value: string) => {
+                setSelectedPeopleType(value);
+                setDeptFilter("all");
+                setRoleFilter("all");
+                setSelected(new Set());
+              },
             },
-          },
-        ] as DynamicFilterSection[])
+          ] as DynamicFilterSection[])
         : []),
       {
         id: "branch",
@@ -1154,6 +1158,7 @@ const StaffDirectory: FC = () => {
               currentUserId,
               undefined,
               peopleModel.peopleType,
+              data.designationName,
             ),
           )) as unknown as StaffMember;
 
@@ -1171,34 +1176,34 @@ const StaffDirectory: FC = () => {
 
           updateExistingUserAccess(
             updatedStaff ??
-            ({
-              ...editMember,
-              ...data,
-              branchName: selectedBranchName,
-              position: data.role,
-              shift: shift.id,
-              shiftId: shift.id,
-              shiftLabel: shift.label,
-              shiftStart: shift.start,
-              shiftEnd: shift.end,
-              accessModules: data.moduleAccess,
-              benefits: data.benefits,
-              updatedAt: now,
-              // `data` (StaffFormData) keeps these as raw input strings
-              // so the lat/lng/radius text fields can be typed into
-              // freely; StaffMember stores them as number | null. The
-              // spread above pulls in the string versions, so they need
-              // to be re-parsed here rather than left as-is.
-              geofenceLat: data.geofenceLat.trim()
-                ? Number(data.geofenceLat)
-                : null,
-              geofenceLng: data.geofenceLng.trim()
-                ? Number(data.geofenceLng)
-                : null,
-              geofenceRadiusMeters: data.geofenceRadiusMeters.trim()
-                ? Number(data.geofenceRadiusMeters)
-                : null,
-            } as StaffMember),
+              ({
+                ...editMember,
+                ...data,
+                branchName: selectedBranchName,
+                position: data.role,
+                shift: shift.id,
+                shiftId: shift.id,
+                shiftLabel: shift.label,
+                shiftStart: shift.start,
+                shiftEnd: shift.end,
+                accessModules: data.moduleAccess,
+                benefits: data.benefits,
+                updatedAt: now,
+                // `data` (StaffFormData) keeps these as raw input strings
+                // so the lat/lng/radius text fields can be typed into
+                // freely; StaffMember stores them as number | null. The
+                // spread above pulls in the string versions, so they need
+                // to be re-parsed here rather than left as-is.
+                geofenceLat: data.geofenceLat.trim()
+                  ? Number(data.geofenceLat)
+                  : null,
+                geofenceLng: data.geofenceLng.trim()
+                  ? Number(data.geofenceLng)
+                  : null,
+                geofenceRadiusMeters: data.geofenceRadiusMeters.trim()
+                  ? Number(data.geofenceRadiusMeters)
+                  : null,
+              } as StaffMember),
             data,
           );
 
@@ -1232,7 +1237,8 @@ const StaffDirectory: FC = () => {
             const credentials: StaffLoginCredentials = {
               ...generatedCredentials,
               username:
-                result.credentials.email?.trim() || generatedCredentials.username,
+                result.credentials.email?.trim() ||
+                generatedCredentials.username,
               password: result.credentials.password,
               createdAt: now,
             };
@@ -1272,6 +1278,7 @@ const StaffDirectory: FC = () => {
               // instead of the frontend's weaker one winning.
               undefined,
               peopleModel.peopleType,
+              data.designationName,
             ),
             files,
             {
@@ -1312,11 +1319,12 @@ const StaffDirectory: FC = () => {
             } catch (shiftAssignError) {
               alert(
                 `Staff created, but assigning the selected shift failed: ` +
-                `${shiftAssignError instanceof Error
-                  ? shiftAssignError.message
-                  : "Unknown error"
-                }\n\nYou can assign it again by editing this staff member ` +
-                `or from the Shift Allocation tab.`,
+                  `${
+                    shiftAssignError instanceof Error
+                      ? shiftAssignError.message
+                      : "Unknown error"
+                  }\n\nYou can assign it again by editing this staff member ` +
+                  `or from the Shift Allocation tab.`,
               );
             }
           }
@@ -1340,10 +1348,11 @@ const StaffDirectory: FC = () => {
             } catch (departmentAssignError) {
               alert(
                 `Staff created, but assigning the selected department failed: ` +
-                `${departmentAssignError instanceof Error
-                  ? departmentAssignError.message
-                  : "Unknown error"
-                }\n\nYou can assign it again by editing this staff member.`,
+                  `${
+                    departmentAssignError instanceof Error
+                      ? departmentAssignError.message
+                      : "Unknown error"
+                  }\n\nYou can assign it again by editing this staff member.`,
               );
             }
           }
@@ -1368,9 +1377,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (managerAssignError) {
               hierarchyIssues.push(
-                `Manager: ${managerAssignError instanceof Error
-                  ? managerAssignError.message
-                  : "Unknown error"
+                `Manager: ${
+                  managerAssignError instanceof Error
+                    ? managerAssignError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1385,9 +1395,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (linkedAccountError) {
               hierarchyIssues.push(
-                `Linked dashboard account: ${linkedAccountError instanceof Error
-                  ? linkedAccountError.message
-                  : "Unknown error"
+                `Linked dashboard account: ${
+                  linkedAccountError instanceof Error
+                    ? linkedAccountError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1402,9 +1413,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (scopeError) {
               hierarchyIssues.push(
-                `Dashboard visibility: ${scopeError instanceof Error
-                  ? scopeError.message
-                  : "Unknown error"
+                `Dashboard visibility: ${
+                  scopeError instanceof Error
+                    ? scopeError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1413,13 +1425,16 @@ const StaffDirectory: FC = () => {
           if (hierarchyIssues.length > 0) {
             alert(
               `Staff created, but some Reporting Hierarchy settings failed ` +
-              `to apply:\n\n${hierarchyIssues.join(
-                "\n",
-              )}\n\nYou can set these again by editing this staff member.`,
+                `to apply:\n\n${hierarchyIssues.join(
+                  "\n",
+                )}\n\nYou can set these again by editing this staff member.`,
             );
           }
 
-          if (peopleModel.shouldGenerateCredentials || data.moduleAccess.length > 0) {
+          if (
+            peopleModel.shouldGenerateCredentials ||
+            data.moduleAccess.length > 0
+          ) {
             const generatedCredentials = buildStaffCredentials(
               data,
               String(result.user.id),
@@ -1483,7 +1498,10 @@ const StaffDirectory: FC = () => {
         }
 
         void alertDialog({
-          title: editMember && editMember !== "new" ? "Update failed" : "Save failed",
+          title:
+            editMember && editMember !== "new"
+              ? "Update failed"
+              : "Save failed",
           text: message,
           icon: "error",
         });
@@ -1650,7 +1668,9 @@ const StaffDirectory: FC = () => {
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < MIN_SPINNER_VISIBLE_MS) {
-        await new Promise((r) => setTimeout(r, MIN_SPINNER_VISIBLE_MS - elapsed));
+        await new Promise((r) =>
+          setTimeout(r, MIN_SPINNER_VISIBLE_MS - elapsed),
+        );
       }
       setPendingCredentialsId(null);
     }
@@ -1752,8 +1772,9 @@ const StaffDirectory: FC = () => {
     }
 
     const confirmed = await confirmDialog({
-      title: `Permanently delete ${selectedMembers.length} archived employee${selectedMembers.length === 1 ? "" : "s"
-        }?`,
+      title: `Permanently delete ${selectedMembers.length} archived employee${
+        selectedMembers.length === 1 ? "" : "s"
+      }?`,
       text: "This will remove their archived HR profiles and linked records from the database. This cannot be undone.",
       icon: "warning",
       confirmButtonText: "Delete Permanently",
@@ -1790,7 +1811,8 @@ const StaffDirectory: FC = () => {
       await refreshArchivedStaff?.();
 
       toastSuccess(
-        `Deleted ${result.deleted_count ?? deletedIds.size} archived employee${(result.deleted_count ?? deletedIds.size) === 1 ? "" : "s"
+        `Deleted ${result.deleted_count ?? deletedIds.size} archived employee${
+          (result.deleted_count ?? deletedIds.size) === 1 ? "" : "s"
         } permanently.`,
       );
     } catch (error) {
@@ -1886,19 +1908,19 @@ const StaffDirectory: FC = () => {
       { key: "directory", label: peopleModel.directoryTitle, Icon: Users },
       ...(peopleModel.showShiftAllocation
         ? ([
-          { key: "shifts", label: "Shift Allocation", Icon: CalendarClock },
-        ] as Array<{
-          key: StaffDirectoryTab;
-          label: string;
-          Icon: React.ElementType;
-        }>)
+            { key: "shifts", label: "Shift Allocation", Icon: CalendarClock },
+          ] as Array<{
+            key: StaffDirectoryTab;
+            label: string;
+            Icon: React.ElementType;
+          }>)
         : []),
       ...(scopedStaffItems.some((s) => s.staffType === "field")
         ? ([{ key: "visits", label: "Visit Plans", Icon: MapPin }] as Array<{
-          key: StaffDirectoryTab;
-          label: string;
-          Icon: React.ElementType;
-        }>)
+            key: StaffDirectoryTab;
+            label: string;
+            Icon: React.ElementType;
+          }>)
         : []),
       {
         key: "archived",
@@ -1954,7 +1976,6 @@ const StaffDirectory: FC = () => {
                 organization={exportOrganization}
                 excel={{
                   columns: exportColumns,
-
                 }}
                 pdf={{
                   title: `${peopleModel.exportModuleLabel} Report`,
@@ -2088,9 +2109,9 @@ const StaffDirectory: FC = () => {
                 action={
                   can("add")
                     ? {
-                      label: peopleModel.addRecordLabel,
-                      onClick: () => setEditMember("new"),
-                    }
+                        label: peopleModel.addRecordLabel,
+                        onClick: () => setEditMember("new"),
+                      }
                     : undefined
                 }
               />
@@ -2182,7 +2203,9 @@ const StaffDirectory: FC = () => {
                     }}
                     editLoading={pendingEditId === member.id}
                     onDelete={() => handleDelete(member.id)}
-                    onGenerateCredentials={() => handleGenerateCredentials(member)}
+                    onGenerateCredentials={() =>
+                      handleGenerateCredentials(member)
+                    }
                     generatingCredentials={pendingCredentialsId === member.id}
                     onOverride={() => {
                       setActiveTab("shifts");

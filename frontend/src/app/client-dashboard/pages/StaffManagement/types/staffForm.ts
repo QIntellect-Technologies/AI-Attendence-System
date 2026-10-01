@@ -143,7 +143,6 @@
 //   fatherPhone: "",
 // };
 
-
 /**
  * pages/StaffManagement/types/staffForm.ts
  * ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +167,7 @@ export interface StaffFormData {
   branchId: number;
   department: string;
   designationId?: string;
+  designationName?: string;
   role: string;
   status: StaffMember["status"];
   salary: number;

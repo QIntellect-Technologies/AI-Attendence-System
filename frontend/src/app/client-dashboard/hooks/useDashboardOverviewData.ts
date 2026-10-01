@@ -764,8 +764,15 @@ export function useDashboardOverviewData({
   useEffect(() => {
     mountedRef.current = true;
     void load(false);
+
+    const handleOrgDataChanged = () => {
+      void load(true);
+    };
+    window.addEventListener("orgDataChanged", handleOrgDataChanged);
+
     return () => {
       mountedRef.current = false;
+      window.removeEventListener("orgDataChanged", handleOrgDataChanged);
     };
   }, [load]);
 

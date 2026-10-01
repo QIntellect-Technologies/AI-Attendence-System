@@ -19,7 +19,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "../../../contexts/useAuth";
-import { useBackendStore, type StaffMember } from "../../../contexts/ModuleContext";
+import {
+  useBackendStore,
+  type StaffMember,
+} from "../../../contexts/ModuleContext";
 import { useOrg } from "../../../contexts/OrgConfigContext";
 import { resolveTenantScope } from "../../../utils/tenantScope";
 
@@ -280,6 +283,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
    * Keep the latest store in a ref and keep callbacks dependent only on scope.
    */
   const staffStoreRef = useRef(staff);
+  const staffMutationVersionRef = useRef(0);
 
   useEffect(() => {
     staffStoreRef.current = staff;
@@ -357,6 +361,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   const refreshStaff = useCallback(
     async (refreshOptions?: { branchId?: number | null }) => {
       const store = staffStoreRef.current;
+      const refreshVersion = staffMutationVersionRef.current;
 
       if (!organizationId) {
         store.reset([]);
@@ -410,6 +415,9 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         const rows = pageResult.rows.map((user) =>
           withBackendBenefits(apiUserToStaffMember(user), user),
         );
+        if (refreshVersion !== staffMutationVersionRef.current) {
+          return staffStoreRef.current.allItems;
+        }
         staffStoreRef.current.reset(rows);
 
         return rows;
@@ -541,6 +549,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       try {
         setIsSavingStaff(true);
         setStaffError(null);
+        staffMutationVersionRef.current += 1;
 
         emitStaffSaveProgress(options, "profile", "Creating profile...");
 
@@ -609,8 +618,21 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           }
         }
 
+        const mappedRow = apiUserToStaffMember(syncedUser);
+        const mappedDesignationId =
+          mappedRow.designationId ?? safePayload.designation_id ?? null;
+        const mappedDesignationName =
+          mappedRow.designationName || safePayload.designation_name || "";
+        const payloadBranchId = Number(safePayload.branch_ui_id);
         const row = withBackendBenefits(
-          apiUserToStaffMember(syncedUser),
+          {
+            ...mappedRow,
+            designationId: mappedDesignationId,
+            designationName: mappedDesignationName,
+            ...(mappedRow.branchId || !Number.isFinite(payloadBranchId)
+              ? {}
+              : { branchId: payloadBranchId }),
+          },
           syncedUser,
         );
         replaceStaffRecord(row);
@@ -654,8 +676,15 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           created_by_user_id: currentUserId,
         });
 
+        const mappedRow = apiUserToStaffMember(result.user);
         const row = withBackendBenefits(
-          apiUserToStaffMember(result.user),
+          {
+            ...mappedRow,
+            designationId:
+              mappedRow.designationId ?? safePayload.designation_id ?? null,
+            designationName:
+              mappedRow.designationName || safePayload.designation_name || "",
+          },
           result.user,
         );
         replaceStaffRecord(row);
@@ -702,12 +731,18 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       );
 
       if (existing) {
+        const mapped = apiUserToStaffMember(updatedUser);
         const resolved = withBackendBenefits(
-          apiUserToStaffMember(updatedUser),
+          mapped.branchId ? mapped : { ...mapped, branchId: existing.branchId },
           updatedUser,
         );
-        replaceStaffRecord({ ...existing, ...resolved });
+        // Shift allocation can update many people concurrently. Use the
+        // store's functional update so one response cannot overwrite rows
+        // updated by another response.
+        store.update(existing.id, resolved);
       }
+
+      window.dispatchEvent(new Event("orgDataChanged"));
 
       return shiftId;
     },
