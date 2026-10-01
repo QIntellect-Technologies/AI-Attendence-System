@@ -1,10 +1,11 @@
-﻿/**
+/**
  * BranchOverviewTab.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Branch-scoped Overview tab.
  */
 
 import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { TrendingUp, UserCheck, Users, UserX } from "lucide-react";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
 import { useOrg, useOrgMasterData } from "../../contexts/OrgConfigContext";
@@ -22,6 +23,8 @@ import {
   activeModulesFromConfig,
   isDashboardModuleVisible,
 } from "../../utils/moduleAccess";
+import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
+import type { DashboardLiveLogItem } from "../../hooks/useDashboardOverviewData";
 
 import {
   AttendancePerformanceCard,
@@ -145,6 +148,68 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
   const showPeopleCountCard = showPeopleModule || showAttendanceModule;
   const showShiftDistribution = showPeopleModule && peopleModel.supportsShift;
   const totalPeopleTitle = peopleModel.statsTotalLabel;
+
+  const navigate = useNavigate();
+  const navigateToModule = (moduleKey: string) => {
+    navigate(getBranchModulePath(moduleKey, Number(branchId)));
+  };
+
+  const [openPopup, setOpenPopup] = useState<"present" | "absent" | null>(null);
+
+  const renderPopup = (type: "present" | "absent", list: DashboardLiveLogItem[]) => {
+    if (openPopup !== type) return null;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: "100%",
+          left: 0,
+          right: 0,
+          paddingTop: 8,
+          zIndex: 50,
+        }}
+      >
+        <div
+          style={{
+            background: T.card,
+            border: `1px solid ${T.border}`,
+            borderRadius: 12,
+            boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 13, fontWeight: 700, color: T.head }}>
+            {type === "present" ? "Recently Present" : "Recently Absent"}
+          </div>
+          <div style={{ maxHeight: 200, overflowY: "auto" }}>
+            {list.length > 0 ? (
+              list.map((p, i) => (
+                <div key={i} style={{ padding: "8px 16px", borderBottom: i < list.length - 1 ? `1px solid ${T.border}` : "none", fontSize: 13 }}>
+                  <div style={{ fontWeight: 600, color: T.head }}>{p.name}</div>
+                  <div style={{ color: T.muted, fontSize: 11 }}>{p.department || "No Department"}</div>
+                </div>
+              ))
+            ) : (
+              <div style={{ padding: 16, fontSize: 13, color: T.muted, textAlign: "center" }}>No details available</div>
+            )}
+          </div>
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpenPopup(null);
+              navigateToModule("attendance");
+            }}
+            style={{ padding: 12, textAlign: "center", background: T.slate50, color: T.teal700, fontSize: 13, fontWeight: 700, cursor: "pointer", borderTop: `1px solid ${T.border}` }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = T.teal100)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = T.slate50)}
+          >
+            View More in Attendance
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       {activePeopleTypes.length > 1 && (
@@ -241,42 +306,53 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       {(showPeopleCountCard || showAttendanceModule) && (
         <div style={gridAuto(220)}>
           {showPeopleCountCard && (
-            <StatCard
-              title={totalPeopleTitle}
-              value={statValue(data.stats.totalStaff)}
-              sub="Active records"
-              icon={Users}
-              iconBg={T.teal100}
-              iconColor={T.teal600}
-            />
+            <div style={{ position: "relative" }}>
+              <StatCard
+                title={totalPeopleTitle}
+                value={statValue(data.stats.totalStaff)}
+                sub="Active records"
+                icon={Users}
+                iconBg={T.teal100}
+                iconColor={T.teal600}
+                onClick={() => navigateToModule("employees")}
+              />
+            </div>
           )}
 
           {showAttendanceModule && (
-            <StatCard
-              title="Present Today"
-              value={statValue(data.stats.presentToday)}
-              sub={statSub(`${data.stats.avgAttendance}% attendance`)}
-              icon={UserCheck}
-              iconBg="#134E6320"
-              iconColor={T.navy700}
-            />
+            <div style={{ position: "relative" }} onMouseLeave={() => setOpenPopup(null)}>
+              <StatCard
+                title="Present Today"
+                value={statValue(data.stats.presentToday)}
+                sub={statSub(`${data.stats.avgAttendance}% attendance`)}
+                icon={UserCheck}
+                iconBg="#134E6320"
+                iconColor={T.navy700}
+                onClick={() => setOpenPopup(openPopup === "present" ? null : "present")}
+              />
+              {renderPopup("present", data.liveLog.filter((l) => l.status === "Present" || l.status === "Late").slice(0, 5))}
+            </div>
           )}
 
           {showAttendanceModule && (
-            <StatCard
-              title="Absent Today"
-              value={statValue(data.stats.absentToday)}
-              icon={UserX}
-              iconBg="#FFF1F2"
-              iconColor="#E11D48"
-            />
+            <div style={{ position: "relative" }} onMouseLeave={() => setOpenPopup(null)}>
+              <StatCard
+                title="Absent Today"
+                value={statValue(data.stats.absentToday)}
+                sub={statSub(`${data.stats.lateToday} late`)}
+                icon={UserX}
+                iconBg="#FFF1F2"
+                iconColor="#E11D48"
+                onClick={() => setOpenPopup(openPopup === "absent" ? null : "absent")}
+              />
+              {renderPopup("absent", data.liveLog.filter((l) => l.status === "Absent").slice(0, 5))}
+            </div>
           )}
 
           {showAttendanceModule && (
             <StatCard
               title="Avg Attendance"
               value={statValue(`${data.stats.avgAttendance}%`)}
-              sub={statSub(`${data.stats.lateToday} late`)}
               icon={TrendingUp}
               iconBg={T.amberBg}
               iconColor={T.amber}

@@ -4171,7 +4171,7 @@ export const StaffModal: FC<{
             right after createStaff() resolves (see handleSave in the
             parent), same as the live Shift dropdown.
           */}
-          {liveDepartments.length > 0 && (
+          {(peopleModel.showDepartmentDesignationFields || liveDepartments.length > 0) && (
             <div
               style={{
                 display: "grid",

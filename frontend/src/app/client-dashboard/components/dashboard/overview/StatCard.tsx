@@ -14,6 +14,7 @@ interface StatCardProps {
   icon: LucideIcon;
   iconBg?: string;
   iconColor?: string;
+  onClick?: () => void;
 }
 
 const StatCard: React.FC<StatCardProps> = ({
@@ -23,6 +24,7 @@ const StatCard: React.FC<StatCardProps> = ({
   icon: Icon,
   iconBg = T.teal100,
   iconColor = T.teal600,
+  onClick,
 }) => {
   return (
     <div
@@ -35,6 +37,21 @@ const StatCard: React.FC<StatCardProps> = ({
         alignItems: "center",
         justifyContent: "space-between",
         boxShadow: "0 1px 3px rgba(15,45,74,0.06)",
+        cursor: onClick ? "pointer" : "default",
+        transition: "transform 0.2s, box-shadow 0.2s",
+      }}
+      onClick={onClick}
+      onMouseEnter={(e) => {
+        if (onClick) {
+          e.currentTarget.style.transform = "translateY(-2px)";
+          e.currentTarget.style.boxShadow = "0 4px 12px rgba(15,45,74,0.1)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (onClick) {
+          e.currentTarget.style.transform = "none";
+          e.currentTarget.style.boxShadow = "0 1px 3px rgba(15,45,74,0.06)";
+        }
       }}
     >
       <div>
