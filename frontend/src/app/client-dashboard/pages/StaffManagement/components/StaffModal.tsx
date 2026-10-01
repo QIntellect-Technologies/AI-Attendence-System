@@ -2766,7 +2766,7 @@ export const StaffModal: FC<{
           role: initial.role ?? "", // string — direct
           accountRole: initial.accountRole || "staff",
           status: initial.status, // typed union — direct
-          salary: initial.salary ?? 50000,
+          salary: initial.salary ?? 1,
           benefits: [...(initial.benefits ?? [])],
           joinDate: initial.joinDate ?? new Date().toISOString().split("T")[0], // correct field name
           staffType: ((initial as any).staffType ?? "office") as StaffWorkType,
@@ -2881,6 +2881,14 @@ export const StaffModal: FC<{
     peopleModel.isStudent && hasField("section", "designation");
   const showSalaryField = hasField("salary");
   const showBenefitsField = hasField("benefits");
+  // Payroll rules are considered "implemented" if the org has configured at
+  // least one of: a non-zero OT rate, a non-zero default salary, or at least
+  // one leave-type rule. If none of these are set the salary input is shown
+  // but blocked with a clear message directing the user to set up Payroll Rules.
+  const hasPayrollRules =
+    cfg.payrollPolicy.otRatePerHour > 0 ||
+    cfg.payrollPolicy.defaultSalary > 0 ||
+    Object.keys(cfg.payrollPolicy.leaveTypeRules).length > 0;
   const showStaffTypeField =
     peopleModel.showStaffTypeField && hasField("staffType");
   const showShiftField = hasField("shiftId");
@@ -4077,17 +4085,25 @@ export const StaffModal: FC<{
                 display: showSalaryField ? "block" : "none",
               }}
             >
-              <label style={labelStyle}>Compensation (PKR)</label>
+              <label style={labelStyle}>Salary (PKR)</label>
               <input
                 style={{
                   ...inputStyle,
                   ...(formErrors.salary ? { borderColor: "#dc2626" } : null),
+                  ...(!hasPayrollRules
+                    ? {
+                        opacity: 0.5,
+                        cursor: "not-allowed",
+                        background: "#f3f4f6",
+                      }
+                    : null),
                 }}
                 value={form.salary}
                 type="number"
                 min={SALARY_MIN}
                 max={SALARY_MAX}
                 step="1"
+                disabled={!hasPayrollRules}
                 onKeyDown={(e) => {
                   if (["-", "+", "e", "E"].includes(e.key)) e.preventDefault();
                 }}
@@ -4096,7 +4112,23 @@ export const StaffModal: FC<{
                 }
                 aria-invalid={Boolean(formErrors.salary)}
               />
-              {formErrors.salary && (
+              {!hasPayrollRules && showSalaryField && (
+                <p
+                  style={{
+                    margin: "6px 0 0",
+                    fontSize: 11,
+                    color: "#b45309",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  ⚠️ No payroll rules configured. Go to Payroll → Payroll
+                  Rules to enable salary entry.
+                </p>
+              )}
+              {hasPayrollRules && formErrors.salary && (
                 <p
                   style={{
                     margin: "5px 0 0",
@@ -4215,81 +4247,7 @@ export const StaffModal: FC<{
             </div>
           )}
 
-          {/* Benefits */}
-          {showBenefitsField && (
-            <div>
-              <label style={labelStyle}>
-                {peopleModel.personSingular} Benefits
-              </label>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "center",
-                  marginBottom: 8,
-                }}
-              >
-                <input
-                  style={inputStyle}
-                  value={benefitDraft}
-                  onChange={(e) => setBenefitDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addBenefits(benefitDraft);
-                    }
-                  }}
-                  placeholder="Medical insurance, transport, bonus, lunch..."
-                  maxLength={BENEFIT_ITEM_MAX_LENGTH}
-                />
-                <JellyButton
-                  type="button"
-                  variant="primary"
-                  size="md"
-                  onClick={() => addBenefits(benefitDraft)}
-                >
-                  Add
-                </JellyButton>
-              </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  marginTop: 10,
-                }}
-              >
-                {form.benefits.length ? (
-                  form.benefits.map((benefit) => (
-                    <button
-                      key={benefit}
-                      type="button"
-                      onClick={() => removeBenefit(benefit)}
-                      title="Remove benefit"
-                      style={{
-                        border: `1px solid ${T.teal200}`,
-                        background: T.teal50,
-                        color: T.teal700,
-                        borderRadius: 20,
-                        padding: "5px 10px",
-                        cursor: "pointer",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      {benefit} ×
-                    </button>
-                  ))
-                ) : (
-                  <span style={{ fontSize: 11, color: T.muted }}>
-                    No benefits added yet.
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* Allowances — read-only. Configured org-wide in Payroll →
               Payroll Rules, applied per-person from Payroll → Edit Payroll,
@@ -4604,561 +4562,6 @@ export const StaffModal: FC<{
             </div>
           )}
 
-          {showStaffTypeField && form.staffType === "office" && (
-            <div
-              style={{
-                padding: 14,
-                border: `1px dashed ${T.border}`,
-                borderRadius: 12,
-                background: T.slate50,
-                display: "flex",
-                flexDirection: "column",
-                gap: 12,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 900,
-                  color: T.head,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <MapPin size={14} />
-                Assigned Office WiFi Network
-              </div>
-
-              <div>
-                <label style={labelStyle}>WiFi Network Name (SSID)</label>
-                <input
-                  type="text"
-                  value={form.officeSsid}
-                  onChange={(e) => set("officeSsid", e.target.value)}
-                  placeholder="e.g. Qintellect_5G"
-                  style={inputStyle}
-                  maxLength={WIFI_SSID_MAX_LENGTH}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>
-                  Access Point BSSID(s)
-                  <span style={{ fontWeight: 400, textTransform: "none" }}>
-                    {" "}
-                    — one per access point
-                  </span>
-                </label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    type="text"
-                    value={bssidDraft}
-                    onChange={(e) => setBssidDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addBssid(bssidDraft);
-                      }
-                    }}
-                    placeholder="e.g. b4:0f:3b:6b:1b:75"
-                    style={{ ...inputStyle, flex: 1 }}
-                    maxLength={WIFI_BSSID_MAX_LENGTH}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => addBssid(bssidDraft)}
-                    style={{
-                      border: `1px solid ${T.teal200}`,
-                      background: T.teal50,
-                      color: T.teal700,
-                      borderRadius: 8,
-                      padding: "0 14px",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 900,
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    Add
-                  </button>
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 8,
-                    marginTop: 10,
-                  }}
-                >
-                  {form.officeBssidList.length ? (
-                    form.officeBssidList.map((bssid) => (
-                      <button
-                        key={bssid}
-                        type="button"
-                        onClick={() => removeBssid(bssid)}
-                        title="Remove BSSID"
-                        style={{
-                          border: `1px solid ${T.teal200}`,
-                          background: T.teal50,
-                          color: T.teal700,
-                          borderRadius: 20,
-                          padding: "5px 10px",
-                          cursor: "pointer",
-                          fontSize: 12,
-                          fontWeight: 800,
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {bssid} ×
-                      </button>
-                    ))
-                  ) : (
-                    <span style={{ fontSize: 11, color: T.muted }}>
-                      No access points added yet.
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!peopleModel.isStudent && (
-            <div
-              style={{
-                gridColumn: "1 / -1",
-                display: "grid",
-                gap: 14,
-                padding: 18,
-                border: `1px solid ${T.border}`,
-                borderRadius: 14,
-                background: T.card,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                <div
-                  style={{
-                    width: 30,
-                    height: 30,
-                    borderRadius: 9,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: T.slate50,
-                    color: T.head,
-                    flexShrink: 0,
-                  }}
-                >
-                  <Users size={16} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: T.head }}>
-                    Reporting Hierarchy
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 14,
-                }}
-              >
-                <div>
-                  <label style={labelStyle}>{managerLabel}</label>
-                  <ModernSelect
-                    value={liveManagerId}
-                    onChange={(value) => void handleManagerChange(value)}
-                    options={[
-                      { value: "", label: "No manager assigned" },
-                      ...managerCandidates.map((candidate) => ({
-                        value: candidate.id,
-                        label: candidate.name,
-                      })),
-                      // Defensive fallback: if the currently assigned
-                      // manager isn't in managerCandidates for any reason
-                      // (archived, a scope/pagination gap, a stale cache),
-                      // still render them as a selectable option using the
-                      // name from managerChain (a separate, unfiltered
-                      // lookup by id) — otherwise the select has no
-                      // <option> matching liveManagerId and silently shows
-                      // as unselected even though the assignment is real
-                      // and saved.
-                      ...(liveManagerId &&
-                      !managerCandidates.some((c) => c.id === liveManagerId)
-                        ? [
-                            {
-                              value: liveManagerId,
-                              label: managerChain[0]?.name ?? "Current manager",
-                            },
-                          ]
-                        : []),
-                    ]}
-                    ariaLabel={`Select ${managerLabel.toLowerCase()}`}
-                    width="100%"
-                    disabled={isSavingManager}
-                  />
-                  {managerChain.length > 0 && (
-                    <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
-                      Chain: {managerChain.map((link) => link.name).join(" → ")}
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <label style={labelStyle}>Dashboard Visibility</label>
-
-                  <div
-                    style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}
-                  >
-                    {form.accountRole === "admin"
-                      ? "Admin Access grants org/branch-wide visibility automatically — nothing to pick here."
-                      : "Choose whether this person's own dashboard session sees everyone, or only their reporting chain."}
-                  </div>
-
-                  <ModernSelect
-                    value={liveDashboardScope}
-                    onChange={(value) =>
-                      void handleDashboardScopeChange(
-                        value as "branch" | "team",
-                      )
-                    }
-                    options={[
-                      { value: "branch", label: "Everyone in branch/org" },
-                      { value: "team", label: "My Team Only" },
-                    ]}
-                    ariaLabel="Select dashboard visibility scope"
-                    width="100%"
-                    disabled={
-                      isSavingDashboardScope || form.accountRole === "admin"
-                    }
-                  />
-
-                  {/* Always-visible scope summary — states plainly what this
-                    person's session will actually be able to see, computed
-                    from the same directReports list rendered below, so an
-                    admin never has to infer visibility from the dropdown
-                    value alone. Shown for both scopes, and specifically
-                    calls out the 0-reports case ("team" scope with an empty
-                    subtree is a real, valid state — they'll see an empty
-                    list, never their own row —
-                    not a sign anything is broken). */}
-                  {initial && (
-                    <div
-                      style={{
-                        gridColumn: "1 / -1",
-                        marginTop: 10,
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        padding: "10px 12px",
-                        borderRadius: 10,
-                        background:
-                          liveDashboardScope === "team"
-                            ? `${T.amber}12`
-                            : T.slate50,
-                        border: `1px solid ${
-                          liveDashboardScope === "team"
-                            ? `${T.amber}40`
-                            : T.border
-                        }`,
-                      }}
-                    >
-                      <Shield
-                        size={14}
-                        color={
-                          liveDashboardScope === "team" ? T.amber : T.muted
-                        }
-                        style={{ marginTop: 1, flexShrink: 0 }}
-                      />
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: T.head,
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        {liveDashboardScope === "team" ? (
-                          <>
-                            <strong>Restricted session.</strong> Once they next
-                            log in, {form.name || "this person"} will see{" "}
-                            <strong>
-                              {directReports.length === 0
-                                ? "nobody — an empty list until reports are assigned to them"
-                                : `${directReports.length} direct ${
-                                    directReports.length === 1
-                                      ? "report"
-                                      : "reports"
-                                  } (plus anyone further below them in the chain)`}
-                            </strong>{" "}
-                            across Staff, Attendance, and Leave — never their
-                            own row, and never the full branch/org list.
-                          </>
-                        ) : (
-                          <>
-                            <strong>Full visibility.</strong> This session sees
-                            everyone in their branch/org, same as any admin/HR
-                            account.
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {canGrantAdmin && (
-                  <div style={{ gridColumn: "1 / -1" }}>
-                    <label style={labelStyle}>Admin Access</label>
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 10 }}
-                    >
-                      <JellyButton
-                        type="button"
-                        variant={
-                          form.accountRole === "admin" ? "primary" : "ghost"
-                        }
-                        size="sm"
-                        onClick={() =>
-                          set(
-                            "accountRole",
-                            form.accountRole === "admin" ? "staff" : "admin",
-                          )
-                        }
-                        style={{ borderRadius: 999 }}
-                      >
-                        {form.accountRole === "admin"
-                          ? "Admin — full dashboard access"
-                          : "Staff — no admin access"}
-                      </JellyButton>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        marginTop: 10,
-                        padding: "10px 12px",
-                        borderRadius: 10,
-                        background:
-                          form.accountRole === "admin"
-                            ? `${T.amber}12`
-                            : T.slate50,
-                        border: `1px solid ${
-                          form.accountRole === "admin"
-                            ? `${T.amber}40`
-                            : T.border
-                        }`,
-                      }}
-                    >
-                      <Shield
-                        size={14}
-                        color={form.accountRole === "admin" ? T.amber : T.muted}
-                        style={{ marginTop: 1, flexShrink: 0 }}
-                      />
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: T.head,
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        {form.accountRole === "admin" ? (
-                          <>
-                            <strong>Full dashboard access.</strong>{" "}
-                            {form.name || "This person"} will be able to manage
-                            every module, add and remove other staff, and grant
-                            admin access to others.
-                          </>
-                        ) : (
-                          <>
-                            <strong>No admin access.</strong>{" "}
-                            {form.name || "This person"} can only log into the
-                            Client Dashboard if you also pick specific modules
-                            for them below — otherwise they're mobile-portal
-                            only.
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {directReports.length > 0 && (
-                <div>
-                  <label style={labelStyle}>
-                    Direct Reports ({directReports.length})
-                  </label>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      marginTop: 4,
-                    }}
-                  >
-                    {directReports.map((report) => (
-                      <span
-                        key={report.id}
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          color: T.head,
-                          background: T.slate50,
-                          border: `1px solid ${T.border}`,
-                          borderRadius: 999,
-                          padding: "4px 10px",
-                        }}
-                      >
-                        {report.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {hierarchyError && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "#e11d48",
-                    background: "#fef2f2",
-                    border: "1px solid #fecdd3",
-                    borderRadius: 8,
-                    padding: "8px 10px",
-                  }}
-                >
-                  {hierarchyError}
-                </div>
-              )}
-            </div>
-          )}
-          {showProfileImageField && (
-            <div>
-              <label style={labelStyle}>
-                {peopleModel.personSingular} Profile Image
-              </label>
-              <div
-                style={{
-                  padding: 14,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 12,
-                  background: T.slate50,
-                }}
-              >
-                <input
-                  style={inputStyle}
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    setMediaFile("profileImage", e.target.files?.[0])
-                  }
-                />
-
-                {mediaError && (
-                  <div
-                    role="alert"
-                    style={{
-                      marginTop: 8,
-                      color: T.red,
-                      fontSize: 12,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {mediaError}
-                  </div>
-                )}
-
-                {form.profileImageUrl && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      marginTop: 10,
-                    }}
-                  >
-                    <img
-                      src={authedFormPhotoUrl ?? undefined}
-                      alt={form.name || `${peopleModel.personSingular} profile`}
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                      }}
-                      style={{
-                        width: 46,
-                        height: 46,
-                        borderRadius: "50%",
-                        objectFit: "cover",
-                        border: `2px solid ${T.teal200}`,
-                      }}
-                    />
-                    <span style={{ fontSize: 11, color: T.muted }}>
-                      {form.profileImageName || "Profile image selected"}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Dashboard module access */}
-          {showModuleAccessField && (
-            <div>
-              <label style={labelStyle}>Dashboard Module Access</label>
-
-              <div style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}>
-                {form.accountRole === "admin"
-                  ? "Admin Access grants every module automatically — nothing to pick here."
-                  : "Select only the dashboard modules this employee can access."}
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  opacity: form.accountRole === "admin" ? 0.6 : 1,
-                }}
-              >
-                {dashboardModuleOptions.map((mod) => {
-                  const has = form.moduleAccess.includes(mod.key);
-
-                  return (
-                    <JellyButton
-                      type="button"
-                      key={mod.key}
-                      variant={has ? "primary" : "ghost"}
-                      size="sm"
-                      disabled={form.accountRole === "admin"}
-                      onClick={() => toggleModule(mod.key)}
-                      style={{
-                        borderRadius: 999,
-                        cursor:
-                          form.accountRole === "admin"
-                            ? "not-allowed"
-                            : "pointer",
-                      }}
-                    >
-                      {mod.label}
-                    </JellyButton>
-                  );
-                })}
-
-                {dashboardModuleOptions.length === 0 && (
-                  <span style={{ fontSize: 12, color: T.muted }}>
-                    No dashboard modules are enabled for this organization.
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}

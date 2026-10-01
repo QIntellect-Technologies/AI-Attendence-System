@@ -276,7 +276,7 @@ export const EMPTY_FORM: StaffFormData = {
   designationId: "",
   role: "",
   status: "active",
-  salary: 50000,
+  salary: 1,
   benefits: [],
   joinDate: new Date().toISOString().split("T")[0],
   staffType: "office",

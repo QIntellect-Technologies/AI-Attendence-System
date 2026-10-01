@@ -221,11 +221,11 @@ export const validateStaffForm = (
 
   if (validateSalary) {
     if (!Number.isFinite(data.salary)) {
-      errors.salary = "Compensation must be a valid number.";
+      errors.salary = "Salary must be a valid number.";
     } else if (data.salary < SALARY_MIN) {
-      errors.salary = `Compensation must be at least PKR ${SALARY_MIN.toLocaleString("en-PK")}.`;
+      errors.salary = `Salary must be at least PKR ${SALARY_MIN.toLocaleString("en-PK")}.`;
     } else if (data.salary > SALARY_MAX) {
-      errors.salary = `Compensation cannot exceed PKR ${SALARY_MAX.toLocaleString("en-PK")}.`;
+      errors.salary = `Salary cannot exceed PKR ${SALARY_MAX.toLocaleString("en-PK")}.`;
     }
   }
 
