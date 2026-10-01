@@ -4562,6 +4562,74 @@ export const StaffModal: FC<{
             </div>
           )}
 
+          {showProfileImageField && (
+            <div>
+              <label style={labelStyle}>
+                {peopleModel.personSingular} Profile Image
+              </label>
+              <div
+                style={{
+                  padding: 14,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 12,
+                  background: T.slate50,
+                }}
+              >
+                <input
+                  style={inputStyle}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setMediaFile("profileImage", e.target.files?.[0])
+                  }
+                />
+
+                {mediaError && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 8,
+                      color: T.red,
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {mediaError}
+                  </div>
+                )}
+
+                {form.profileImageUrl && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      marginTop: 10,
+                    }}
+                  >
+                    <img
+                      src={authedFormPhotoUrl ?? undefined}
+                      alt={form.name || `${peopleModel.personSingular} profile`}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                      style={{
+                        width: 46,
+                        height: 46,
+                        borderRadius: "50%",
+                        objectFit: "cover",
+                        border: `2px solid ${T.teal200}`,
+                      }}
+                    />
+                    <span style={{ fontSize: 11, color: T.muted }}>
+                      {form.profileImageName || "Profile image selected"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
         </div>
 
         {/* Footer */}
