@@ -2,6 +2,22 @@
 @import "./tailwind.css";
 @import "./theme.css";
 
+.dashboard-navigation-link:focus {
+  outline: none;
+}
+
+.dashboard-navigation-link:focus-visible::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: 2px;
+  left: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--teal-600);
+  pointer-events: none;
+}
+
 .admin-dashboard-header__mobile-top,
 .admin-dashboard-header__mobile-context {
   display: none !important;

@@ -203,21 +203,21 @@ export const DashboardTabBar: React.FC = () => {
       const moduleTabs =
         ownBranchNumber && safeModuleKeys.length > 0
           ? getEnabledModules({
-            scope: "branch",
-            bizType: cfg.bizType ?? undefined,
-            enabledKeys: safeModuleKeys,
-          })
-            .filter((module) => !isBranchesModule(module.key, module.label))
-            .map((module) => ({
-              id: module.key,
-              label: moduleDisplayLabel(
-                module.key,
-                module.label,
-                peopleModel.pageTitle,
-              ),
-              Icon: module.Icon,
-              to: module.branchPath(ownBranchNumber),
-            }))
+              scope: "branch",
+              bizType: cfg.bizType ?? undefined,
+              enabledKeys: safeModuleKeys,
+            })
+              .filter((module) => !isBranchesModule(module.key, module.label))
+              .map((module) => ({
+                id: module.key,
+                label: moduleDisplayLabel(
+                  module.key,
+                  module.label,
+                  peopleModel.pageTitle,
+                ),
+                Icon: module.Icon,
+                to: module.branchPath(ownBranchNumber),
+              }))
           : [];
 
       return [
@@ -235,21 +235,21 @@ export const DashboardTabBar: React.FC = () => {
       const moduleTabs =
         safeModuleKeys.length > 0
           ? getEnabledModules({
-            scope: "global",
-            bizType: cfg.bizType ?? undefined,
-            enabledKeys: safeModuleKeys,
-          })
-            .filter((module) => !isBranchesModule(module.key, module.label))
-            .map((module) => ({
-              id: module.key,
-              label: moduleDisplayLabel(
-                module.key,
-                module.label,
-                peopleModel.pageTitle,
-              ),
-              Icon: module.Icon,
-              to: module.fullPath,
-            }))
+              scope: "global",
+              bizType: cfg.bizType ?? undefined,
+              enabledKeys: safeModuleKeys,
+            })
+              .filter((module) => !isBranchesModule(module.key, module.label))
+              .map((module) => ({
+                id: module.key,
+                label: moduleDisplayLabel(
+                  module.key,
+                  module.label,
+                  peopleModel.pageTitle,
+                ),
+                Icon: module.Icon,
+                to: module.fullPath,
+              }))
           : [];
 
       return [
@@ -275,21 +275,21 @@ export const DashboardTabBar: React.FC = () => {
     const moduleTabs =
       routeBranchNumber && safeModuleKeys.length > 0
         ? getEnabledModules({
-          scope: "branch",
-          bizType: cfg.bizType ?? undefined,
-          enabledKeys: safeModuleKeys,
-        })
-          .filter((module) => !isBranchesModule(module.key, module.label))
-          .map((module) => ({
-            id: module.key,
-            label: moduleDisplayLabel(
-              module.key,
-              module.label,
-              peopleModel.pageTitle,
-            ),
-            Icon: module.Icon,
-            to: module.branchPath(routeBranchNumber),
-          }))
+            scope: "branch",
+            bizType: cfg.bizType ?? undefined,
+            enabledKeys: safeModuleKeys,
+          })
+            .filter((module) => !isBranchesModule(module.key, module.label))
+            .map((module) => ({
+              id: module.key,
+              label: moduleDisplayLabel(
+                module.key,
+                module.label,
+                peopleModel.pageTitle,
+              ),
+              Icon: module.Icon,
+              to: module.branchPath(routeBranchNumber),
+            }))
         : [];
 
     return [
@@ -336,6 +336,7 @@ export const DashboardTabBar: React.FC = () => {
           <Link
             key={tab.id}
             to={tab.to}
+            className="dashboard-navigation-link"
             style={{
               display: "flex",
               alignItems: "center",

@@ -452,14 +452,16 @@ const KPICard: React.FC<{
   accent?: boolean;
 }> = ({ label, value, sub, accent }) => (
   <div
-    className={`rounded-2xl p-5 border shadow-sm ${accent
+    className={`rounded-2xl p-5 border shadow-sm ${
+      accent
         ? "bg-teal-700 text-white border-teal-600"
         : "bg-white border-gray-100"
-      }`}
+    }`}
   >
     <p
-      className={`text-xs font-semibold uppercase tracking-wider mb-2 ${accent ? "text-teal-200" : "text-gray-400"
-        }`}
+      className={`text-xs font-semibold uppercase tracking-wider mb-2 ${
+        accent ? "text-teal-200" : "text-gray-400"
+      }`}
     >
       {label}
     </p>
@@ -483,23 +485,26 @@ const BranchCard: React.FC<{
 }> = ({ branch, isActive, onSelect, onView, entityLabel }) => (
   <div
     onClick={onSelect}
-    className={`shrink-0 w-52 rounded-2xl p-4 border cursor-pointer transition-all ${isActive
+    className={`shrink-0 w-52 rounded-2xl p-4 border cursor-pointer transition-all ${
+      isActive
         ? "bg-teal-700 border-teal-600 text-white"
         : "bg-white border-gray-100 hover:border-teal-300"
-      }`}
+    }`}
   >
     <div className="flex items-start justify-between mb-3">
       <div>
         <p
-          className={`text-xs font-bold truncate max-w-30 ${isActive ? "text-teal-200" : "text-gray-400"
-            }`}
+          className={`text-xs font-bold truncate max-w-30 ${
+            isActive ? "text-teal-200" : "text-gray-400"
+          }`}
         >
           {branch.branchName}
         </p>
         {branch.city && (
           <p
-            className={`text-[10px] mt-0.5 flex items-center gap-0.5 ${isActive ? "text-teal-300" : "text-gray-400"
-              }`}
+            className={`text-[10px] mt-0.5 flex items-center gap-0.5 ${
+              isActive ? "text-teal-300" : "text-gray-400"
+            }`}
           >
             <MapPin className="w-2.5 h-2.5" />
             {branch.city}
@@ -508,24 +513,28 @@ const BranchCard: React.FC<{
       </div>
     </div>
     <p
-      className={`text-2xl font-black mb-1 ${isActive ? "text-white" : "text-gray-900"
-        }`}
+      className={`text-2xl font-black mb-1 ${
+        isActive ? "text-white" : "text-gray-900"
+      }`}
     >
       {branch.attendanceRate}%
     </p>
     <p
-      className={`text-[10px] mb-2 ${isActive ? "text-teal-300" : "text-gray-400"
-        }`}
+      className={`text-[10px] mb-2 ${
+        isActive ? "text-teal-300" : "text-gray-400"
+      }`}
     >
       {branch.primaryCount.toLocaleString()} {entityLabel}
     </p>
     <div
-      className={`h-1 rounded-full mb-3 ${isActive ? "bg-teal-600" : "bg-gray-100"
-        }`}
+      className={`h-1 rounded-full mb-3 ${
+        isActive ? "bg-teal-600" : "bg-gray-100"
+      }`}
     >
       <div
-        className={`h-full rounded-full ${isActive ? "bg-teal-200" : "bg-teal-500"
-          }`}
+        className={`h-full rounded-full ${
+          isActive ? "bg-teal-200" : "bg-teal-500"
+        }`}
         style={{ width: `${branch.attendanceRate}%`, transition: "width .5s" }}
       />
     </div>
@@ -534,10 +543,11 @@ const BranchCard: React.FC<{
         e.stopPropagation();
         onView();
       }}
-      className={`flex items-center gap-1 text-[10px] font-semibold transition-colors ${isActive
+      className={`flex items-center gap-1 text-[10px] font-semibold transition-colors ${
+        isActive
           ? "text-teal-200 hover:text-white"
           : "text-teal-600 hover:text-teal-700"
-        }`}
+      }`}
     >
       View Branch <ArrowUpRight className="w-3 h-3" />
     </button>
@@ -580,7 +590,6 @@ const getStaffCode = (staffMember: AttendanceStaff): string => {
   return text || "—";
 };
 
-
 const countApprovedLeaveDays = (
   staffMember: AttendanceStaff,
   dates: string[],
@@ -608,34 +617,34 @@ const countApprovedLeaveDays = (
 const getStaffDesignation = (staffMember: AttendanceStaff): string =>
   String(
     (staffMember as any).designation ??
-    (staffMember as any).position ??
-    (staffMember as any).role ??
-    (staffMember as any).jobTitle ??
-    "-",
+      (staffMember as any).position ??
+      (staffMember as any).role ??
+      (staffMember as any).jobTitle ??
+      "-",
   );
 
 const getAttendanceGroupValue = (staffMember: AttendanceStaff): string =>
   String(
     (staffMember as any).className ??
-    (staffMember as any).class_name ??
-    (staffMember as any).groupName ??
-    (staffMember as any).group_name ??
-    (staffMember as any).department ??
-    (staffMember as any).dept ??
-    "Unassigned",
+      (staffMember as any).class_name ??
+      (staffMember as any).groupName ??
+      (staffMember as any).group_name ??
+      (staffMember as any).department ??
+      (staffMember as any).dept ??
+      "Unassigned",
   );
 
 const getAttendanceSubgroupValue = (staffMember: AttendanceStaff): string =>
   String(
     (staffMember as any).sectionName ??
-    (staffMember as any).section_name ??
-    (staffMember as any).subgroupName ??
-    (staffMember as any).subgroup_name ??
-    (staffMember as any).section ??
-    (staffMember as any).designation ??
-    (staffMember as any).position ??
-    (staffMember as any).role ??
-    "Unassigned",
+      (staffMember as any).section_name ??
+      (staffMember as any).subgroupName ??
+      (staffMember as any).subgroup_name ??
+      (staffMember as any).section ??
+      (staffMember as any).designation ??
+      (staffMember as any).position ??
+      (staffMember as any).role ??
+      "Unassigned",
   );
 
 type AttendanceTemplateColumn = TemplateColumn<Record<string, unknown>>;
@@ -926,26 +935,26 @@ const normalizeStaffForAttendance = (
   const resolvedBranchId = resolveStaffUiBranchId(record, branches);
   const groupValue = String(
     member.className ??
-    member.class_name ??
-    member.groupName ??
-    member.group_name ??
-    member.department ??
-    member.dept ??
-    "",
+      member.class_name ??
+      member.groupName ??
+      member.group_name ??
+      member.department ??
+      member.dept ??
+      "",
   );
 
   const subgroupValue = String(
     member.sectionName ??
-    member.section_name ??
-    member.subGroupName ??
-    member.sub_group_name ??
-    member.section ??
-    member.designationName ??
-    member.designation_name ??
-    member.designation ??
-    member.position ??
-    member.role ??
-    "",
+      member.section_name ??
+      member.subGroupName ??
+      member.sub_group_name ??
+      member.section ??
+      member.designationName ??
+      member.designation_name ??
+      member.designation ??
+      member.position ??
+      member.role ??
+      "",
   );
 
   return {
@@ -966,10 +975,10 @@ const normalizeStaffForAttendance = (
     sectionName: subgroupValue,
     peopleType: String(
       member.peopleType ??
-      member.people_type ??
-      member.personType ??
-      member.person_type ??
-      "staff",
+        member.people_type ??
+        member.personType ??
+        member.person_type ??
+        "staff",
     ),
     role:
       subgroupValue ||
@@ -978,10 +987,10 @@ const normalizeStaffForAttendance = (
       subgroupValue ||
       String(
         member.designation ??
-        member.position ??
-        member.role ??
-        member.jobTitle ??
-        "Staff",
+          member.position ??
+          member.role ??
+          member.jobTitle ??
+          "Staff",
       ),
     jobTitle: member.jobTitle ?? member.position ?? member.designation,
     empId: externalCode,
@@ -1150,23 +1159,23 @@ const normalizeAttendanceForView = (
     record.id,
   user_name: String(
     record.user_name ??
-    record.staffName ??
-    record.name ??
-    record.fullName ??
-    "",
+      record.staffName ??
+      record.name ??
+      record.fullName ??
+      "",
   ),
   date: normalizeDateString(
     record.date ??
-    record.attendanceDate ??
-    record.logDate ??
-    record.log_date ??
-    record.created_at?.slice?.(0, 10) ??
-    record.checkIn ??
-    record.check_in ??
-    record.time ??
-    record.check_out ??
-    record.outTime ??
-    record.checkOut,
+      record.attendanceDate ??
+      record.logDate ??
+      record.log_date ??
+      record.created_at?.slice?.(0, 10) ??
+      record.checkIn ??
+      record.check_in ??
+      record.time ??
+      record.check_out ??
+      record.outTime ??
+      record.checkOut,
   ),
   time:
     record.time ??
@@ -1205,11 +1214,11 @@ const normalizeAttendanceForView = (
     resolveUiBranchIdFromBackend(
       branches,
       record.branchId ??
-      record.branch_id ??
-      record.backend_branch_id ??
-      record.backendBranchId ??
-      record.branch_uuid ??
-      record.branchUuid,
+        record.branch_id ??
+        record.backend_branch_id ??
+        record.backendBranchId ??
+        record.branch_uuid ??
+        record.branchUuid,
     ) ?? undefined,
   branch_id:
     resolveUiBranchIdFromBackend(
@@ -1299,8 +1308,8 @@ function useAttendanceSources(args: {
       isGlobal
         ? branches
         : branches.filter(
-          (branch) => Number(branch.id) === Number(scopedBranchId),
-        ),
+            (branch) => Number(branch.id) === Number(scopedBranchId),
+          ),
     [branches, isGlobal, scopedBranchId],
   );
 
@@ -1313,11 +1322,11 @@ function useAttendanceSources(args: {
     () =>
       useRealApi
         ? apiStaff.map((member) =>
-          normalizeStaffForAttendance(member, branches),
-        )
+            normalizeStaffForAttendance(member, branches),
+          )
         : moduleStaff.map((member) =>
-          normalizeStaffForAttendance(member, branches),
-        ),
+            normalizeStaffForAttendance(member, branches),
+          ),
     [apiStaff, branches, moduleStaff, useRealApi],
   );
 
@@ -1325,11 +1334,11 @@ function useAttendanceSources(args: {
     () =>
       useRealApi
         ? apiAttendance.map((record) =>
-          normalizeAttendanceForView(record, branches),
-        )
+            normalizeAttendanceForView(record, branches),
+          )
         : moduleAttendance.map((record) =>
-          normalizeAttendanceForView(record, branches),
-        ),
+            normalizeAttendanceForView(record, branches),
+          ),
     [apiAttendance, branches, moduleAttendance, useRealApi],
   );
 
@@ -1682,7 +1691,7 @@ export default function AttendanceView() {
     const hasRecord = attendance.some(
       (item) =>
         item.user_name?.toLowerCase().trim() ===
-        staffName.toLowerCase().trim() && item.date === targetDate,
+          staffName.toLowerCase().trim() && item.date === targetDate,
     );
     const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
     const confirm = await Swal.fire({
@@ -1704,7 +1713,7 @@ export default function AttendanceView() {
       const record = attendance.find(
         (item) =>
           item.user_name?.toLowerCase().trim() ===
-          staffName.toLowerCase().trim() && item.date === targetDate,
+            staffName.toLowerCase().trim() && item.date === targetDate,
       );
       const userId =
         record?.user_id ||
@@ -1971,9 +1980,9 @@ export default function AttendanceView() {
     return staff.filter((member) => {
       const memberPeopleType = normalizeKey(
         (member as any).peopleType ??
-        (member as any).people_type ??
-        (member as any).personType ??
-        (member as any).person_type,
+          (member as any).people_type ??
+          (member as any).personType ??
+          (member as any).person_type,
       );
       if (
         peopleType &&
@@ -2182,7 +2191,7 @@ export default function AttendanceView() {
       const onTimeDays = records.filter(
         (record) => record.isPresent && !record.isLate,
       ).length;
-     const leaveDays = countApprovedLeaveDays(
+      const leaveDays = countApprovedLeaveDays(
         member,
         records.map((record) => record.date),
         leaveRecords,
@@ -2253,7 +2262,7 @@ export default function AttendanceView() {
       { header: "Present", key: "present" as keyof AttendanceExportRow },
       { header: "On-Time", key: "onTime" as keyof AttendanceExportRow },
       { header: "Late", key: "late" as keyof AttendanceExportRow },
-       ...(leaveModuleEnabled
+      ...(leaveModuleEnabled
         ? [{ header: "Leaves", key: "leaves" as keyof AttendanceExportRow }]
         : []),
       { header: "Absents", key: "absents" as keyof AttendanceExportRow },
@@ -2274,8 +2283,8 @@ export default function AttendanceView() {
         exportDateRange.from === exportDateRange.to
           ? formatExportPeriod(exportDateRange.from)
           : `${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
-            exportDateRange.to,
-          )}`,
+              exportDateRange.to,
+            )}`,
     }),
     [exportDateRange.from, exportDateRange.to],
   );
@@ -2347,9 +2356,9 @@ export default function AttendanceView() {
       staff.filter((member) => {
         const memberPeopleType = normalizeKey(
           (member as any).peopleType ??
-          (member as any).people_type ??
-          (member as any).personType ??
-          (member as any).person_type,
+            (member as any).people_type ??
+            (member as any).personType ??
+            (member as any).person_type,
         );
         if (
           peopleType &&
@@ -2481,27 +2490,27 @@ export default function AttendanceView() {
       },
       ...(attendanceFilterByKey.has("peopleType")
         ? ([
-          {
-            id: "peopleType",
-            type: "custom",
-            render: (
-              <PeopleTypeSelector
-                options={peopleTypeSelectorOptions}
-                value={selectedPeopleType ?? peopleType}
-                onChange={(nextValue) => {
-                  setSelectedPeopleType(nextValue);
-                  setActiveDept(null);
-                  setActiveSubgroup(null);
-                }}
-                ariaLabel={
-                  attendanceFilterByKey.get("peopleType")?.label ??
-                  "Attendance Scope"
-                }
-                minWidth={210}
-              />
-            ),
-          },
-        ] as DynamicFilterSection[])
+            {
+              id: "peopleType",
+              type: "custom",
+              render: (
+                <PeopleTypeSelector
+                  options={peopleTypeSelectorOptions}
+                  value={selectedPeopleType ?? peopleType}
+                  onChange={(nextValue) => {
+                    setSelectedPeopleType(nextValue);
+                    setActiveDept(null);
+                    setActiveSubgroup(null);
+                  }}
+                  ariaLabel={
+                    attendanceFilterByKey.get("peopleType")?.label ??
+                    "Attendance Scope"
+                  }
+                  minWidth={210}
+                />
+              ),
+            },
+          ] as DynamicFilterSection[])
         : []),
       {
         id: "date",
@@ -2591,10 +2600,18 @@ export default function AttendanceView() {
       style={{ fontFamily: "'DM Sans', 'Inter', sans-serif" }}
       className="min-h-screen bg-[#f5f6fa] p-6"
     >
-      <div className="mb-3">
+      <header
+        className="module-shell-header mb-6"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
         <h1
           className="flex items-center gap-2 text-2xl font-bold"
-          style={{ color: "#1a699f" }}
+          style={{ color: "#1a699f", margin: 0 }}
         >
           <ClipboardCheck
             className="h-6 w-6"
@@ -2604,14 +2621,45 @@ export default function AttendanceView() {
           />
           Attendance
         </h1>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <div className="flex items-center gap-3">
+        <div
+          className="module-shell-actions"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
           <DynamicFilterToolbar
             sections={attendanceFilterSections}
             mobileOnly
             className="staff-management-mobile-filter attendance-action-filter"
           />
+          <div className="staff-management-export-action">
+            <ExportButton
+              data={attendanceExportRows}
+              filename={`Attendance_${filter.mode}_${exportDateRange.from}_${exportDateRange.to}`}
+              organization={{
+                name: cfg.orgName || undefined,
+                logoUrl: cfg.logo || undefined,
+              }}
+              excel={{
+                columns: attendanceExportColumns,
+              }}
+              pdf={{
+                title: "Attendance Report",
+                reportPeriod:
+                  exportDateRange.from === exportDateRange.to
+                    ? `Period: ${formatExportPeriod(exportDateRange.from)}`
+                    : `Period: ${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
+                        exportDateRange.to,
+                      )}`,
+                columns: attendanceExportColumns,
+              }}
+              label="Export"
+            />
+          </div>
           <RefreshButton
             size="md"
             loading={loadingRefresh}
@@ -2643,31 +2691,7 @@ export default function AttendanceView() {
             Add Attendance
           </button>
         </div>
-        <div className="staff-management-export-action">
-          <ExportButton
-            data={attendanceExportRows}
-            filename={`Attendance_${filter.mode}_${exportDateRange.from}_${exportDateRange.to}`}
-            organization={{
-              name: cfg.orgName || undefined,
-              logoUrl: cfg.logo || undefined,
-            }}
-            excel={{
-              columns: attendanceExportColumns,
-            }}
-            pdf={{
-              title: "Attendance Report",
-              reportPeriod:
-                exportDateRange.from === exportDateRange.to
-                  ? `Period: ${formatExportPeriod(exportDateRange.from)}`
-                  : `Period: ${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
-                    exportDateRange.to,
-                  )}`,
-              columns: attendanceExportColumns,
-            }}
-            label="Export"
-          />
-        </div>
-      </div>
+      </header>
 
       {apiError && (
         <div
@@ -2928,12 +2952,13 @@ export default function AttendanceView() {
                               >
                                 {arrivalStatus ? (
                                   <span
-                                    className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${isLate
+                                    className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${
+                                      isLate
                                         ? "bg-orange-50 text-orange-600 border-orange-100"
                                         : isPresent
                                           ? "bg-teal-50 text-teal-700 border-teal-100"
                                           : "bg-rose-50 text-rose-600 border-rose-100"
-                                      }`}
+                                    }`}
                                   >
                                     {arrivalStatus}
                                   </span>
@@ -3055,7 +3080,8 @@ export default function AttendanceView() {
                               const badge = isPayrollApplicable(member)
                                 ? derivePayrollDecisionBadge({
                                     dayStatus: todayRecord?.dayStatus,
-                                    payrollDecision: todayRecord?.payrollDecision,
+                                    payrollDecision:
+                                      todayRecord?.payrollDecision,
                                   })
                                 : null;
                               return badge ? (
@@ -3199,7 +3225,10 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={dailyAttendanceColumns.length + (showPayrollDecisionColumn ? 5 : 4)}
+                        colSpan={
+                          dailyAttendanceColumns.length +
+                          (showPayrollDecisionColumn ? 5 : 4)
+                        }
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">
@@ -3231,144 +3260,144 @@ export default function AttendanceView() {
       {(filter.mode === "weekly" ||
         filter.mode === "monthly" ||
         filter.mode === "custom") && (
-          <>
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <h3
-                  className="text-sm font-semibold"
-                  style={{ color: "#1a699f" }}
-                >
-                  {filter.mode === "monthly"
-                    ? "Monthly Attendance"
-                    : filter.mode === "weekly"
-                      ? "Weekly Attendance"
-                      : "Custom Date Attendance"}
-                </h3>
-                <span className="text-xs text-gray-400">
-                  {filter.label} &nbsp;·&nbsp; {filter.dates.length} day
-                  {filter.dates.length !== 1 ? "s" : ""}
-                </span>
-              </div>
+        <>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3
+                className="text-sm font-semibold"
+                style={{ color: "#1a699f" }}
+              >
+                {filter.mode === "monthly"
+                  ? "Monthly Attendance"
+                  : filter.mode === "weekly"
+                    ? "Weekly Attendance"
+                    : "Custom Date Attendance"}
+              </h3>
+              <span className="text-xs text-gray-400">
+                {filter.label} &nbsp;·&nbsp; {filter.dates.length} day
+                {filter.dates.length !== 1 ? "s" : ""}
+              </span>
+            </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-100">
-                      {[
-                        ...rangeAttendanceColumns.map((column) => ({
-                          key: column.key,
-                          label: column.label,
-                        })),
-                        { key: "month", label: "Month" },
-                        { key: "year", label: "Year" },
-                        { key: "totalDays", label: "Total Days" },
-                        { key: "present", label: "Present" },
-                        { key: "late", label: "Late" },
-                        ...(leaveModuleEnabled
-                          ? [{ key: "leaves", label: "Leaves" }]
-                          : []),
-                        { key: "absents", label: "Absents" },
-                        { key: "attendanceRate", label: "Attendance Rate" },
-                      ].map((column) => (
-                        <th
-                          key={column.key}
-                          className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider"
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    {[
+                      ...rangeAttendanceColumns.map((column) => ({
+                        key: column.key,
+                        label: column.label,
+                      })),
+                      { key: "month", label: "Month" },
+                      { key: "year", label: "Year" },
+                      { key: "totalDays", label: "Total Days" },
+                      { key: "present", label: "Present" },
+                      { key: "late", label: "Late" },
+                      ...(leaveModuleEnabled
+                        ? [{ key: "leaves", label: "Leaves" }]
+                        : []),
+                      { key: "absents", label: "Absents" },
+                      { key: "attendanceRate", label: "Attendance Rate" },
+                    ].map((column) => (
+                      <th
+                        key={column.key}
+                        className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {paginatedAttendanceRows.map(
+                    ({ staff: member, records, summary }) => {
+                      const leaveDays = countApprovedLeaveDays(
+                        member,
+                        records.map((record) => record.date),
+                        leaveRecords,
+                      );
+                      return (
+                        <tr
+                          key={String(member.id)}
+                          className="hover:bg-gray-50 transition-colors"
                         >
-                          {column.label}
-                        </th>
-                      ))}
+                          {rangeAttendanceColumns.map((column) => (
+                            <td
+                              key={column.key}
+                              className="px-6 py-4 text-sm text-gray-600"
+                            >
+                              {attendanceColumnText(column, {
+                                member,
+                                getBranchName,
+                                branches,
+                              })}
+                            </td>
+                          ))}
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {toMonthNumber(exportDateRange.from)}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {toYearNumber(exportDateRange.from)}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {summary.totalDays}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-semibold text-teal-700">
+                            {summary.presentDays}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-semibold text-orange-600">
+                            {summary.lateDays}
+                          </td>
+                          {leaveModuleEnabled && (
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              {leaveDays}
+                            </td>
+                          )}
+                          <td className="px-6 py-4 text-sm font-semibold text-rose-600">
+                            {summary.absentDays}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-bold text-gray-900">
+                            {summary.attendanceRate}%
+                          </td>{" "}
+                        </tr>
+                      );
+                    },
+                  )}
+                  {attendanceRows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={
+                          rangeAttendanceColumns.length +
+                          7 +
+                          (leaveModuleEnabled ? 1 : 0)
+                        }
+                        className="px-6 py-16 text-center"
+                      >
+                        <div className="flex flex-col items-center gap-3 text-gray-400">
+                          <Users className="w-10 h-10 opacity-30" />
+                          <p className="text-sm font-medium">
+                            No {entityLabel.toLowerCase()} found
+                          </p>
+                        </div>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {paginatedAttendanceRows.map(
-                        ({ staff: member, records, summary }) => {
-                        const leaveDays = countApprovedLeaveDays(
-                          member,
-                          records.map((record) => record.date),
-                          leaveRecords,
-                        );
-                        return (
-                          <tr
-                            key={String(member.id)}
-                            className="hover:bg-gray-50 transition-colors"
-                          >
-                            {rangeAttendanceColumns.map((column) => (
-                              <td
-                                key={column.key}
-                                className="px-6 py-4 text-sm text-gray-600"
-                              >
-                                {attendanceColumnText(column, {
-                                  member,
-                                  getBranchName,
-                                  branches,
-                                })}
-                              </td>
-                            ))}
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {toMonthNumber(exportDateRange.from)}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {toYearNumber(exportDateRange.from)}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {summary.totalDays}
-                            </td>
-                            <td className="px-6 py-4 text-sm font-semibold text-teal-700">
-                              {summary.presentDays}
-                            </td>
-                            <td className="px-6 py-4 text-sm font-semibold text-orange-600">
-                              {summary.lateDays}
-                            </td>
-                             {leaveModuleEnabled && (
-                              <td className="px-6 py-4 text-sm text-gray-600">
-                                {leaveDays}
-                              </td>
-                            )}
-                            <td className="px-6 py-4 text-sm font-semibold text-rose-600">
-                              {summary.absentDays}
-                            </td>
-                            <td className="px-6 py-4 text-sm font-bold text-gray-900">
-                              {summary.attendanceRate}%
-                            </td>{" "}
-                          </tr>
-                        );
-                      },
-                    )}
-                    {attendanceRows.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={
-                            rangeAttendanceColumns.length +
-                            7 +
-                            (leaveModuleEnabled ? 1 : 0)
-                          }
-                          className="px-6 py-16 text-center"
-                        >
-                          <div className="flex flex-col items-center gap-3 text-gray-400">
-                            <Users className="w-10 h-10 opacity-30" />
-                            <p className="text-sm font-medium">
-                              No {entityLabel.toLowerCase()} found
-                            </p>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                  )}
+                </tbody>
+              </table>
             </div>
-            <div style={{ padding: "12px 20px" }} className="mt-3">
-              <FastPagination
-                page={attendancePager.page}
-                pageSize={pageSize}
-                total={attendancePager.totalItems}
-                onPageChange={attendancePager.goToPage}
-                onPageSizeChange={(s) => setPageSize(s)}
-                disabled={loadingRefresh}
-              />
-            </div>
-          </>
-        )}
+          </div>
+          <div style={{ padding: "12px 20px" }} className="mt-3">
+            <FastPagination
+              page={attendancePager.page}
+              pageSize={pageSize}
+              total={attendancePager.totalItems}
+              onPageChange={attendancePager.goToPage}
+              onPageSizeChange={(s) => setPageSize(s)}
+              disabled={loadingRefresh}
+            />
+          </div>
+        </>
+      )}
 
       <ManualAttendanceModal
         open={manualModalOpen}
