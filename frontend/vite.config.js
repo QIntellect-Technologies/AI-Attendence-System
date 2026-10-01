@@ -48,21 +48,37 @@ function proxyRule(target) {
   };
 }
 
+/**
+ * One row per frontend bundle. Each bundle gets its own output folder and its
+ * own assets folder, so Flask can tell which bundle a requested file belongs to.
+ */
+const BUILD_TARGETS = {
+  client: {
+    outDir: "dist",
+    assetsDir: "assets",
+    input: resolve(__dirname, "index.html"),
+  },
+  support: {
+    outDir: "dist-support",
+    assetsDir: "support-assets",
+    input: resolve(__dirname, "support.html"),
+  },
+};
+
 export default defineConfig(({ mode }) => {
   // loadEnv reads .env / .env.local / .env.<mode> from the project root (".").
   // Third arg "" loads all variables, not just VITE_-prefixed ones.
   const env = loadEnv(mode, ".", "");
   const backendUrl = env.VITE_BACKEND_URL || "http://localhost:5000";
-  const isSupport = mode === "support";
+  const target = BUILD_TARGETS[mode === "support" ? "support" : "client"];
 
   return {
     plugins: [react(), tailwindcss()],
 
     build: {
-      outDir: isSupport ? "dist-support" : "dist",
-      rollupOptions: isSupport
-        ? { input: resolve(__dirname, "support.html") }
-        : undefined,
+      outDir: target.outDir,
+      assetsDir: target.assetsDir,
+      rollupOptions: { input: target.input },
     },
 
     server: {

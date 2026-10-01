@@ -19,6 +19,7 @@ load_dotenv()
 # what gets it into the worker process. See server_identity.py.
 import server_identity
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response, send_file, g
+from werkzeug.security import safe_join
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import re
@@ -219,6 +220,7 @@ app.register_blueprint(client_payroll_decisions_bp)  # dashboard: Phase 3 local-
 # If a production React build exists, serve it as static files and use it for templates
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
+SUPPORT_DIST = os.path.join(BASE_DIR, "frontend", "dist-support")
 if os.path.isdir(FRONTEND_DIST):
     app.static_folder = FRONTEND_DIST
     app.template_folder = FRONTEND_DIST
@@ -6661,6 +6663,8 @@ def api_v2_clear_fast_cache():
 # above is only registered for '/' in the opposite case. See index()'s
 # docstring for why.
 if os.path.isdir(FRONTEND_DIST):
+    _BUNDLE_ROOTS = tuple(root for root in (FRONTEND_DIST, SUPPORT_DIST) if os.path.isdir(root))
+
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
     def serve_spa(path):
@@ -6671,10 +6675,14 @@ if os.path.isdir(FRONTEND_DIST):
                 "path": f"/{path}",
             }), 404
 
-        requested = os.path.join(FRONTEND_DIST, path)
+        if path:
+            for root in _BUNDLE_ROOTS:
+                full = safe_join(root, path)
+                if full and os.path.isfile(full):
+                    return send_from_directory(root, path)
 
-        if path and os.path.exists(requested):
-            return send_from_directory(FRONTEND_DIST, path)
+        if os.path.isdir(SUPPORT_DIST) and (path == "support" or path.startswith("support/")):
+            return send_from_directory(SUPPORT_DIST, "support.html")
 
         return send_from_directory(FRONTEND_DIST, "index.html")
 

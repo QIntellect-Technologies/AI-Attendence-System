@@ -1,11 +1,11 @@
-# ---- Stage 1: build the support-dashboard frontend ----
+# ---- Stage 1: build both frontends (client dashboard + support dashboard) ----
 FROM node:20-slim AS frontend-build
 WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build
-# Output assumed at /frontend/dist — adjust if your vite.config.ts outDir differs
+RUN npm run build:all
+# Outputs: /frontend/dist (client) and /frontend/dist-support (support)
 
 # ---- Stage 2: backend runtime ----
 FROM python:3.10-slim
@@ -41,8 +41,9 @@ COPY . .
 # runtime, well past the healthcheck timeout, causing restart loops).
 RUN python download_models.py
 
-# Bring in the built frontend so Flask's SPA fallback (frontend/dist) can serve it
+# Bring in both built frontends so Flask can serve the client and support dashboards
 COPY --from=frontend-build /frontend/dist ./frontend/dist
+COPY --from=frontend-build /frontend/dist-support ./frontend/dist-support
 
 RUN mkdir -p logs uploads models
 

@@ -58,6 +58,7 @@ Thumbs.db
 # Temporary
 .env
 .env.local
+.env.docker
 temp/
 tmp/
 

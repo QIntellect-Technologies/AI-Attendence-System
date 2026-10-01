@@ -27,13 +27,16 @@ models/
 .pytest_cache/
 .vscode/
 .idea/
-dist/
-node_modules/
+**/dist/
+**/dist-support/
+**/node_modules/
 __pycache__/
 *.pyc
 nuitka-crash-report.xml
 project-tree.txt
 .env
+.env.docker
+venv-node/
 
 # Media that shouldn't be in the image regardless of folder
 *.mp4
