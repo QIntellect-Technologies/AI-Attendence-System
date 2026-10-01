@@ -309,6 +309,7 @@ const NavItem: React.FC<NavItemProps> = ({
   return (
     <Link
       to={item.path}
+      className="dashboard-navigation-link"
       style={commonStyle}
       {...eventHandlers}
       aria-label={item.label}
