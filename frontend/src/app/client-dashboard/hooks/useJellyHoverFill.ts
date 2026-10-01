@@ -162,6 +162,14 @@ export function useJellyHoverFill<
 
   const fillAnimRef = useRef<Animation | null>(null);
   const contentAnimRef = useRef<Animation | null>(null);
+  const wasDisabledRef = useRef(disabled);
+
+  useEffect(() => {
+    if (wasDisabledRef.current && !disabled) {
+      setHovered(false);
+    }
+    wasDisabledRef.current = disabled;
+  }, [disabled]);
 
   // Sync fill color imperatively — separate effect so a color-only change
   // doesn't tear down and re-attach the mouseenter/mouseleave listeners.
@@ -221,6 +229,9 @@ export function useJellyHoverFill<
       host.removeEventListener("mouseleave", handleLeave);
       fillAnimRef.current?.cancel();
       contentAnimRef.current?.cancel();
+      // A loading action disables this effect. Clear the hover state too,
+      // otherwise the button can keep its hover text color after loading ends.
+      setHovered(false);
     };
   }, [disabled, enterDurationMs, exitDurationMs]);
 
