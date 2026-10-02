@@ -668,7 +668,7 @@ const StaffDirectory: FC = () => {
         value: "all",
         label: peopleModel.isStudent
           ? peopleModel.subgroupFilterAllLabel
-          : `All ${peopleModel.rolePlural}`,
+          : `${peopleModel.rolePlural}`,
         count: branchScopedItems.length,
       },
       ...Array.from(roleNames)
@@ -984,7 +984,7 @@ const StaffDirectory: FC = () => {
     roleFilter === "all"
       ? peopleModel.isStudent
         ? peopleModel.subgroupFilterAllLabel
-        : `All ${peopleModel.rolePlural}`
+        : `${peopleModel.rolePlural}`
       : roleFilter;
   const selectedStatusLabel =
     statusFilter === "all"

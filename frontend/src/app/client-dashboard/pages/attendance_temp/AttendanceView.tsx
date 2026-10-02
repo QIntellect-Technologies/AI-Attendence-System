@@ -19,7 +19,13 @@
  *  *   - keep this UI almost unchanged
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 import { toastSuccess, toastError, toastInfo } from "../../utils/notifications";
@@ -45,6 +51,10 @@ import {
 } from "./api/attendanceApi";
 import { useOrg } from "../../contexts/OrgConfigContext";
 import { useModule, type LeaveRequest } from "../../contexts/ModuleContext";
+import {
+  getBranchModulePath,
+  getModulePath,
+} from "../../config/moduleRegistry";
 import { isModuleEnabled } from "../../utils/moduleAccess";
 import {
   useAttendanceBranchSummaries,
@@ -458,12 +468,30 @@ const KPICard: React.FC<{
   value: string | number;
   sub: string;
   accent?: boolean;
-}> = ({ label, value, sub, accent }) => (
+  onClick?: () => void;
+}> = ({ label, value, sub, accent, onClick }) => (
   <div
-    className={`rounded-2xl p-5 border shadow-sm ${
+    role={onClick ? "button" : undefined}
+    tabIndex={onClick ? 0 : undefined}
+    onClick={onClick}
+    onKeyDown={
+      onClick
+        ? (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onClick();
+            }
+          }
+        : undefined
+    }
+    className={`rounded-2xl p-5 border shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:scale-[1.02] hover:shadow-md ${
       accent
         ? "bg-teal-700 text-white border-teal-600"
         : "bg-white border-gray-100"
+    } ${
+      onClick
+        ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+        : ""
     }`}
   >
     <p
@@ -930,10 +958,10 @@ function buildAttendancePeopleModel(
     subgroupLabel: model.isStudentScope
       ? model.labels.subGroup
       : model.labels.designation,
-    groupFilterAllLabel: `All ${model.labels.groupPlural}`,
+    groupFilterAllLabel: `${model.labels.groupPlural}`,
     subgroupFilterAllLabel: model.isStudentScope
-      ? `All ${model.labels.subGroupPlural}`
-      : `All ${model.labels.designationPlural}`,
+      ? `${model.labels.subGroupPlural}`
+      : `${model.labels.designationPlural}`,
     statsTotalLabel: `Total ${model.labels.plural}`,
     searchPlaceholder:
       model.filters.find((filter) => filter.key === "search")?.placeholder ??
@@ -1439,7 +1467,11 @@ export default function AttendanceView() {
   // confirmed a tenant for this account (e.g. onboarding incomplete, or a
   // 404/400 from /api/client/bootstrap). Reading localStorage directly here
   // would silently ignore that guard and risk showing stale/other-tenant data.
-  const { organizationId, cfg } = useOrg();
+  const {
+    organizationId,
+    cfg,
+    setSelectedPeopleType: setOrgSelectedPeopleType,
+  } = useOrg();
   const moduleCtx = useModule();
   const leaveRecords = moduleCtx.leave.allItems ?? moduleCtx.leave.items ?? [];
   const leaveModuleEnabled = isModuleEnabled(cfg.modules, "leave");
@@ -1462,6 +1494,17 @@ export default function AttendanceView() {
   const [activeSubgroup, setActiveSubgroup] = useState<string | null>(null);
   const [activeStatus, setActiveStatus] =
     useState<AttendanceStatusFilter>("all");
+  const attendanceTableRef = useRef<HTMLDivElement>(null);
+  const showAttendanceStatus = useCallback(
+    (status: AttendanceStatusFilter) => {
+      setActiveStatus(status);
+      attendanceTableRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    },
+    [],
+  );
   // Default is "staff" per product requirement: the "All Attendance People"
   // option has been removed from this dropdown entirely, so there is no
   // valid "null/all" state to fall back to here anymore.
@@ -2551,26 +2594,25 @@ export default function AttendanceView() {
   const absentCount = isRangeMode
     ? Math.round(rawAbsentDays / daysInRange)
     : rawAbsentDays;
-  const onTimeCount = Math.max(0, presentCount - lateCount);
-
   const presentPct =
     totalStaff > 0 ? Math.round((presentCount / totalStaff) * 100) : 0;
-  const onTimePct =
-    presentCount > 0 ? Math.round((onTimeCount / presentCount) * 100) : 0;
+  const latePct =
+    totalStaff > 0 ? Math.round((lateCount / totalStaff) * 100) : 0;
   const absentPct =
     totalStaff > 0 ? Math.round((absentCount / totalStaff) * 100) : 0;
 
   const kpiPresentLabel = isRangeMode ? "Avg Present / Day" : "Present Today";
   const kpiAbsentLabel = isRangeMode ? "Avg Absent / Day" : "Absent Today";
+  const kpiLateLabel = isRangeMode ? "Avg Late / Day" : "Late Today";
   const kpiPresentSub = isRangeMode
     ? `${presentPct}% avg rate · ${daysInRange} days`
     : `${presentPct}% of total`;
   const kpiAbsentSub = isRangeMode
     ? `${absentPct}% avg rate`
     : `${absentPct}% of total`;
-  const kpiOnTimeSub = isRangeMode
-    ? `${lateCount} avg late / day`
-    : `${lateCount} arrived late`;
+  const kpiLateSub = isRangeMode
+    ? `${latePct}% avg rate · ${daysInRange} days`
+    : `${latePct}% of total`;
 
   const branchFilterOptions = useMemo(() => {
     const countForBranch = (branchId: number): number =>
@@ -2922,21 +2964,32 @@ export default function AttendanceView() {
           label={peopleModel.statsTotalLabel}
           value={totalStaff}
           sub="registered"
+          onClick={() => {
+            setOrgSelectedPeopleType(peopleModel.peopleType);
+            navigate(
+              branchIdParam
+                ? getBranchModulePath("employees", Number(branchIdParam))
+                : getModulePath("employees"),
+            );
+          }}
         />
         <KPICard
           label={kpiPresentLabel}
           value={presentCount}
           sub={kpiPresentSub}
+          onClick={() => showAttendanceStatus("present")}
         />
         <KPICard
           label={kpiAbsentLabel}
           value={absentCount}
           sub={kpiAbsentSub}
+          onClick={() => showAttendanceStatus("absent")}
         />
         <KPICard
-          label="On-Time Rate"
-          value={`${onTimePct}%`}
-          sub={kpiOnTimeSub}
+          label={kpiLateLabel}
+          value={lateCount}
+          sub={kpiLateSub}
+          onClick={() => showAttendanceStatus("late")}
         />
       </div>
 
@@ -2949,7 +3002,10 @@ export default function AttendanceView() {
 
       {filter.mode === "daily" && (
         <>
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div
+            ref={attendanceTableRef}
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
+          >
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3
                 className="text-sm font-semibold"
@@ -3430,7 +3486,10 @@ export default function AttendanceView() {
         filter.mode === "monthly" ||
         filter.mode === "custom") && (
         <>
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div
+            ref={attendanceTableRef}
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
+          >
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3
                 className="text-sm font-semibold"

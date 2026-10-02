@@ -295,7 +295,7 @@ function PageHeader({
 
   const peopleTypeOptions = useMemo(
     () => [
-      { value: "all", label: `All ${personLabel.plural}` },
+      { value: "all", label: `${personLabel.plural}` },
       ...activePeopleTypes.map((type) => ({
         value: type,
         label: peopleLabelForType(type, cfg).plural,

@@ -12,6 +12,7 @@ import {
   savePayrollPolicy,
   DEFAULT_PAYROLL_POLICY,
   type PayrollPolicy,
+  type PayrollPolicyWrite,
   type PayrollPolicyScope,
   type PayrollId,
 } from "../api/payrollApi";
@@ -21,7 +22,7 @@ export interface UsePayrollPolicyReturn {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  save: (next: PayrollPolicy) => Promise<void>;
+  save: (next: PayrollPolicyWrite) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -72,7 +73,7 @@ export function usePayrollPolicy(
   }, [refresh]);
 
   const save = useCallback(
-    async (next: PayrollPolicy) => {
+    async (next: PayrollPolicyWrite) => {
       if (!organizationId) throw new Error("organization_id is required.");
       setSaving(true);
       setError(null);

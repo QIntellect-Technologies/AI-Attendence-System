@@ -114,7 +114,7 @@ export function buildExportRows(args: {
   } = args;
 
   const periodText = period;
-  const allGroupsLabel = `All ${groupPlural}`;
+  const allGroupsLabel = `${groupPlural}`;
   const attendanceNotes = (row: ReportExportMetricRow) =>
     `${row.present} present, ${row.late} late, ${row.absent} absent`;
   const rows: ReportExportRow[] = [];

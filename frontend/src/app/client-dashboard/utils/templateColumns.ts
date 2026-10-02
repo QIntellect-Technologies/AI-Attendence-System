@@ -983,14 +983,14 @@ function buildFilters(
       key: "branchId",
       type: "select",
       label: L.branchPlural,
-      placeholder: `All ${L.branchPlural}`,
+      placeholder: `${L.branchPlural}`,
       feature: "branch",
     },
     {
       key: "class",
       type: "select",
       label: L.groupPlural,
-      placeholder: `All ${L.groupPlural}`,
+      placeholder: `${L.groupPlural}`,
       feature: "studentStructure",
       hidden: !F.studentStructure,
     },
@@ -998,7 +998,7 @@ function buildFilters(
       key: "section",
       type: "select",
       label: L.subGroupPlural,
-      placeholder: `All ${L.subGroupPlural}`,
+      placeholder: `${L.subGroupPlural}`,
       feature: "studentStructure",
       hidden: !F.studentStructure,
     },
@@ -1006,7 +1006,7 @@ function buildFilters(
       key: "department",
       type: "select",
       label: L.groupPlural,
-      placeholder: `All ${L.groupPlural}`,
+      placeholder: `${L.groupPlural}`,
       feature: "workforceStructure",
       hidden: !F.workforceStructure,
     },
@@ -1014,7 +1014,7 @@ function buildFilters(
       key: "designation",
       type: "select",
       label: L.designationPlural,
-      placeholder: `All ${L.designationPlural}`,
+      placeholder: `${L.designationPlural}`,
       feature: "workforceStructure",
       hidden: !F.workforceStructure,
     },
@@ -1158,7 +1158,7 @@ export function resolveTemplateRenderingModel(
   const features = resolveFeatures(input, selected);
 
   const peopleTypeOptions: TemplateFilterOption[] = [
-    { value: "all", label: "All Attendance People" },
+    { value: "all", label: "Attendance People" },
     ...attendancePeopleTypes.map((type) => ({
       value: type,
       label: peoplePlural(labels, type),

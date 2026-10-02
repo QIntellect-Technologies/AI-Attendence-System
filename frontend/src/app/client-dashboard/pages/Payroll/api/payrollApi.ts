@@ -108,6 +108,9 @@ export interface PayrollPolicy {
   allowanceTypes: Record<string, AllowanceType>;
 }
 
+export type PayrollPolicyWrite = Omit<PayrollPolicy, "otRatePerHour"> &
+  Partial<Pick<PayrollPolicy, "otRatePerHour">>;
+
 export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   otRatePerHour: 0,
   defaultSalary: 0,
@@ -518,7 +521,7 @@ export async function getPayrollPolicy(
 
 export async function savePayrollPolicy(
   organizationId: PayrollId,
-  policy: PayrollPolicy,
+  policy: PayrollPolicyWrite,
   scope?: PayrollPolicyScope,
 ): Promise<PayrollPolicy> {
   const branchId = cleanPayrollId(scope?.branchId);
@@ -532,7 +535,7 @@ export async function savePayrollPolicy(
       staff_id: staffId !== null ? String(staffId) : undefined,
     }),
   });
-  return data.policy;
+  return { ...DEFAULT_PAYROLL_POLICY, ...data.policy };
 }
 
 export async function markPayrollPaid(

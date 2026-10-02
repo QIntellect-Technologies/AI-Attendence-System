@@ -56,6 +56,7 @@ import {
   DEFAULT_PAYROLL_POLICY,
   getPayrollPolicy,
   type PayrollPolicy,
+  type PayrollPolicyWrite,
   type LateComingMode,
   type AllowanceMode,
   type AllowanceType,
@@ -111,6 +112,12 @@ const MONTH_ABBRS = [
   "Nov",
   "Dec",
 ] as const;
+
+function withoutOvertimeRate(policy: PayrollPolicy): PayrollPolicyWrite {
+  const { otRatePerHour: _otRatePerHour, ...policyWithoutOvertimeRate } =
+    policy;
+  return policyWithoutOvertimeRate;
+}
 
 const PER_DAY_RATE_BASIS_OPTIONS: ModernSelectOption[] = [
   {
@@ -1532,7 +1539,10 @@ export default function PayrollModule() {
   const handleSaveRules = useCallback(async () => {
     try {
       if (payrollRulesError) return;
-      await savePolicy(draftPolicy);
+      const policyToSave = hasOvertime
+        ? draftPolicy
+        : withoutOvertimeRate(draftPolicy);
+      await savePolicy(policyToSave);
       if (isGlobal) {
         // usePayrollPolicy's own `policy` state is now fresh, but that
         // hook instance is local to this modal — it's not what the
@@ -1573,6 +1583,7 @@ export default function PayrollModule() {
     updateCfg,
     refresh,
     rulesBranch,
+    hasOvertime,
   ]);
 
   const rulesScopeSummary = useMemo(() => {
