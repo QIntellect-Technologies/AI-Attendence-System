@@ -23,7 +23,7 @@ export default function ModuleEntitlementsPage() {
     { key: "actions", header: "Actions", render: (r) => <button onClick={() => nav(`/support/organizations/${r.org_id}`)} style={actionStyle}>Edit in Org →</button> },
   ];
   return <SupportPageShell title="Module Entitlements" icon={<Grid3X3 size={20} color="#0d9488" />} subtitle="Global overview of purchased modules. Editing remains organization-scoped for tenant safety.">
-    <SupportToolbar search={state.search} onSearchChange={state.setSearch} searchPlaceholder="Search organization or module…" filters={[{ value: state.module, onChange: state.setModule, label: "Module", options: moduleOptions }, { value: state.status, onChange: state.setStatus, label: "Status", options: [{ value: "all", label: "All Statuses" }, { value: "active", label: "Active" }, { value: "inactive", label: "Inactive" }] }]} />
+    <SupportToolbar search={state.search} onSearchChange={state.setSearch} searchPlaceholder="Search organization or module…" filters={[{ value: state.module, onChange: state.setModule, label: "Module", options: moduleOptions }, { value: state.status, onChange: state.setStatus, label: "Status", options: [{ value: "all", label: "Statuses" }, { value: "active", label: "Active" }, { value: "inactive", label: "Inactive" }] }]} />
     <SupportErrorBanner message={state.error} />
     <SupportTable columns={columns} rows={state.rows} getRowKey={(r) => r.id} isLoading={state.isLoading} emptyText="No module entitlements found." />
     <SupportPagination page={state.page} onPageChange={state.setPage} disabled={state.isLoading} />

@@ -459,7 +459,7 @@ export function useReportMetrics(
         branchId,
         backendBranchId,
         branchName(branch, branchId),
-        "All Departments",
+        "Departments",
         branchStaff.length,
         present,
         0,

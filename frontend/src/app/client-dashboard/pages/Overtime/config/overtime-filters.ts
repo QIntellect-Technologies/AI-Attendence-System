@@ -79,7 +79,7 @@ export function buildDepartmentFilterOptions(
     requests.map((r) => r.department || "Unassigned"),
   );
   return [
-    { value: "all", label: "All Departments", count: requests.length },
+    { value: "all", label: "Departments", count: requests.length },
     ...depts.map((dept) => ({
       value: dept,
       label: dept,

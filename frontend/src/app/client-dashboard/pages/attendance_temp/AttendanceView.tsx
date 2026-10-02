@@ -106,6 +106,7 @@ import ManualAttendanceModal, {
   type ManualAttendanceRecordSeed,
   type ManualAttendanceSubmitValues,
 } from "./ManualAttendanceModal";
+import ModernSelect from "../../components/ui/ModernSelect";
 
 import {
   resolveBranchFromList,
@@ -2654,7 +2655,7 @@ export default function AttendanceView() {
 
   const statusFilterOptions = useMemo(
     () => [
-      { value: "all", label: "All Statuses", description: "Show every record" },
+      { value: "all", label: "Statuses", description: "Show every record" },
       {
         value: "present",
         label: "Present",
@@ -3082,22 +3083,30 @@ export default function AttendanceView() {
                                   key={column.key}
                                   className="px-6 py-4 text-center"
                                 >
-                                  <select
-                                    disabled={isSavingRow}
+                                  <ModernSelect
                                     value={rowDraft.arrivalStatus}
-                                    onChange={(e) => {
-                                      const value = e.target.value;
+                                    options={[
+                                      { value: "on_time", label: "On Time" },
+                                      { value: "late", label: "Late" },
+                                      { value: "early", label: "Early" },
+                                      {
+                                        value: "unscheduled",
+                                        label: "Unscheduled",
+                                      },
+                                      { value: "absent", label: "Absent" },
+                                    ]}
+                                    onChange={(value) => {
                                       setRowDraft((draft) =>
                                         draft
                                           ? { ...draft, arrivalStatus: value }
                                           : draft,
                                       );
                                     }}
-                                    className="text-xs font-semibold border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-teal-200"
-                                  >
-                                    <option value="on_time">On Time</option>
-                                    <option value="late">Late</option>
-                                  </select>
+                                    ariaLabel="Arrival Status"
+                                    width="100%"
+                                    minWidth={0}
+                                    disabled={isSavingRow}
+                                  />
                                 </td>
                               );
                             }

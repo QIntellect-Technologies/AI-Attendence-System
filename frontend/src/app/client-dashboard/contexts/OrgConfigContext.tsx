@@ -1237,7 +1237,7 @@
 
 //   if (!res.ok || data?.success === false) {
 //     throw new Error(
-//       data?.message || data?.error || "Failed to load client bootstrap.",
+//       data?.message || data?.error || "Failed to load data.",
 //     );
 //   }
 //   return data;
@@ -2233,9 +2233,9 @@ function normalizeDepartment(value: unknown): OrgDepartment | null {
         : undefined;
   const itemKind =
     value.itemKind === "class_section" ||
-      value.item_kind === "class_section" ||
-      className ||
-      sectionName
+    value.item_kind === "class_section" ||
+    className ||
+    sectionName
       ? "class_section"
       : "group";
 
@@ -2311,9 +2311,9 @@ function normalizeCamera(
   const status = value.status;
   const normalizedStatus =
     status === "Normal" ||
-      status === "Alert" ||
-      status === "Offline" ||
-      status === "Not Synced"
+    status === "Alert" ||
+    status === "Offline" ||
+    status === "Not Synced"
       ? status
       : undefined;
 
@@ -2325,9 +2325,9 @@ function normalizeCamera(
         : undefined;
   const normalizedCameraType =
     rawCameraType === "nvr" ||
-      rawCameraType === "dvr" ||
-      rawCameraType === "ip_camera" ||
-      rawCameraType === "webcam"
+    rawCameraType === "dvr" ||
+    rawCameraType === "ip_camera" ||
+    rawCameraType === "webcam"
       ? rawCameraType
       : undefined;
 
@@ -2416,8 +2416,8 @@ function normalizeUsers(value: unknown): OrgUserRecord[] {
 
       const role =
         raw.role === "admin" ||
-          raw.role === "branch_admin" ||
-          raw.role === "staff"
+        raw.role === "branch_admin" ||
+        raw.role === "staff"
           ? raw.role
           : "staff";
       const status =
@@ -2445,8 +2445,8 @@ function normalizeUsers(value: unknown): OrgUserRecord[] {
         staffType,
         allowedBranchIds: Array.isArray(raw.allowedBranchIds)
           ? raw.allowedBranchIds
-            .map(Number)
-            .filter((item) => Number.isFinite(item))
+              .map(Number)
+              .filter((item) => Number.isFinite(item))
           : [branchId],
         allowedModules: uniqStrings(
           Array.isArray(raw.allowedModules) ? raw.allowedModules : [],
@@ -2625,8 +2625,8 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
 
   const branches = Array.isArray(raw.branches)
     ? raw.branches
-      .map(normalizeBranch)
-      .filter((branch): branch is OrgBranch => branch !== null)
+        .map(normalizeBranch)
+        .filter((branch): branch is OrgBranch => branch !== null)
     : [];
 
   const departments = normalizeRecordArray<OrgDepartment>(
@@ -2697,12 +2697,12 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
         : Array.isArray(raw.enabled_people_types)
           ? raw.enabled_people_types
           : [
-            typeof raw.primaryPeopleType === "string"
-              ? raw.primaryPeopleType
-              : typeof raw.primary_people_type === "string"
-                ? raw.primary_people_type
-                : "staff",
-          ],
+              typeof raw.primaryPeopleType === "string"
+                ? raw.primaryPeopleType
+                : typeof raw.primary_people_type === "string"
+                  ? raw.primary_people_type
+                  : "staff",
+            ],
     ),
     attendancePeopleTypes: uniqStrings(
       Array.isArray(raw.attendancePeopleTypes)
@@ -2714,12 +2714,12 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
             : Array.isArray(raw.enabled_people_types)
               ? raw.enabled_people_types
               : [
-                typeof raw.primaryPeopleType === "string"
-                  ? raw.primaryPeopleType
-                  : typeof raw.primary_people_type === "string"
-                    ? raw.primary_people_type
-                    : "staff",
-              ],
+                  typeof raw.primaryPeopleType === "string"
+                    ? raw.primaryPeopleType
+                    : typeof raw.primary_people_type === "string"
+                      ? raw.primary_people_type
+                      : "staff",
+                ],
     ),
     modulePeopleTypesByBranch: isRecord(raw.modulePeopleTypesByBranch)
       ? normalizeModulePeopleTypesByBranch(raw.modulePeopleTypesByBranch)
@@ -2918,16 +2918,14 @@ async function getClientBootstrap(
   if (res.status === 403 && data?.code === "ORG_ACCESS_BLOCKED") {
     handleSessionExpired(
       data?.error ||
-      data?.message ||
-      "This organization is no longer active. Contact QIntellect Support.",
+        data?.message ||
+        "This organization is no longer active. Contact QIntellect Support.",
     );
     throw new ApiRequestError(data?.error || "Organization inactive", 403);
   }
 
   if (!res.ok || data?.success === false) {
-    throw new Error(
-      data?.message || data?.error || "Failed to load client bootstrap.",
-    );
+    throw new Error(data?.message || data?.error || "Failed to load data.");
   }
   return data;
 }

@@ -725,9 +725,9 @@ export function resolvePeopleRenderingModel(
     subgroupPlural,
     roleLabel,
     rolePlural,
-    statusFilterAllLabel: "All Statuses",
-    groupFilterAllLabel: `All ${groupPlural}`,
-    subgroupFilterAllLabel: `All ${subgroupPlural}`,
+    statusFilterAllLabel: "Statuses",
+    groupFilterAllLabel: `${groupPlural}`,
+    subgroupFilterAllLabel: `${subgroupPlural}`,
     searchPlaceholder: isStudent
       ? `Search ${baseLabel.singular.toLowerCase()} name, email, phone, ID, ${groupLabel.toLowerCase()}, ${subgroupLabel.toLowerCase()}...`
       : `Search ${baseLabel.singular.toLowerCase()} name, email, phone, ID, ${groupLabel.toLowerCase()}, ${roleLabel.toLowerCase()}...`,

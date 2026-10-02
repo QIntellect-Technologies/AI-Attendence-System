@@ -74,7 +74,7 @@ export const LEAVE_FILTER_DEFAULTS: LeaveFilterState = {
 /**
  * Build department filter options from leaves.
  *
- * - Always includes "All Departments" as first option
+ * - Always includes "Departments" as first option
  * - Counts how many leaves match each department
  * - Used to populate dropdown
  */

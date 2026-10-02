@@ -40,6 +40,8 @@ export interface ModernSelectProps {
   minWidth?: number | string;
   disabled?: boolean;
   leadingIcon?: React.ReactNode;
+  searchable?: boolean;
+  searchPlaceholder?: string;
   zIndex?: number;
 }
 
@@ -69,9 +71,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
   minWidth = 120,
   disabled = false,
   leadingIcon,
+  searchable = false,
+  searchPlaceholder = "Search options...",
   zIndex = 2200,
 }) => {
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   // Wraps the button. Used for (a) measuring position, (b) outside-click
   // detection on the trigger side. The panel itself now lives in a portal,
   // so it's checked separately in the outside-click handler below.
@@ -90,6 +95,15 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     () => options.find((option) => option.value === value),
     [options, value],
   );
+  const filteredOptions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!searchable || !query) return options;
+    return options.filter((option) =>
+      `${option.label} ${option.description ?? ""} ${option.value}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [options, searchQuery, searchable]);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -123,7 +137,11 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => !disabled && setOpen((prev) => !prev)}
+        onClick={() => {
+          if (disabled) return;
+          setSearchQuery("");
+          setOpen((prev) => !prev);
+        }}
         style={{
           ...controlBase,
           width: "100%",
@@ -203,8 +221,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         createPortal(
           <div
             ref={panelRef}
-            role="listbox"
-            aria-label={ariaLabel}
+            role={searchable ? undefined : "listbox"}
+            aria-label={searchable ? undefined : ariaLabel}
             style={{
               position: "fixed",
               top: position.top,
@@ -215,114 +233,153 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
               border: `1px solid ${T.border}`,
               borderRadius: 14,
               boxShadow: menuShadow,
+              fontFamily: controlBase.fontFamily,
               // overflow + height are owned imperatively by useDropdownTransition
             }}
           >
             <div ref={contentRef} style={{ padding: 6 }}>
+              {searchable && (
+                <div style={{ padding: "0 0 6px" }}>
+                  <input
+                    autoFocus
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    placeholder={searchPlaceholder}
+                    aria-label={`Search ${ariaLabel ?? "options"}`}
+                    style={{
+                      ...controlBase,
+                      width: "100%",
+                      height: 34,
+                      boxSizing: "border-box",
+                      padding: "0 10px",
+                      fontWeight: 500,
+                    }}
+                  />
+                </div>
+              )}
               <div
+                role="listbox"
+                aria-label={ariaLabel}
                 style={{
                   maxHeight: 280,
                   overflowY: "auto",
                 }}
               >
-                {options.map((option) => {
-                  const active = option.value === value;
+                {filteredOptions.length === 0 ? (
+                  <div
+                    style={{
+                      padding: "12px",
+                      color: T.muted,
+                      fontSize: 12,
+                      textAlign: "center",
+                    }}
+                  >
+                    No matching options
+                  </div>
+                ) : (
+                  filteredOptions.map((option) => {
+                    const active = option.value === value;
 
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      data-dropdown-row
-                      onClick={() => {
-                        onChange(option.value);
-                        setOpen(false);
-                      }}
-                      role="option"
-                      aria-selected={active}
-                      style={{
-                        width: "100%",
-                        border: "none",
-                        background: active ? T.teal50 : "transparent",
-                        borderRadius: 10,
-                        padding: "10px 12px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 10,
-                        cursor: "pointer",
-                        textAlign: "left",
-                        transition: "background .14s ease",
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!active) {
-                          e.currentTarget.style.background = "#f8fafc";
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!active) {
-                          e.currentTarget.style.background = "transparent";
-                        }
-                      }}
-                    >
-                      <span
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        data-dropdown-row
+                        onClick={() => {
+                          onChange(option.value);
+                          setSearchQuery("");
+                          setOpen(false);
+                        }}
+                        role="option"
+                        aria-selected={active}
                         style={{
+                          width: "100%",
+                          border: "none",
+                          background: active ? T.teal50 : "transparent",
+                          borderRadius: 10,
+                          padding: "10px 12px",
                           display: "flex",
                           alignItems: "center",
+                          justifyContent: "space-between",
                           gap: 10,
-                          minWidth: 0,
-                          flex: 1,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          transition: "background .14s ease",
+                          fontFamily: controlBase.fontFamily,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!active) {
+                            e.currentTarget.style.background = "#f8fafc";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) {
+                            e.currentTarget.style.background = "transparent";
+                          }
                         }}
                       >
-                        {(option.icon || active) && (
-                          <span
-                            style={{
-                              width: 24,
-                              height: 24,
-                              borderRadius: 8,
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              background: active ? T.teal100 : "#f8fafc",
-                              color: active ? T.teal600 : T.muted,
-                              flexShrink: 0,
-                            }}
-                          >
-                            {option.icon ?? <Check size={13} />}
-                          </span>
-                        )}
-                        <span style={{ minWidth: 0 }}>
-                          <span
-                            style={{
-                              display: "block",
-                              fontSize: 12,
-                              fontWeight: active ? 800 : 700,
-                              color: active ? T.teal600 : T.head,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {option.label}
-                          </span>
-                          {option.description && (
+                        <span
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            minWidth: 0,
+                            flex: 1,
+                          }}
+                        >
+                          {(option.icon || active) && (
+                            <span
+                              style={{
+                                width: 24,
+                                height: 24,
+                                borderRadius: 8,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                background: active ? T.teal100 : "#f8fafc",
+                                color: active ? T.teal600 : T.muted,
+                                flexShrink: 0,
+                              }}
+                            >
+                              {option.icon ?? <Check size={13} />}
+                            </span>
+                          )}
+                          <span style={{ minWidth: 0 }}>
                             <span
                               style={{
                                 display: "block",
-                                fontSize: 10,
-                                color: T.muted,
-                                marginTop: 2,
+                                fontSize: 12,
+                                fontWeight: active ? 800 : 700,
+                                color: active ? T.teal600 : T.head,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
                               }}
                             >
-                              {option.description}
+                              {option.label}
                             </span>
-                          )}
+                            {option.description && (
+                              <span
+                                style={{
+                                  display: "block",
+                                  fontSize: 10,
+                                  color: T.muted,
+                                  marginTop: 2,
+                                }}
+                              >
+                                {option.description}
+                              </span>
+                            )}
+                          </span>
                         </span>
-                      </span>
 
-                      {active && <Check size={14} color={T.teal600} />}
-                    </button>
-                  );
-                })}
+                        {active && <Check size={14} color={T.teal600} />}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>,

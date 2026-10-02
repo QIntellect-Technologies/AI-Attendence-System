@@ -30,6 +30,7 @@ import {
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
 } from "./utils/attendanceDisplay";
+import ModernSelect from "../../components/ui/ModernSelect";
 
 export interface ManualAttendanceStaffOption {
   id: string | number;
@@ -57,11 +58,10 @@ export interface ManualAttendanceSubmitValues {
   notes: string;
 }
 
-const ARRIVAL_STATUS_OPTIONS: { value: string; label: string }[] = [
+const ARRIVAL_STATUS_OPTIONS = [
   { value: "on_time", label: "On Time" },
   { value: "late", label: "Late" },
-  { value: "early", label: "Early" },
-  { value: "unscheduled", label: "Unscheduled" },
+  { value: "absent", label: "Absent" },
 ];
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -123,7 +123,7 @@ export const ManualAttendanceModal: FC<{
   const [touched, setTouched] = useState(false);
 
   const timeZone = getBranchTimezoneForStaff(
-    mode === "edit" ? record?.staffId : staffId || undefined,
+    staffId || (mode === "edit" ? record?.staffId : undefined),
   );
 
   // Reset the form whenever the modal is (re)opened for a different
@@ -149,10 +149,27 @@ export const ManualAttendanceModal: FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, record?.id, initialStaffId, initialDate]);
 
-  const selectedStaff = useMemo(
-    () => staffOptions.find((s) => String(s.id) === staffId),
-    [staffOptions, staffId],
-  );
+  const employeeOptions = useMemo(() => {
+    const options = staffOptions.map((option) => ({
+      value: String(option.id),
+      label: option.name,
+      description: option.code ? `Staff ID: ${option.code}` : undefined,
+    }));
+
+    if (
+      mode === "edit" &&
+      record &&
+      !options.some((option) => option.value === String(record.staffId))
+    ) {
+      options.unshift({
+        value: String(record.staffId),
+        label: record.staffName,
+        description: "Current employee",
+      });
+    }
+
+    return options;
+  }, [mode, record, staffOptions]);
 
   const staffMissing = mode === "add" && !staffId;
   const checkInMissing = mode === "add" && !checkInLocal;
@@ -169,7 +186,7 @@ export const ManualAttendanceModal: FC<{
     setTouched(true);
     if (!canSubmit) return;
     onSubmit({
-      staffId: mode === "edit" ? (record?.staffId as string | number) : staffId,
+      staffId,
       checkIn: checkInLocal
         ? fromDatetimeLocalValue(checkInLocal, timeZone)
         : null,
@@ -286,33 +303,18 @@ export const ManualAttendanceModal: FC<{
                 />
                 Employee
               </label>
-              {mode === "edit" ? (
-                <div
-                  style={{
-                    ...inputStyle,
-                    background: T.slate50,
-                    color: T.textBody,
-                    fontWeight: 600,
-                  }}
-                >
-                  {record?.staffName || selectedStaff?.name || "—"}
-                </div>
-              ) : (
-                <select
-                  style={inputStyle}
-                  value={staffId}
-                  onChange={(e) => setStaffId(e.target.value)}
-                  required
-                >
-                  <option value="">Select employee…</option>
-                  {staffOptions.map((option) => (
-                    <option key={String(option.id)} value={String(option.id)}>
-                      {option.name}
-                      {option.code ? ` (${option.code})` : ""}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <ModernSelect
+                value={staffId}
+                options={employeeOptions}
+                onChange={setStaffId}
+                placeholder="Select employee…"
+                ariaLabel="Employee"
+                width="100%"
+                minWidth={0}
+                disabled={saving}
+                searchable
+                searchPlaceholder="Search by name or staff ID..."
+              />
               {touched && staffMissing && (
                 <p style={{ fontSize: 12, color: T.red600, margin: "6px 0 0" }}>
                   Please select an employee.
@@ -402,20 +404,18 @@ export const ManualAttendanceModal: FC<{
                 />
                 Arrival Status
               </label>
-              <select
-                style={inputStyle}
+              <ModernSelect
                 value={arrivalStatus}
-                onChange={(e) => setArrivalStatus(e.target.value)}
-              >
-                {ARRIVAL_STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                options={ARRIVAL_STATUS_OPTIONS}
+                onChange={setArrivalStatus}
+                ariaLabel="Arrival Status"
+                width="100%"
+                minWidth={0}
+                disabled={saving}
+              />
             </div>
 
-            {/* Notes */}
+            {/* Temporarily hidden Notes field:
             <div>
               <label style={fieldLabelStyle}>Notes (optional)</label>
               <textarea
@@ -430,6 +430,7 @@ export const ManualAttendanceModal: FC<{
                 placeholder="e.g. Forgot badge, verified manually by supervisor"
               />
             </div>
+            */}
 
             {errorMessage && (
               <div

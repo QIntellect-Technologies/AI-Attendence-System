@@ -1022,7 +1022,7 @@ function buildFilters(
       key: "status",
       type: "select",
       label: "Statuses",
-      placeholder: "All Statuses",
+      placeholder: "Statuses",
       feature: "status",
     },
     {
