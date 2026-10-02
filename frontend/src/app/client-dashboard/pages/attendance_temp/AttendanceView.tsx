@@ -62,6 +62,7 @@ import {
 } from "../../hooks/useAttendanceBranchSummaries";
 
 import {
+  formatDate,
   getPreviousCompletedPeriodRange,
   useDateFilter,
   parseLocalDate,
@@ -1495,6 +1496,10 @@ export default function AttendanceView() {
     Map<string, number>
   >(() => new Map());
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [selectedAbsentStaffIds, setSelectedAbsentStaffIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [bulkMarkingAbsent, setBulkMarkingAbsent] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1521,10 +1526,14 @@ export default function AttendanceView() {
     "staff",
   );
 
-  const filter = useDateFilter("daily", { completedPeriodsOnly: true });
-  const dateFilterMaxDate = getPreviousCompletedPeriodRange(
-    filter.mode,
-  ).endDate;
+  const filter = useDateFilter("daily", {
+    completedPeriodsOnly: true,
+    allowCurrentDailyPeriod: true,
+  });
+  const dateFilterMaxDate =
+    filter.mode === "daily"
+      ? formatDate(new Date())
+      : getPreviousCompletedPeriodRange(filter.mode).endDate;
 
   const sources = useAttendanceSources({
     branchIdParam,
@@ -1836,7 +1845,43 @@ export default function AttendanceView() {
   // looking at never changes, and a different (often uninvolved) day does.
   // Always pass the row's own date explicitly so the mutation and the view
   // agree on which day is being edited.
-  const markAsAbsent = async (staffName: string, targetDate: string) => {
+  const markAttendanceAbsentForStaff = async (
+    staffMember: AttendanceStaff,
+    targetDate: string,
+  ) => {
+    const staffName = staffMember.name;
+    const staffId = String(staffMember.id);
+    const record = attendance.find(
+      (item) =>
+        item.date === targetDate &&
+        (String(item.user_id ?? "") === staffId ||
+          item.user_name?.toLowerCase().trim() ===
+            staffName.toLowerCase().trim()),
+    );
+    const userId =
+      record?.user_id ||
+      staff.find(
+        (item) =>
+          String(item.id) === staffId ||
+          item.name?.toLowerCase().trim() === staffName.toLowerCase().trim(),
+      )?.id;
+    if (!userId) {
+      throw new Error(`Could not find a matching user for ${staffName}.`);
+    }
+    await markAttendanceAbsent(userId, {
+      organizationId: organizationIdForApi ?? undefined,
+      branchId:
+        backendBranchIdForUi(
+          branches,
+          scopedBranchId ?? activeBranchId ?? null,
+        ) ?? undefined,
+      peopleType,
+      date: targetDate,
+    });
+  };
+
+  const markAsAbsent = async (staffMember: AttendanceStaff, targetDate: string) => {
+    const staffName = staffMember.name;
     if (!useRealApi) {
       toastInfo(
         "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
@@ -1869,31 +1914,7 @@ export default function AttendanceView() {
 
     setLoadingAction(staffName);
     try {
-      const record = attendance.find(
-        (item) =>
-          item.user_name?.toLowerCase().trim() ===
-            staffName.toLowerCase().trim() && item.date === targetDate,
-      );
-      const userId =
-        record?.user_id ||
-        staff.find(
-          (item) =>
-            item.name?.toLowerCase().trim() === staffName.toLowerCase().trim(),
-        )?.id;
-      if (!userId) {
-        toastError("Could not find a matching user to mark absent.");
-        return;
-      }
-      await markAttendanceAbsent(userId, {
-        organizationId: organizationIdForApi ?? undefined,
-        branchId:
-          backendBranchIdForUi(
-            branches,
-            scopedBranchId ?? activeBranchId ?? null,
-          ) ?? undefined,
-        peopleType,
-        date: targetDate,
-      });
+      await markAttendanceAbsentForStaff(staffMember, targetDate);
       toastSuccess(
         `${staffName} has been marked as absent on ${formattedDate}.`,
       );
@@ -2595,6 +2616,82 @@ export default function AttendanceView() {
     itemsPerPage: pageSize,
   });
   const paginatedAttendanceRows = attendancePager.paginatedItems;
+  useEffect(() => {
+    setSelectedAbsentStaffIds(new Set());
+  }, [attendanceRows]);
+
+  const selectedAbsentStaff = attendanceRows
+    .filter(({ staff: member }) =>
+      selectedAbsentStaffIds.has(String(member.id)),
+    )
+    .map(({ staff: member }) => member);
+  const allAttendanceRowsSelected =
+    attendanceRows.length > 0 &&
+    attendanceRows.every(({ staff: member }) =>
+      selectedAbsentStaffIds.has(String(member.id)),
+    );
+
+  const markSelectedAsAbsent = async () => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
+      );
+      return;
+    }
+    if (selectedAbsentStaff.length === 0 || bulkMarkingAbsent) return;
+
+    const targetDate = filter.selectedDate;
+    const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: `Mark ${selectedAbsentStaff.length} selected people absent?`,
+      text: `Their attendance for ${formattedDate} will be recorded as absent. Existing check-ins for that date will be cleared.`,
+      showCancelButton: true,
+      confirmButtonText: "Mark Absent",
+      cancelButtonText: "Cancel",
+      focusCancel: true,
+    });
+    if (!confirm.isConfirmed) return;
+
+    setBulkMarkingAbsent(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedAbsentStaff.map((member) =>
+          markAttendanceAbsentForStaff(member, targetDate),
+        ),
+      );
+      const succeeded = results.filter(
+        (result) => result.status === "fulfilled",
+      ).length;
+      const failed = results
+        .map((result, index) =>
+          result.status === "rejected"
+            ? `${selectedAbsentStaff[index].name}: ${
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : "Server error"
+              }`
+            : null,
+        )
+        .filter((message): message is string => message !== null);
+
+      if (succeeded > 0) {
+        setSelectedAbsentStaffIds(new Set());
+        await fetchAttendance();
+      }
+      if (failed.length > 0) {
+        toastError(
+          `${succeeded} marked absent; ${failed.length} failed. ${failed.join("; ")}`,
+        );
+      } else {
+        toastSuccess(
+          `${succeeded} people marked absent on ${formattedDate}.`,
+        );
+      }
+    } finally {
+      setBulkMarkingAbsent(false);
+    }
+  };
   const daysInRange = Math.max(filter.dates.length, 1);
 
   const presentCount = isRangeMode
@@ -3031,15 +3128,81 @@ export default function AttendanceView() {
               >
                 Daily Attendance
               </h3>
-              <span className="text-xs text-gray-400">
-                {filter.selectedDate}
-              </span>
+              <div className="flex items-center gap-2">
+                {selectedAbsentStaff.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    {selectedAbsentStaff.length} selected
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedAbsentStaffIds(
+                      allAttendanceRowsSelected
+                        ? new Set()
+                        : new Set(
+                            attendanceRows.map(({ staff: member }) =>
+                              String(member.id),
+                            ),
+                          ),
+                    )
+                  }
+                  disabled={attendanceRows.length === 0 || bulkMarkingAbsent}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {allAttendanceRowsSelected ? "Deselect all" : "Select all"}
+                </button>
+                <button
+                  type="button"
+                  onClick={markSelectedAsAbsent}
+                  disabled={
+                    selectedAbsentStaff.length === 0 || bulkMarkingAbsent
+                  }
+                  className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {bulkMarkingAbsent
+                    ? "Marking absent..."
+                    : "Mark selected absent"}
+                </button>
+                <span className="text-xs text-gray-400">
+                  {filter.selectedDate}
+                </span>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="w-12 px-4 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all attendance rows"
+                        checked={allAttendanceRowsSelected}
+                        ref={(element) => {
+                          if (element) {
+                            element.indeterminate =
+                              selectedAbsentStaff.length > 0 &&
+                              !allAttendanceRowsSelected;
+                          }
+                        }}
+                        onChange={(event) =>
+                          setSelectedAbsentStaffIds(
+                            event.target.checked
+                              ? new Set(
+                                  attendanceRows.map(({ staff: member }) =>
+                                    String(member.id),
+                                  ),
+                                )
+                              : new Set(),
+                          )
+                        }
+                        disabled={
+                          attendanceRows.length === 0 || bulkMarkingAbsent
+                        }
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </th>
                     {visibleDailyAttendanceColumns.map((column) => (
                       <th
                         key={column.key}
@@ -3139,6 +3302,28 @@ export default function AttendanceView() {
                         key={String(member.id)}
                         className="hover:bg-gray-50 transition-colors"
                       >
+                        <td className="px-4 py-4 text-center">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${member.name}`}
+                            checked={selectedAbsentStaffIds.has(
+                              String(member.id),
+                            )}
+                            onChange={(event) =>
+                              setSelectedAbsentStaffIds((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) {
+                                  next.add(String(member.id));
+                                } else {
+                                  next.delete(String(member.id));
+                                }
+                                return next;
+                              })
+                            }
+                            disabled={bulkMarkingAbsent}
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                        </td>
                         {visibleDailyAttendanceColumns.map((column) => {
                           if (column.key === "name") {
                             return (
@@ -3441,12 +3626,14 @@ export default function AttendanceView() {
                                 <button
                                   onClick={() =>
                                     markAsAbsent(
-                                      member.name,
+                                      member,
                                       todayRecord?.date ?? filter.selectedDate,
                                     )
                                   }
                                   disabled={
-                                    !useRealApi || loadingAction === member.name
+                                    !useRealApi ||
+                                    bulkMarkingAbsent ||
+                                    loadingAction === member.name
                                   }
                                   title={
                                     !useRealApi
@@ -3471,7 +3658,7 @@ export default function AttendanceView() {
                   {attendanceRows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={visibleDailyAttendanceColumns.length + 3}
+                        colSpan={visibleDailyAttendanceColumns.length + 4}
                         className="px-6 py-16 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">

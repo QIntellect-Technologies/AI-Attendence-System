@@ -154,7 +154,10 @@ function humanLabel(
 
 export function useDateFilter(
   defaultMode: ViewMode = "daily",
-  options: { completedPeriodsOnly?: boolean } = {},
+  options: {
+    completedPeriodsOnly?: boolean;
+    allowCurrentDailyPeriod?: boolean;
+  } = {},
 ): DateFilterState {
   const today = todayStr();
   const thisWeekStart = formatDate(getWeekStart(new Date()));
@@ -162,11 +165,13 @@ export function useDateFilter(
   const completedRange = options.completedPeriodsOnly
     ? getPreviousCompletedPeriodRange(defaultMode)
     : null;
+  const defaultDailyDate =
+    options.completedPeriodsOnly && !options.allowCurrentDailyPeriod
+      ? (completedRange?.startDate ?? today)
+      : today;
 
   const [mode, setModeRaw] = useState<ViewMode>(defaultMode);
-  const [selectedDate, setSelectedDate] = useState(
-    completedRange?.startDate ?? today,
-  );
+  const [selectedDate, setSelectedDate] = useState(defaultDailyDate);
   const [selectedWeek, setSelectedWeek] = useState(
     completedRange?.startDate ?? thisWeekStart,
   );
@@ -184,7 +189,11 @@ export function useDateFilter(
     setModeRaw(newMode);
     if (options.completedPeriodsOnly) {
       const range = getPreviousCompletedPeriodRange(newMode);
-      if (newMode === "daily") setSelectedDate(range.startDate);
+      if (newMode === "daily") {
+        setSelectedDate(
+          options.allowCurrentDailyPeriod ? today : range.startDate,
+        );
+      }
       if (newMode === "weekly") setSelectedWeek(range.startDate);
       if (newMode === "monthly") setSelectedMonth(range.startDate.slice(0, 7));
       if (newMode === "custom") {
