@@ -18,7 +18,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { T } from "./theme";
 import { useDropdownTransition } from "../../hooks/useDropdownTransition";
 import { useDropdownPosition } from "../../hooks/useDropdownPosition";
@@ -329,7 +329,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             flex: 1,
                           }}
                         >
-                          {(option.icon || active) && (
+                          {option.icon && (
                             <span
                               style={{
                                 width: 24,
@@ -338,12 +338,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                                 display: "inline-flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                background: active ? T.teal100 : "#f8fafc",
-                                color: active ? T.teal600 : T.muted,
+                                background: "#f8fafc",
+                                color: T.muted,
                                 flexShrink: 0,
                               }}
                             >
-                              {option.icon ?? <Check size={13} />}
+                              {option.icon}
                             </span>
                           )}
                           <span style={{ minWidth: 0 }}>
@@ -374,8 +374,6 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             )}
                           </span>
                         </span>
-
-                        {active && <Check size={14} color={T.teal600} />}
                       </button>
                     );
                   })

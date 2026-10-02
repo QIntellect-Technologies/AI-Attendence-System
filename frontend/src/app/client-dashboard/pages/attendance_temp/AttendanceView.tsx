@@ -61,7 +61,11 @@ import {
   type BranchAttendanceSummary,
 } from "../../hooks/useAttendanceBranchSummaries";
 
-import { useDateFilter, parseLocalDate } from "../../hooks/useDateFilter";
+import {
+  getPreviousCompletedPeriodRange,
+  useDateFilter,
+  parseLocalDate,
+} from "../../hooks/useDateFilter";
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import DynamicFilterToolbar, {
   type DynamicFilterSection,
@@ -447,7 +451,7 @@ interface AttendanceExportRow {
   branch: string;
   department: string;
   arrival: string;
-  month: number;
+  month: string;
   year: number;
   totalDays: number;
   present: number;
@@ -1321,9 +1325,14 @@ const normalizeAttendanceForView = (
     record.userName,
 });
 
-const toMonthNumber = (date: string): number => {
+const toMonthName = (date: string): string => {
   const parsed = new Date(date);
-  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getMonth() + 1;
+  return Number.isNaN(parsed.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+        month: "long",
+        timeZone: "UTC",
+      }).format(parsed);
 };
 
 const toYearNumber = (date: string): number => {
@@ -1512,7 +1521,10 @@ export default function AttendanceView() {
     "staff",
   );
 
-  const filter = useDateFilter("daily");
+  const filter = useDateFilter("daily", { completedPeriodsOnly: true });
+  const dateFilterMaxDate = getPreviousCompletedPeriodRange(
+    filter.mode,
+  ).endDate;
 
   const sources = useAttendanceSources({
     branchIdParam,
@@ -2458,7 +2470,7 @@ export default function AttendanceView() {
         branch: getBranchName(branchId),
         department: getAttendanceGroupValue(member),
         arrival: selectedDayRecord?.arrivalStatus || "—",
-        month: toMonthNumber(exportDateRange.from),
+        month: toMonthName(exportDateRange.from),
         year: toYearNumber(exportDateRange.from),
         totalDays: summary.totalDays,
         present: summary.presentDays,
@@ -2772,7 +2784,13 @@ export default function AttendanceView() {
       {
         id: "date",
         type: "custom",
-        render: <DateFilterBar filter={filter} compact />,
+        render: (
+          <DateFilterBar
+            filter={filter}
+            compact
+            maxDate={dateFilterMaxDate}
+          />
+        ),
       },
       {
         id: "group",
@@ -3562,7 +3580,7 @@ export default function AttendanceView() {
                             </td>
                           ))}
                           <td className="px-6 py-4 text-sm text-gray-600">
-                            {toMonthNumber(exportDateRange.from)}
+                            {toMonthName(exportDateRange.from)}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">
                             {toYearNumber(exportDateRange.from)}

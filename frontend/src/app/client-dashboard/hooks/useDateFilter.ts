@@ -78,6 +78,35 @@ export function getMonthRange(monthStr: string): DateRange {
   return { startDate: formatDate(start), endDate: formatDate(end) };
 }
 
+export function getPreviousCompletedPeriodRange(
+  mode: ViewMode,
+  referenceDate = new Date(),
+): DateRange {
+  const endOfPreviousDay = new Date(referenceDate);
+  endOfPreviousDay.setDate(endOfPreviousDay.getDate() - 1);
+
+  if (mode === "daily" || mode === "custom") {
+    const date = formatDate(endOfPreviousDay);
+    return { startDate: date, endDate: date };
+  }
+
+  if (mode === "weekly") {
+    const start = getWeekStart(referenceDate);
+    start.setDate(start.getDate() - 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { startDate: formatDate(start), endDate: formatDate(end) };
+  }
+
+  const start = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth() - 1,
+    1,
+  );
+  const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 0);
+  return { startDate: formatDate(start), endDate: formatDate(end) };
+}
+
 export function getDatesBetween(startDate: string, endDate: string): string[] {
   const dates: string[] = [];
   const current = parseLocalDate(startDate);
@@ -125,20 +154,45 @@ function humanLabel(
 
 export function useDateFilter(
   defaultMode: ViewMode = "daily",
+  options: { completedPeriodsOnly?: boolean } = {},
 ): DateFilterState {
   const today = todayStr();
   const thisWeekStart = formatDate(getWeekStart(new Date()));
   const thisMonth = today.slice(0, 7);
+  const completedRange = options.completedPeriodsOnly
+    ? getPreviousCompletedPeriodRange(defaultMode)
+    : null;
 
   const [mode, setModeRaw] = useState<ViewMode>(defaultMode);
-  const [selectedDate, setSelectedDate] = useState(today);
-  const [selectedWeek, setSelectedWeek] = useState(thisWeekStart);
-  const [selectedMonth, setSelectedMonth] = useState(thisMonth);
-  const [customFrom, setCustomFrom] = useState(today);
-  const [customTo, setCustomTo] = useState(today);
+  const [selectedDate, setSelectedDate] = useState(
+    completedRange?.startDate ?? today,
+  );
+  const [selectedWeek, setSelectedWeek] = useState(
+    completedRange?.startDate ?? thisWeekStart,
+  );
+  const [selectedMonth, setSelectedMonth] = useState(
+    completedRange?.startDate.slice(0, 7) ?? thisMonth,
+  );
+  const [customFrom, setCustomFrom] = useState(
+    completedRange?.startDate ?? today,
+  );
+  const [customTo, setCustomTo] = useState(
+    completedRange?.endDate ?? today,
+  );
 
   const setMode = (newMode: ViewMode) => {
     setModeRaw(newMode);
+    if (options.completedPeriodsOnly) {
+      const range = getPreviousCompletedPeriodRange(newMode);
+      if (newMode === "daily") setSelectedDate(range.startDate);
+      if (newMode === "weekly") setSelectedWeek(range.startDate);
+      if (newMode === "monthly") setSelectedMonth(range.startDate.slice(0, 7));
+      if (newMode === "custom") {
+        setCustomFrom(range.startDate);
+        setCustomTo(range.endDate);
+      }
+      return;
+    }
     if (newMode === "daily") setSelectedDate(today);
     if (newMode === "weekly") setSelectedWeek(thisWeekStart);
     if (newMode === "monthly") setSelectedMonth(thisMonth);
