@@ -2883,12 +2883,12 @@ export const StaffModal: FC<{
   const showBenefitsField = hasField("benefits");
   // Payroll rules are considered "implemented" if the org has configured at
   // least one of: a non-zero OT rate, a non-zero default salary, or at least
-  // one leave-type rule. If none of these are set the salary input is shown
+  // one allowance type. If none of these are set the salary input is shown
   // but blocked with a clear message directing the user to set up Payroll Rules.
   const hasPayrollRules =
     cfg.payrollPolicy.otRatePerHour > 0 ||
     cfg.payrollPolicy.defaultSalary > 0 ||
-    Object.keys(cfg.payrollPolicy.leaveTypeRules).length > 0;
+    Object.keys(cfg.payrollPolicy.allowanceTypes).length > 0;
   const showStaffTypeField =
     peopleModel.showStaffTypeField && hasField("staffType");
   const showShiftField = hasField("shiftId");

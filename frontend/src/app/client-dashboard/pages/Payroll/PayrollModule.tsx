@@ -10,13 +10,14 @@
  */
 
 import React, { useCallback, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ModernSelect, {
   ModernSelectOption,
 } from "../../components/ui/ModernSelect";
 import {
   BarChart2,
   Building2,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -31,10 +32,12 @@ import {
 } from "lucide-react";
 
 import { useOrg } from "../../contexts/OrgConfigContext";
+import { getBranchModulePath, getModulePath } from "../../config/moduleRegistry";
 import { usePayrollData } from "./hooks/usePayrollData";
 import type { PayrollRow } from "./hooks/usePayrollData";
 import useBranchSelector from "../../hooks/useBranchSelector";
 import BranchSelector from "../../components/ui/BranchSelector";
+import { FastPagination } from "../../components/common/FastPagination";
 import { parseLocalDate, useDateFilter } from "../../hooks/useDateFilter";
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import DynamicFilterToolbar, {
@@ -46,11 +49,16 @@ import ExportButton from "../../components/ui/ExportButton";
 import type { PdfPrimitive } from "../../components/ui/ExportPdfButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { usePayrollPolicy } from "./hooks/usePayrollPolicy";
+import { useStatefulPagination } from "../LeaveManagement/shared/hooks/usePagination";
 import {
   usePayrollModuleGates,
   type PayrollGatedModule,
 } from "./hooks/usePayrollModuleGates";
-import { toastSuccess, toastError } from "../../utils/notifications";
+import {
+  confirmDialog,
+  toastSuccess,
+  toastError,
+} from "../../utils/notifications";
 import { formatDisplayDate } from "../../utils/formatDate";
 import {
   DEFAULT_PAYROLL_POLICY,
@@ -163,6 +171,7 @@ const ALLOWANCE_MODE_OPTIONS: ModernSelectOption[] = [
 ];
 
 type ActiveTab = "records" | "trend" | "salary";
+type PayrollStatusFilter = "all" | "Paid" | "Pending";
 type PayrollSortKey = keyof Pick<
   PayrollRow,
   | "name"
@@ -213,8 +222,30 @@ const StatCard: React.FC<{
   icon: React.ElementType;
   iconBg: string;
   iconColor: string;
-}> = ({ label, value, icon: Icon, iconBg, iconColor }) => (
+  onClick?: () => void;
+  active?: boolean;
+}> = ({ label, value, icon: Icon, iconBg, iconColor, onClick, active }) => (
   <div
+    role={onClick ? "button" : undefined}
+    tabIndex={onClick ? 0 : undefined}
+    aria-pressed={onClick ? active : undefined}
+    onClick={onClick}
+    onKeyDown={(event) => {
+      if (onClick && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        onClick();
+      }
+    }}
+    onMouseEnter={(event) => {
+      if (!onClick) return;
+      event.currentTarget.style.transform = "translateY(-3px)";
+      event.currentTarget.style.boxShadow = T.shadowMd;
+    }}
+    onMouseLeave={(event) => {
+      if (!onClick) return;
+      event.currentTarget.style.transform = "translateY(0)";
+      event.currentTarget.style.boxShadow = T.shadowCard;
+    }}
     style={{
       background: T.bgCard,
       border: `1px solid ${T.border}`,
@@ -224,6 +255,9 @@ const StatCard: React.FC<{
       display: "flex",
       flexDirection: "column",
       gap: 16,
+      cursor: onClick ? "pointer" : undefined,
+      transform: "translateY(0)",
+      transition: "transform 180ms ease, box-shadow 180ms ease",
     }}
   >
     <div
@@ -755,8 +789,15 @@ const PAYROLL_SORT_OPTIONS: ReadonlyArray<{
 ];
 
 export default function PayrollModule() {
+  const navigate = useNavigate();
   const { branchId: branchIdParam } = useParams<{ branchId?: string }>();
-  const { cfg, updateCfg, activeBranchId, organizationId } = useOrg();
+  const {
+    cfg,
+    updateCfg,
+    activeBranchId,
+    organizationId,
+    setSelectedPeopleType: setOrgSelectedPeopleType,
+  } = useOrg();
   // Leave / Overtime are separately purchased modules — every rule, column,
   // sort option, export field and edit input tied to them is gated here.
   const gates = usePayrollModuleGates();
@@ -787,6 +828,8 @@ export default function PayrollModule() {
   const [amountValue, setAmountValue] = useState("");
   const [sortKey, setSortKey] = useState<PayrollSortKey>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [statusFilter, setStatusFilter] =
+    useState<PayrollStatusFilter>("all");
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -1127,7 +1170,14 @@ export default function PayrollModule() {
         .join(" ")
         .toLowerCase();
 
-      return searchable.includes(normalizedQuery) && matchesAmount(row.netPay);
+      return (
+        searchable.includes(normalizedQuery) &&
+        matchesAmount(row.netPay) &&
+        (statusFilter === "all" ||
+          (statusFilter === "Paid"
+            ? row.status === "Paid"
+            : row.status !== "Paid"))
+      );
     });
 
     if (sortDirection === "none") return filtered;
@@ -1148,7 +1198,15 @@ export default function PayrollModule() {
         }) * direction
       );
     });
-  }, [amountOperator, amountValue, rows, searchQuery, sortDirection, sortKey]);
+  }, [
+    amountOperator,
+    amountValue,
+    rows,
+    searchQuery,
+    sortDirection,
+    sortKey,
+    statusFilter,
+  ]);
 
   const resetListFilters = useCallback(() => {
     setSearchQuery("");
@@ -1156,6 +1214,7 @@ export default function PayrollModule() {
     setAmountValue("");
     setSortKey("name");
     setSortDirection("asc");
+    setStatusFilter("all");
     branchSelector.reset();
     payrollDateFilter.setMode("monthly");
   }, [branchSelector, payrollDateFilter]);
@@ -1317,6 +1376,7 @@ export default function PayrollModule() {
       searchQuery,
       sortDirection,
       sortKey,
+      statusFilter,
       gates,
     ],
   );
@@ -1329,7 +1389,7 @@ export default function PayrollModule() {
         label: string;
         requires?: PayrollGatedModule;
       }>([
-      { key: "#", label: "#" },
+      { key: "#", label: "Staff ID" },
       { key: "name", label: "Name" },
       { key: "cnic", label: "CNIC" },
       ...(isGlobal ? [{ key: "branch", label: "Branch" }] : []),
@@ -1415,8 +1475,18 @@ export default function PayrollModule() {
     organizationId,
     cfg.payrollPolicy.allowanceTypes,
   ]);
+  const [payrollPageSize, setPayrollPageSize] = useState(25);
+  const payrollPager = useStatefulPagination({
+    items: visibleRows,
+    itemsPerPage: payrollPageSize,
+  });
+  const paginatedPayrollRows = payrollPager.paginatedItems;
 
   const [togglingStaffId, setTogglingStaffId] = useState<string | null>(null);
+  const [selectedPayrollStaffIds, setSelectedPayrollStaffIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [processingPayroll, setProcessingPayroll] = useState(false);
 
   const handleToggleStatus = useCallback(
     async (row: PayrollRow) => {
@@ -1435,6 +1505,85 @@ export default function PayrollModule() {
     },
     [markPaid, markPending, togglingStaffId],
   );
+
+  const selectedPayrollRows = visibleRows.filter((row) =>
+    selectedPayrollStaffIds.has(String(row.staffId)),
+  );
+  const selectedUnpaidRows = selectedPayrollRows.filter(
+    (row) => row.status !== "Paid",
+  );
+  const selectedPaidRows = selectedPayrollRows.filter(
+    (row) => row.status === "Paid",
+  );
+  const allVisibleRowsSelected =
+    visibleRows.length > 0 &&
+    visibleRows.every((row) =>
+      selectedPayrollStaffIds.has(String(row.staffId)),
+    );
+
+  const handleBulkStatusChange = async (
+    targetStatus: "Paid" | "Pending",
+    rowsToProcess: PayrollRow[],
+  ) => {
+    if (processingPayroll || rowsToProcess.length === 0) return;
+    const isMarkingPaid = targetStatus === "Paid";
+
+    const confirmation = await confirmDialog({
+      title: isMarkingPaid ? "Process payroll?" : "Mark as pending?",
+      text: `Mark ${rowsToProcess.length} selected ${
+        rowsToProcess.length === 1 ? "person" : "people"
+      } as ${targetStatus.toLowerCase()} for ${payrollDateFilter.label}?`,
+      confirmButtonText: isMarkingPaid ? "Process Payroll" : "Mark Pending",
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setProcessingPayroll(true);
+    try {
+      const results = await Promise.allSettled(
+        rowsToProcess.map((row) =>
+          targetStatus === "Paid"
+            ? markPaid(row.staffId)
+            : markPending(row.staffId),
+        ),
+      );
+      const successfulIds = new Set<string>();
+      const failures: string[] = [];
+
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          successfulIds.add(String(rowsToProcess[index].staffId));
+        } else {
+          failures.push(
+            `${rowsToProcess[index].name}: ${
+              result.reason instanceof Error
+                ? result.reason.message
+                : "Unable to update payroll status."
+            }`,
+          );
+        }
+      });
+
+      if (successfulIds.size > 0) {
+        setSelectedPayrollStaffIds((current) => {
+          const next = new Set(current);
+          successfulIds.forEach((id) => next.delete(id));
+          return next;
+        });
+        toastSuccess(`${successfulIds.size} ${
+          successfulIds.size === 1 ? "person" : "people"
+        } marked as ${targetStatus.toLowerCase()}.`);
+      }
+      if (failures.length > 0) {
+        toastError(
+          `${failures.length} payroll ${
+            failures.length === 1 ? "update failed" : "updates failed"
+          }: ${failures.join("; ")}`,
+        );
+      }
+    } finally {
+      setProcessingPayroll(false);
+    }
+  };
 
   const [savingEdit, setSavingEdit] = useState(false);
   const [saveEditError, setSaveEditError] = useState<string | null>(null);
@@ -1611,6 +1760,14 @@ export default function PayrollModule() {
     background: activeTab === tab ? T.navy700 : "transparent",
     color: activeTab === tab ? "#fff" : T.textMuted,
   });
+  const payrollStatusCounts = rows.reduce(
+    (counts, row) => {
+      if (row.status === "Paid") counts.paid += 1;
+      else counts.pending += 1;
+      return counts;
+    },
+    { paid: 0, pending: 0 },
+  );
 
   return (
     <div
@@ -1744,7 +1901,7 @@ export default function PayrollModule() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gridTemplateColumns: `repeat(${hasOvertime ? 5 : 4}, minmax(0, 1fr))`,
             gap: 16,
             marginBottom: 16,
           }}
@@ -1756,26 +1913,55 @@ export default function PayrollModule() {
             iconBg={T.teal100}
             iconColor={T.teal600}
           />
-          <StatCard
-            label="Total OT Paid"
-            value={fmtPKR(stats.totalOT)}
-            icon={Zap}
-            iconBg="#d1e8f0"
-            iconColor={T.navy600}
-          />
+          {hasOvertime && (
+            <StatCard
+              label="Total OT Paid"
+              value={fmtPKR(stats.totalOT)}
+              icon={Zap}
+              iconBg="#d1e8f0"
+              iconColor={T.navy600}
+            />
+          )}
           <StatCard
             label="Employees"
             value={stats.totalStaff}
             icon={Users}
             iconBg={T.blue100}
             iconColor={T.blue500}
+            onClick={() => {
+              setOrgSelectedPeopleType(peopleType);
+              navigate(
+                branchIdParam
+                  ? getBranchModulePath("employees", Number(branchIdParam))
+                  : getModulePath("employees"),
+              );
+            }}
           />
           <StatCard
-            label="Status"
-            value={stats.status}
+            label="Paid"
+            value={payrollStatusCounts.paid}
+            icon={CheckCircle2}
+            iconBg={T.green100}
+            iconColor={T.green600}
+            onClick={() =>
+              setStatusFilter((current) =>
+                current === "Paid" ? "all" : "Paid",
+              )
+            }
+            active={statusFilter === "Paid"}
+          />
+          <StatCard
+            label="Pending"
+            value={payrollStatusCounts.pending}
             icon={Clock}
-            iconBg={stats.status === "Paid" ? T.green100 : T.amber100}
-            iconColor={stats.status === "Paid" ? T.green600 : T.amber600}
+            iconBg={T.amber100}
+            iconColor={T.amber600}
+            onClick={() =>
+              setStatusFilter((current) =>
+                current === "Pending" ? "all" : "Pending",
+              )
+            }
+            active={statusFilter === "Pending"}
           />
         </div>
       )}
@@ -1810,9 +1996,92 @@ export default function PayrollModule() {
             >
               Employee Payroll
             </span>
-            <span style={{ fontSize: 11, color: T.textMuted }}>
-              {payrollDateFilter.label} · {visibleRows.length} records
-            </span>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              {selectedPayrollRows.length > 0 && (
+                <span style={{ fontSize: 11, color: T.textMuted }}>
+                {selectedPayrollRows.length} selected
+                </span>
+              )}
+              {selectedUnpaidRows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleBulkStatusChange("Paid", selectedUnpaidRows)
+                  }
+                  disabled={processingPayroll}
+                  style={{
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    color: "#fff",
+                    background: T.teal600,
+                    fontWeight: 700,
+                    cursor: processingPayroll ? "not-allowed" : "pointer",
+                    opacity: processingPayroll ? 0.5 : 1,
+                  }}
+                >
+                  {processingPayroll ? "Processing..." : "Process payroll"}
+                </button>
+              )}
+              {selectedPaidRows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleBulkStatusChange("Pending", selectedPaidRows)
+                  }
+                  disabled={processingPayroll}
+                  style={{
+                    border: `1px solid ${T.border}`,
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    color: T.textBody,
+                    background: T.bgCard,
+                    fontWeight: 700,
+                    cursor: processingPayroll ? "not-allowed" : "pointer",
+                    opacity: processingPayroll ? 0.5 : 1,
+                  }}
+                >
+                  {processingPayroll ? "Processing..." : "Mark Pending"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedPayrollStaffIds(
+                    allVisibleRowsSelected
+                      ? new Set()
+                      : new Set(
+                          visibleRows.map((row) => String(row.staffId)),
+                        ),
+                  )
+                }
+                disabled={visibleRows.length === 0 || processingPayroll}
+                style={{
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 8,
+                  padding: "7px 10px",
+                  color: T.textBody,
+                  background: T.bgCard,
+                  cursor:
+                    visibleRows.length === 0 || processingPayroll
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    visibleRows.length === 0 || processingPayroll ? 0.5 : 1,
+                }}
+              >
+                {allVisibleRowsSelected ? "Deselect all" : "Select all"}
+              </button>
+              <span style={{ fontSize: 11, color: T.textMuted }}>
+                {payrollDateFilter.label} · {visibleRows.length} records
+              </span>
+            </div>
           </div>
 
           <div style={{ overflowX: "auto" }}>
@@ -1825,6 +2094,36 @@ export default function PayrollModule() {
             >
               <thead>
                 <tr style={{ background: T.slate50 }}>
+                  <th
+                    style={{
+                      padding: "12px 12px",
+                      textAlign: "center",
+                      borderBottom: `1px solid ${T.border}`,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label="Select all payroll rows"
+                      checked={allVisibleRowsSelected}
+                      ref={(element) => {
+                        if (element) {
+                          element.indeterminate =
+                            selectedPayrollRows.length > 0 &&
+                            !allVisibleRowsSelected;
+                        }
+                      }}
+                      onChange={(event) =>
+                        setSelectedPayrollStaffIds(
+                          event.target.checked
+                            ? new Set(
+                                visibleRows.map((row) => String(row.staffId)),
+                              )
+                            : new Set(),
+                        )
+                      }
+                      disabled={visibleRows.length === 0 || processingPayroll}
+                    />
+                  </th>
                   {tableColumns.map((column) => (
                     <th
                       key={column.key}
@@ -1853,47 +2152,36 @@ export default function PayrollModule() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row: PayrollRow, index: number) => (
+                {paginatedPayrollRows.map((row: PayrollRow) => (
                   <tr
                     key={row.id}
                     style={{ borderBottom: `1px solid ${T.slate100}` }}
                   >
-                    <td style={tableCellStyle}>{index + 1}</td>
+                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${row.name} for payroll processing`}
+                        checked={
+                          selectedPayrollStaffIds.has(String(row.staffId))
+                        }
+                        onChange={(event) =>
+                          setSelectedPayrollStaffIds((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) {
+                              next.add(String(row.staffId));
+                            } else {
+                              next.delete(String(row.staffId));
+                            }
+                            return next;
+                          })
+                        }
+                        disabled={processingPayroll}
+                      />
+                    </td>
+                    <td style={tableCellStyle}>{row.empId || "—"}</td>
                     <td style={tableCellStyle}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 10,
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: "50%",
-                            flexShrink: 0,
-                            background: `linear-gradient(135deg,${T.teal600},#0EA5E9)`,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: 13,
-                            fontWeight: 700,
-                            color: "#fff",
-                          }}
-                        >
-                          {row.name.charAt(0)}
-                        </div>
-                        <div>
-                          <div
-                            style={{ fontWeight: 800, color: T.textHeading }}
-                          >
-                            {row.name}
-                          </div>
-                          <div style={{ fontSize: 10, color: T.textLight }}>
-                            {row.empId}
-                          </div>
-                        </div>
+                      <div style={{ fontWeight: 800, color: T.textHeading }}>
+                        {row.name}
                       </div>
                     </td>
                     <td style={tableCellStyle}>{row.cnic || "—"}</td>
@@ -1902,11 +2190,7 @@ export default function PayrollModule() {
                         <Badge>{row.branchName}</Badge>
                       </td>
                     )}
-                    <td style={tableCellStyle}>
-                      <Badge color={T.teal600} bg={T.teal50}>
-                        {row.department}
-                      </Badge>
-                    </td>
+                    <td style={tableCellStyle}>{row.department}</td>
                     <td style={tableCellStyle}>{fmtPKR(row.baseSalary)}</td>
                     <td style={tableCellStyle}>{fmtPKR(row.allowances)}</td>
                     <td style={{ ...tableCellStyle, textAlign: "center" }}>
@@ -2011,7 +2295,10 @@ export default function PayrollModule() {
                     <td style={tableCellStyle}>
                       <button
                         onClick={() => handleToggleStatus(row)}
-                        disabled={togglingStaffId === String(row.staffId)}
+                        disabled={
+                          processingPayroll ||
+                          togglingStaffId === String(row.staffId)
+                        }
                         title={
                           row.status === "Paid"
                             ? "Marked paid — click to revert to Pending"
@@ -2022,11 +2309,15 @@ export default function PayrollModule() {
                           border: "none",
                           padding: 0,
                           cursor:
+                            processingPayroll ||
                             togglingStaffId === String(row.staffId)
                               ? "default"
                               : "pointer",
                           opacity:
-                            togglingStaffId === String(row.staffId) ? 0.6 : 1,
+                            processingPayroll ||
+                            togglingStaffId === String(row.staffId)
+                              ? 0.6
+                              : 1,
                         }}
                       >
                         <Badge
@@ -2062,7 +2353,7 @@ export default function PayrollModule() {
                 {visibleRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={tableColumns.length}
+                      colSpan={tableColumns.length + 1}
                       style={{
                         padding: 40,
                         textAlign: "center",
@@ -2077,6 +2368,15 @@ export default function PayrollModule() {
             </table>
           </div>
         </div>
+      )}
+      {activeTab === "records" && (
+        <FastPagination
+          page={payrollPager.page}
+          pageSize={payrollPageSize}
+          total={payrollPager.totalItems}
+          onPageChange={payrollPager.goToPage}
+          onPageSizeChange={setPayrollPageSize}
+        />
       )}
 
       {activeTab === "trend" && (

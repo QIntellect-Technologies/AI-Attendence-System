@@ -1,4 +1,5 @@
 import React from "react";
+import ModernSelect from "../ui/ModernSelect";
 
 type FastPaginationProps = {
   page: number;
@@ -20,11 +21,17 @@ export function FastPagination({ page, pageSize, total, onPageChange, onPageSize
         Showing {from}–{to} of {total}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))} disabled={disabled}>
-          {[25, 50, 100, 150, 250].map((size) => (
-            <option key={size} value={size}>{size} / page</option>
-          ))}
-        </select>
+        <ModernSelect
+          value={String(pageSize)}
+          options={[25, 50, 100, 150, 250].map((size) => ({
+            value: String(size),
+            label: `${size} / page`,
+          }))}
+          onChange={(value) => onPageSizeChange(Number(value))}
+          ariaLabel="Rows per page"
+          disabled={disabled}
+          minWidth={100}
+        />
         <button type="button" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={disabled || page <= 1}>Prev</button>
         <span style={{ fontSize: 13 }}>Page {page} / {totalPages}</span>
         <button type="button" onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={disabled || page >= totalPages}>Next</button>

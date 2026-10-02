@@ -38,7 +38,7 @@ export function overtimeMatchesFilters(
     request.staffName.toLowerCase().includes(q) ||
     request.staffId.toLowerCase().includes(q) ||
     request.department.toLowerCase().includes(q) ||
-    request.task.toLowerCase().includes(q) ||
+    request.task?.toLowerCase().includes(q) ||
     request.branchName.toLowerCase().includes(q);
 
   return (
