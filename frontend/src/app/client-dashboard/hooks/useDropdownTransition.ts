@@ -145,6 +145,8 @@ export function useDropdownTransition<
       { duration: enterDurationMs, easing: ENTER_EASING, fill: "forwards" },
     );
     heightAnim.onfinish = () => {
+      // Release the animation's inline override so the panel can flex
+      heightAnim.cancel();
       // Let content size flex naturally after the expand finishes (e.g. if
       // the option list changes height later without a full reopen).
       panel.style.overflow = "visible";

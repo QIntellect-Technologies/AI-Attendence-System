@@ -1,0 +1,160 @@
+# 🚨 QA Vulnerability Report: AI-Attendence-System
+**Status:** In Progress
+**Environment:** `D:\AI-Attendence-System`
+**Architecture:** Python API (Local Node) + React Frontend (Vite)
+
+---
+
+## 🛑 FAILED FIXES: Business Logic Bypasses
+The developer submitted a `fixed.txt` file claiming all business logic bugs were resolved. Our regression testing on the new React/Python codebase proves the following fixes FAILED:
+
+### 1. Organization Creation: Zero-Dollar Invoice Bypass
+- **The Claim:** Developer claimed they fixed the "Zero Invoice Amount Allowed" bug.
+- **The Reality:** The system still allows an organization to be created with an invoice amount set to exactly `$0`. The backend validation likely only checks for negative values (`< 0`) instead of strictly enforcing `> 0`.
+
+### 2. Payroll: Frontend UI Validation Missing completely
+- **The Claim:** Developer claimed to have fixed "Payroll Negative Salary Bug".
+- **The Reality:** The React frontend (Dashboard) allows users to physically type a negative number (e.g., `-50`) into the Net Salary input field. The frontend developers failed to add a simple `min="0"` attribute to the HTML input box, forcing the backend to catch the error.
+
+### 3. Core Engine: No Input Validation on ID & Name Fields
+- **The Claim:** General system stability and input sanitization.
+- **The Reality:** 
+  - The **Employee ID field** has no length limit, no numeric-only enforcement, and accepts any string of any length. This means garbage data, SQL payloads, and infinite-length strings go straight into the database.
+  - The **Name field** accepts raw HTML/script tags (e.g. `<script>alert('HACKED')</script>`). While React's output escaping prevents the script from executing in the browser, the raw payload is still written to the database unescaped — a **Stored XSS risk** if the data is ever consumed by a non-React surface (e.g. PDF exports, emails, the local node, or a future API consumer).
+
+
+### 4. Input Sanitization & SQL Injection (CRITICAL)
+- **The Claim:** General Security fixes.
+- **The Reality:** The system accepts literally anything in the Name fields, including pure numbers and, worse, SQL Injection payloads like `'or'2'`. This proves the backend API has **zero input sanitization or escaping** for user-generated strings, leaving the database highly vulnerable.
+
+### 5. Broken UI Sections — Missing/Unlinked Modules
+- **The Claim:** N/A (New Bug / Incomplete Feature)
+- **The Reality:** Several sections of the dashboard are missing or broken in the new React UI (e.g., the Branches view is entirely empty, and the Payroll module is either hidden or unlinked from the main navigation). **Note:** The Edit button in the Attendance panel is correctly contextual — it only appears when an attendance record exists for that employee, which is expected behavior.
+
+### 6. Face Enrollment Moved Offline (Architecture Change)
+- **The Claim:** N/A 
+- **The Reality:** The developer did not forget to build the Enrollment UI—they completely ripped real-time web enrollment out of the system. The endpoint `/api/enroll/upload-video` was hardcoded to return a `success: False` error. Face enrollment is now handled by a completely separate Offline CLI tool (`trainer_desktop/main.py`). The company must now manually record videos, organize them into a folder with a CSV file, and run a Python script locally to batch-enroll faces. 
+
+### 7. Incomplete Code Delivery — Missing Source Files (BLOCKER)
+- **The Claim:** N/A
+- **The Reality:** The `local_node_ui` frontend cannot even compile because the developer forgot to include a required source file (`src/lib/confirmDialogue.ts`). Vite throws a fatal build error: `Failed to resolve import "./lib/confirmDialogue"`. The Local Node UI is completely non-functional and undeliverable in its current state. The development team shipped incomplete, broken code.
+
+### 8. Password Change: No Current Password Verification (CRITICAL)
+- **The Claim:** N/A
+- **The Reality:** The "Change Password" form only asks for a **New Password** and **Confirm New Password** — it never asks for the **Current Password**. This means anyone who finds an unattended logged-in computer can instantly take over the account by setting a new password without knowing the original. This is a critical account takeover vulnerability.
+
+### 9. No Session Invalidation — Unlimited Concurrent Sessions (Medium)
+- **The Claim:** N/A
+- **The Reality:** The same admin account can be logged into simultaneously on multiple browsers/devices with no automatic session invalidation. If an admin logs into a public computer and forgets to log out, their session stays active forever even after a new login from another device.
+
+### 10. Server Technology Stack Disclosure (Medium)
+- **The Claim:** N/A
+- **The Reality:** Every API response exposes the exact server technology in the response header: `server: Werkzeug/3.0.1 Python/3.10.0`. This tells attackers exactly which framework and version is running, making it trivial to look up known CVEs and exploits.
+
+### 11. No HTTPS / Unencrypted Traffic in Production (High)
+- **The Claim:** N/A
+- **The Reality:** The application runs on plain HTTP. All login credentials (email and password) are transmitted in readable plain text over the network. On a shared school/office Wi-Fi network, anyone with a packet sniffer can intercept every password. HTTPS with a valid SSL certificate is mandatory before any production deployment.
+
+### 13. SQL Injection Payload Causes Unhandled WAF Crash (High)
+- **The Claim:** N/A
+- **The Reality:** Search fields (e.g., Staff search) have no input sanitization. When an SQL injection payload (`' OR 1=1 --`) is submitted, the backend blindly forwards it to Supabase. Cloudflare's Web Application Firewall (WAF) correctly intercepts and blocks the malicious query, returning a 403 HTML block page. However, the backend lacks error handling for non-JSON responses, causing `pydantic` to fatally crash when parsing the HTML. This turns a blocked SQL injection attempt into a successful Denial of Service (500 Internal Server Error) for the user.
+
+### 14. Broken Core Features: Email, Messaging, and PDF Export
+- **The Claim:** N/A
+- **The Reality:** Several core utility features in the dashboard are completely non-functional. 
+  - The email system is broken, meaning password resets, notifications, and "email bombing" tests cannot even be executed.
+  - In the Invoice module, both the "Message" option and the "PDF Download" buttons are broken and do not work when clicked.
+
+### 15. Negative Value Bypass in Payroll Rules
+- **The Claim:** Developer claimed to have fixed "Payroll Negative Salary Bug".
+- **The Reality:** The lack of negative value validation extends into the global Payroll Rules engine. Admins can set "Half Day Deduction" to a negative number, and set Allowance Types to negative percentages (e.g., `-2%`). The UI dynamically generates new input columns that also blindly accept negative values. This creates a scenario where deducting a half day mathematically *adds* money to an employee's salary.
+
+### 16. Duplicate Allowance Names Accepted (No Uniqueness Validation)
+- **The Claim:** N/A
+- **The Reality:** The Payroll Rules engine allows creating two allowances with identical names (e.g., two entries both called "Meal"). There is no uniqueness check. This causes payroll calculations to silently double-count the same allowance type, resulting in employees being overpaid without any warning or error.
+
+### 17. Zero-Value Allowance Accepted
+- **The Claim:** N/A
+- **The Reality:** Allowance types can be saved with a value of `0%` or `0` flat amount. A zero-value allowance is functionally useless and pollutes the payroll configuration with meaningless rules. There is no minimum value validation.
+
+### 18. Midnight-Crossing Shift Not Reflected in Shift Summary (Logic Bug)
+- **The Claim:** N/A
+- **The Reality:** The system allows creating a shift that crosses midnight (e.g., 11:00 PM Check-in → 1:00 AM Check-out) and lets it be applied to an employee. However, the Shift Summary view fails to show the updated timing for the employee. This suggests the shift assignment either silently fails to persist or the UI calculates shift duration incorrectly when the end time is on the next calendar day, leading to broken attendance tracking for night shift workers.
+
+### 20. Overlapping Shift Assignment — No Conflict Detection
+- **The Claim:** N/A
+- **The Reality:** The system allows assigning two conflicting shifts to the same employee with no warning or error. A Morning Shift (09:00–17:00) and an Evening Shift (14:00 onward) were both accepted in the UI for the same employee simultaneously. The system provides no indication of which shift is actually active, leaving attendance tracking in an undefined state for that employee. This is a critical scheduling integrity failure.
+
+### 19. Reports Hard-Limited to 1 Week (Missing Long-Range Reporting)
+- **The Claim:** N/A
+- **The Reality:** The Reports/Attendance export feature is artificially limited to a maximum date range of **one week**. There is no explanation, warning, or option to override this limit in the UI. This is a critical business functionality gap — HR managers cannot generate monthly, quarterly, or annual attendance or payroll reports without manually repeating the export 4-52 times. This makes the reporting module practically unusable for any real payroll or audit process.
+
+### 21. No Salary Boundary Validation
+- **The Claim:** N/A
+- **The Reality:** The salary field on an employee's profile accepts any numeric value with no upper or lower bound. A salary of `999999999999` (one trillion) or `0.0000001` (a fraction of a cent) can be saved without any confirmation, warning, or error. A single typo during data entry could assign an absurd salary amount with no safeguard to catch it.
+
+### 22. No Password Reset / Forgot Password Feature
+- **The Claim:** N/A
+- **The Reality:** The login page has no "Forgot Password" link or self-service password recovery flow. If an admin forgets their password or gets locked out after 5 failed attempts, there is no recovery path available from the UI. The only way to regain access would be direct database manipulation, which is completely unacceptable for a production system.
+
+### 23. Support Dashboard Branch Edit Broken (Mismatched IDs)
+- **The Claim:** N/A
+- **The Reality:** When attempting to edit a branch from the Support Dashboard, the frontend makes a `PATCH` request to `/v1/support/organizations/{org_id}/branches/{branch_id}`. However, it sends mismatched IDs where the branch does not belong to the organization ID provided in the URL. This results in a `400 Branch not found for this organization` error. Branch editing from the Support Dashboard is functionally broken.
+
+### 24. Leave Request — Invalid Date Range Accepted
+- **The Claim:** N/A
+- **The Reality:** The mobile leave request form allows the end date to be set to the **same as the current date** (zero-duration leave) and also accepts **future dates submitted as present leave** without any logical validation. There is no enforcement that start date < end date or that leave dates fall within a sensible range.
+
+### 25. Overtime — Historical Claims Accepted Without Restriction
+- **The Claim:** N/A
+- **The Reality:** Employees can apply for overtime for past dates with no restriction. This means any employee can retroactively claim overtime hours they never actually worked for any previous date, with no approval audit trail or date lock preventing abuse.
+
+### 26. CRITICAL — Face Verification Bypass (Wrong Face Accepted)
+- **The Claim:** N/A
+- **The Reality:** During geofenced mobile check-in, the face verification step was triggered. Despite the user being enrolled under a **different person's ID**, the attendance was still successfully logged. The system recorded the check-in as **"Checked In For Review"** — a status so small it is nearly unreadable in the UI — instead of outright rejecting it. This means the core biometric security of the system is non-functional: **any face can check in on behalf of any enrolled employee**, completely defeating the purpose of face recognition attendance.
+
+### 27. Admin/HR Can Freely Backdate Attendance Records (No Audit Restriction)
+- **The Claim:** N/A
+- **The Reality:** From the attendance dashboard, admins can edit any attendance record and move it to any previous date, adjusting both date and time freely. There is no restriction, confirmation, or audit log preventing an HR manager from altering historical attendance records. This is a compliance and fraud risk — payroll-linked attendance records should be immutable or require multi-level approval to modify.
+
+### 28. Duplicate Attendance Marking Allowed After Backdate
+- **The Claim:** N/A
+- **The Reality:** After marking attendance for a previous date, the mobile app still displayed the option to mark attendance again for the same period. This means an employee can potentially double-mark their attendance for the same day, creating duplicate records that could corrupt payroll calculations.
+
+### 29. CRITICAL — Geofencing Completely Bypassed via GPS Spoofing
+- **The Claim:** N/A
+- **The Reality:** Despite a location constraint being configured to only allow check-ins within the office premises, attendance was successfully marked from **Egypt** using a standard free GPS spoofing app (Fake GPS). The mobile app makes zero attempt to detect mock/spoofed locations. Combined with Bug #26 (wrong face accepted), this means **an employee never needs to physically be at work** — they can mark their own attendance from anywhere in the world using a different face. The geofencing and face recognition features, which are the two core selling points of this AI attendance system, are both completely non-functional.
+
+---
+
+
+
+
+## ✅ VERIFIED FIXES
+- **Critical API Security:** The backend no longer leaks employee data when accessed directly via URL. The API routes (e.g. `/api/staff`) now correctly require an `Authorization` header and throw a `401 Unauthorized` error if accessed in Incognito mode.
+- **Legacy Endpoints:** The developer correctly retired the vulnerable `/api/users` endpoint and replaced it with a secured `/api/staff` route.
+- **Account Lockout / Brute Force Protection:** Login is now limited to **5 attempts**. After 5 consecutive failed logins, the account is locked. ✅
+- **File Upload Validation:** The profile photo upload correctly rejects non-image files (e.g. `.txt` renamed to `.jpg`). ✅
+- **IDOR Protection:** Staff profile URLs do not expose numeric IDs (uses clean `/admin/employees` routing). Cannot enumerate or steal other users' data by manipulating the URL. ✅
+- **Duplicate Email Prevention:** The system correctly rejects creating two staff members with the same email address. ✅
+- **Branch Capacity Validation:** Negative and zero values are rejected when setting branch staff capacity. ✅
+- **Password Strength:** The system enforces minimum password complexity (rejects weak passwords like '1', 'password', '123456'). ✅
+- **Name Field Validation:** Rejects creating a staff member with a name consisting only of spaces. ✅
+- **Profile Photo Size Limit:** Enforces a maximum file size for profile photo uploads via the web dashboard. ✅
+- **JWT Signature Validation:** Tokens are properly signed and do not leak internal roles in the payload. Forged tokens are rejected. ✅
+- **JWT Secret Separation (Role Isolation):** The API correctly uses different signing secrets for Admin/Dashboard tokens (`SUPPORT_JWT_SECRET`) versus Mobile/Staff tokens (`CLIENT_STAFF_JWT_SECRET`). An admin cannot use their dashboard token to access mobile endpoints, preventing cross-surface token forgery. ✅
+- **Legacy Endpoint Retirement:** Old unprotected endpoints (`/api/v1/staff`, `/api/users/list`, `/api/all-staff`, `/api/employees`) all correctly return 404, confirming they have been properly retired. ✅
+- **Organization Module Enforcement:** Creating an organization with zero modules is correctly blocked — the system requires at least one module to be selected before an organization can be created. ✅
+
+### 12. Unrestricted Video File Size in Offline Trainer (Denial of Service Risk)
+- **The Claim:** N/A
+- **The Reality:** While the web UI enforces size limits on profile photos, the `trainer_desktop` offline tool does not appear to enforce `VIDEO_MAX_BYTES` or similar limits on the source video files used for face enrollment. Providing massively oversized video files can consume excessive memory and crash the system or cause out-of-memory errors during frame extraction and embedding generation.
+
+
+
+---
+
+## ⏳ PENDING TESTS
+1. **Time-Travel Payroll:** Need to verify if the Start Date / End Date inversion bug is still present.
+2. **Account Lockout:** Need to brute-force a login to see if the account locks after 10 failed attempts.
+3. **GPS Field Check-in:** (Mobile App) Need to test if the Flutter app respects Geofencing when a mock location is used.

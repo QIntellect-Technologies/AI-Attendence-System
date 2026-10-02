@@ -4,7 +4,7 @@
  * Branch-scoped Overview tab.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { TrendingUp, UserCheck, Users, UserX } from "lucide-react";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
@@ -25,6 +25,10 @@ import {
 } from "../../utils/moduleAccess";
 import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
 import type { DashboardLiveLogItem } from "../../hooks/useDashboardOverviewData";
+import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
+import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
+import KpiDropdown, { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
+import type { KpiDeptRow } from "../../components/dashboard/overview/KpiDropdown";
 
 import {
   AttendancePerformanceCard,
@@ -154,61 +158,68 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     navigate(getBranchModulePath(moduleKey, Number(branchId)));
   };
 
-  const [openPopup, setOpenPopup] = useState<"present" | "absent" | null>(null);
+  // ── KPI Department Dropdown ────────────────────────────────────────────────
+  const [kpiDropdown, setKpiDropdown] = useState<"present" | "absent" | null>(null);
+  const presentCardRef = useRef<HTMLDivElement>(null);
+  const absentCardRef = useRef<HTMLDivElement>(null);
+  const [fetchedLogs, setFetchedLogs] = useState<any[]>([]);
+  const [allStaff, setAllStaff] = useState<any[]>([]);
 
-  const renderPopup = (type: "present" | "absent", list: DashboardLiveLogItem[]) => {
-    if (openPopup !== type) return null;
-    return (
-      <div
-        style={{
-          position: "absolute",
-          top: "100%",
-          left: 0,
-          right: 0,
-          paddingTop: 8,
-          zIndex: 50,
-        }}
-      >
-        <div
-          style={{
-            background: T.card,
-            border: `1px solid ${T.border}`,
-            borderRadius: 12,
-            boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 13, fontWeight: 700, color: T.head }}>
-            {type === "present" ? "Recently Present" : "Recently Absent"}
-          </div>
-          <div style={{ maxHeight: 200, overflowY: "auto" }}>
-            {list.length > 0 ? (
-              list.map((p, i) => (
-                <div key={i} style={{ padding: "8px 16px", borderBottom: i < list.length - 1 ? `1px solid ${T.border}` : "none", fontSize: 13 }}>
-                  <div style={{ fontWeight: 600, color: T.head }}>{p.name}</div>
-                  <div style={{ color: T.muted, fontSize: 11 }}>{p.department || "No Department"}</div>
-                </div>
-              ))
-            ) : (
-              <div style={{ padding: 16, fontSize: 13, color: T.muted, textAlign: "center" }}>No details available</div>
-            )}
-          </div>
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpenPopup(null);
-              navigateToModule("attendance");
-            }}
-            style={{ padding: 12, textAlign: "center", background: T.slate50, color: T.teal700, fontSize: 13, fontWeight: 700, cursor: "pointer", borderTop: `1px solid ${T.border}` }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = T.teal100)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = T.slate50)}
-          >
-            View More in Attendance
-          </div>
-        </div>
-      </div>
+  useEffect(() => {
+    if (!showAttendanceModule) return;
+    getAttendanceLogs(500).then(setFetchedLogs).catch(() => {});
+    if (user?.org_id || user?.organization_id) {
+      listStaffRecords({ organizationId: user?.org_id || user?.organization_id }).then(setAllStaff).catch(() => {});
+    }
+  }, [showAttendanceModule, user?.org_id, user?.organization_id]);
+
+  // ── All configured department names (source of truth) ─────────────────────
+  const cfgDeptNames = useMemo<string[]>(() => {
+    const names = new Set<string>();
+    Object.values(cfg.departments).forEach((depts) =>
+      depts.forEach((d) => { if (d.name) names.add(d.name); })
     );
-  };
+    return Array.from(names).sort();
+  }, [cfg.departments]);
+
+  const deptPresentRows = useMemo<KpiDeptRow[]>(() => {
+    const presentLogs = fetchedLogs.filter((log) => {
+      const status = (log.status || "").toLowerCase();
+      return status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day";
+    });
+    const unique = [];
+    const seen = new Set();
+    for (const log of presentLogs) {
+      const id = log.staffId || log.userId || log.staff_id || log.user_id;
+      if (!seen.has(id)) {
+        seen.add(id);
+        unique.push(log);
+        if (unique.length === 5) break;
+      }
+    }
+    return unique.map((log, i) => ({
+      name: log.userName || log.staffName || "Unknown",
+      subtitle: log.department || "No Department",
+      color: DEPT_COLORS[i % DEPT_COLORS.length]
+    }));
+  }, [fetchedLogs]);
+
+  const deptAbsentRows = useMemo<KpiDeptRow[]>(() => {
+    const presentIds = new Set(
+      fetchedLogs
+        .filter((log) => {
+          const status = (log.status || "").toLowerCase();
+          return status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day";
+        })
+        .map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
+    );
+    const absentStaff = allStaff.filter((s) => !presentIds.has(String(s.id)));
+    return absentStaff.slice(0, 5).map((s, i) => ({
+      name: s.name || "Unknown",
+      subtitle: s.department_name || s.department || "No Department",
+      color: DEPT_COLORS[i % DEPT_COLORS.length]
+    }));
+  }, [fetchedLogs, allStaff]);
 
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -320,7 +331,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
           )}
 
           {showAttendanceModule && (
-            <div style={{ position: "relative" }} onMouseLeave={() => setOpenPopup(null)}>
+            <div ref={presentCardRef} style={{ position: "relative" }}>
               <StatCard
                 title="Present Today"
                 value={statValue(data.stats.presentToday)}
@@ -328,14 +339,21 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
                 icon={UserCheck}
                 iconBg="#134E6320"
                 iconColor={T.navy700}
-                onClick={() => setOpenPopup(openPopup === "present" ? null : "present")}
+                onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
               />
-              {renderPopup("present", data.liveLog.filter((l) => l.status === "Present" || l.status === "Late").slice(0, 5))}
+              <KpiDropdown
+                open={kpiDropdown === "present"}
+                label="Present by Department"
+                rows={deptPresentRows}
+                triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
+                onClose={() => setKpiDropdown(null)}
+                onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+              />
             </div>
           )}
 
           {showAttendanceModule && (
-            <div style={{ position: "relative" }} onMouseLeave={() => setOpenPopup(null)}>
+            <div ref={absentCardRef} style={{ position: "relative" }}>
               <StatCard
                 title="Absent Today"
                 value={statValue(data.stats.absentToday)}
@@ -343,9 +361,16 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
                 icon={UserX}
                 iconBg="#FFF1F2"
                 iconColor="#E11D48"
-                onClick={() => setOpenPopup(openPopup === "absent" ? null : "absent")}
+                onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
               />
-              {renderPopup("absent", data.liveLog.filter((l) => l.status === "Absent").slice(0, 5))}
+              <KpiDropdown
+                open={kpiDropdown === "absent"}
+                label="Absent by Department"
+                rows={deptAbsentRows}
+                triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
+                onClose={() => setKpiDropdown(null)}
+                onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+              />
             </div>
           )}
 
@@ -362,7 +387,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       )}
 
       {(showAttendanceModule || showShiftDistribution) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "480px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "620px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
           {showShiftDistribution && (
             <ShiftDistributionCard shifts={data.shiftDistribution} />
           )}
@@ -370,6 +395,8 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
             <TodayStatusCard
               data={data.todayStatus}
               presentToday={data.stats.presentToday}
+              liveLog={data.liveLog}
+              totalStaff={data.stats.totalStaff}
             />
           )}
         </div>
@@ -382,7 +409,9 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
               height={SUMMARY_WIDGET_CARD_HEIGHT}
               listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
               data={data.weeklyAttendance}
-              title="Weekly Attendance"
+              fetchedLogs={fetchedLogs}
+              allStaff={allStaff}
+              title="Attendance"
               showBranchDropdown={false}
             />
           )}

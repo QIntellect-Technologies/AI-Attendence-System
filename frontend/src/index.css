@@ -45,3 +45,10 @@
     min-width: 0;
   }
 }
+
+/* Remove black outline from Recharts */
+.recharts-wrapper *:focus,
+.recharts-surface:focus {
+  outline: none !important;
+}
+

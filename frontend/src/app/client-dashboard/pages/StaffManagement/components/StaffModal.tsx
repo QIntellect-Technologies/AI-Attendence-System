@@ -2870,15 +2870,7 @@ export const StaffModal: FC<{
     [formFieldKeys],
   );
 
-  // Class/Section (students only). Workforce department/designation used
-  // to share this same block via the "department"/"designation" field
-  // keys, but that's now handled exclusively by the live, backend-relational
-  // section further down (liveDepartments/liveDesignations) — see the note
-  // on the `depts`/`roles` memos below.
-  const showGroupField =
-    peopleModel.isStudent && hasField("class", "department");
-  const showSubGroupField =
-    peopleModel.isStudent && hasField("section", "designation");
+  // Moved showGroupField & showSubGroupField down below liveDepartments useState
   const showSalaryField = hasField("salary");
   const showBenefitsField = hasField("benefits");
   // Payroll rules are considered "implemented" if the org has configured at
@@ -3074,10 +3066,17 @@ export const StaffModal: FC<{
     };
   }, [peopleModel.isStudent, organizationId, apiBranchId]);
 
-  const depts = useMemo(
-    () => liveClasses.map((item) => ({ id: item.id, name: item.name })),
-    [liveClasses],
-  );
+  const depts = useMemo(() => {
+    if (peopleModel.isStudent) {
+      return liveClasses.map((item) => ({ id: String(item.id), name: item.name }));
+    }
+    return (cfg.departments[form.branchId] ?? [])
+      .map((d: any) => ({
+        id: typeof d === "string" ? d : String(d.id ?? d.name),
+        name: typeof d === "string" ? d : d.name,
+      }))
+      .filter((d: any) => d.name);
+  }, [liveClasses, peopleModel.isStudent, cfg.departments, form.branchId]);
 
   // Section names for the student Class/Section picker (showSubGroupField),
   // scoped to whichever class is currently selected.
@@ -3106,10 +3105,17 @@ export const StaffModal: FC<{
     };
   }, [peopleModel.isStudent, organizationId, selectedLiveClass]);
 
-  const roles = useMemo(
-    () => liveSections.map((item) => ({ id: item.id, name: item.name })),
-    [liveSections],
-  );
+  const roles = useMemo(() => {
+    if (peopleModel.isStudent) {
+      return liveSections.map((item) => ({ id: String(item.id), name: item.name }));
+    }
+    return (cfg.roles[form.branchId] ?? [])
+      .map((r: any) => ({
+        id: typeof r === "string" ? r : String(r.id ?? r.name),
+        name: typeof r === "string" ? r : r.name,
+      }))
+      .filter((r: any) => r.name);
+  }, [liveSections, peopleModel.isStudent, cfg.roles, form.branchId]);
 
   // ─── Live shift/department/designation assignment (real backend relations) ──
   // This is now the ONLY department/designation system for workforce staff —
@@ -3206,6 +3212,16 @@ export const StaffModal: FC<{
     peopleModel.peopleType,
     peopleModel.showDepartmentDesignationFields,
   ]);
+
+  // Class/Section (students only). Workforce department/designation used
+  // to share this same block via the "department"/"designation" field
+  // keys, but that's now handled exclusively by the live, backend-relational
+  // section further down (liveDepartments/liveDesignations).
+  // Fallback: If liveDepartments is empty for workforce, we fallback to showing these string fields.
+  const showGroupField =
+    (peopleModel.isStudent || liveDepartments.length === 0) && hasField("class", "department");
+  const showSubGroupField =
+    (peopleModel.isStudent || liveDepartments.length === 0) && hasField("section", "designation");
 
   // Always updates form.liveDepartmentId (the single source of truth for
   // the dropdown's value, and what handleSave reads to assign the
@@ -4171,7 +4187,7 @@ export const StaffModal: FC<{
             right after createStaff() resolves (see handleSave in the
             parent), same as the live Shift dropdown.
           */}
-          {(peopleModel.showDepartmentDesignationFields || liveDepartments.length > 0) && (
+          {(peopleModel.showDepartmentDesignationFields && liveDepartments.length > 0) && (
             <div
               style={{
                 display: "grid",
