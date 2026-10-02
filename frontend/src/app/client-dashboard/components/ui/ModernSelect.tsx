@@ -348,21 +348,6 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                           )}
                           <span style={{ minWidth: 0 }}>
                             <span
-                            style={{
-                              display: "block",
-                              fontSize: 12,
-                              fontWeight: active ? 800 : 700,
-                              color: active ? T.teal600 : T.head,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {option.label}
-                          </span>
-                          {option.description && (
->>>>>>> 009212d (feat: improve dashboard UI - fix absent list, SVG donut, attendance chart filters, dropdown scroll behavior)
-                            <span
                               style={{
                                 display: "block",
                                 fontSize: 12,
