@@ -91,6 +91,25 @@ export interface UseStaffRecordsOptions {
   loadArchived?: boolean;
 }
 
+/**
+ * Whole-directory headcounts (every page, not just the rows on screen).
+ * Scoped to organization + branch + people type only, so search / status /
+ * department filters and the current page never change them.
+ */
+export interface StaffCounts {
+  total: number;
+  active: number;
+  inactiveOrPending: number;
+  loaded: boolean;
+}
+
+const EMPTY_STAFF_COUNTS: StaffCounts = {
+  total: 0,
+  active: 0,
+  inactiveOrPending: 0,
+  loaded: false,
+};
+
 const STAFF_SAVE_PHASE_PROGRESS: Record<StaffSaveProgressPhase, number> = {
   profile: 20,
   photo: 70,
@@ -284,6 +303,9 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
    */
   const staffStoreRef = useRef(staff);
   const staffMutationVersionRef = useRef(0);
+  // Monotonic id of the newest page request. Slow, older responses are
+  // ignored so they can never overwrite the rows / page the user is on.
+  const staffRequestIdRef = useRef(0);
 
   useEffect(() => {
     staffStoreRef.current = staff;
@@ -294,6 +316,9 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   const [isSavingStaff, setIsSavingStaff] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
   const [staffTotal, setStaffTotal] = useState(0);
+  const [staffCounts, setStaffCounts] =
+    useState<StaffCounts>(EMPTY_STAFF_COUNTS);
+  const [countsVersion, setCountsVersion] = useState(0);
   const [staffPage, setStaffPage] = useState(() =>
     Math.max(1, Number(options.page || 1)),
   );
@@ -356,6 +381,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       ...store.allItems.filter((item) => item.id !== next.id),
       next,
     ]);
+    setCountsVersion((version) => version + 1);
   }, []);
 
   const refreshStaff = useCallback(
@@ -367,6 +393,8 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         store.reset([]);
         return [];
       }
+
+      const requestId = ++staffRequestIdRef.current;
 
       try {
         setIsLoadingStaff(true);
@@ -394,9 +422,9 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           branchId:
             refreshOptions?.branchId !== undefined
               ? (resolveTenantScope(
-                  { organizationId, branchId: refreshOptions.branchId },
-                  cfg.branches,
-                ).apiBranchId ?? refreshOptions.branchId)
+                { organizationId, branchId: refreshOptions.branchId },
+                cfg.branches,
+              ).apiBranchId ?? refreshOptions.branchId)
               : (requestedBranchId ?? undefined),
           page: requestedPage,
           pageSize: requestedPageSize,
@@ -408,9 +436,27 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           designation: options.designation,
         });
 
-        setStaffTotal(Number(pageResult.total || 0));
-        setStaffPage(Number(pageResult.page || requestedPage));
-        setStaffPageSize(Number(pageResult.pageSize || requestedPageSize));
+        // A newer request (filter change, next page click...) has started
+        // since this one was sent: drop this response completely.
+        if (requestId !== staffRequestIdRef.current) {
+          return staffStoreRef.current.allItems;
+        }
+
+        const total = Number(pageResult.total || 0);
+        setStaffTotal(total);
+
+        // The page the user is on no longer exists (last row archived, a
+        // filter shrank the result...). Step back to the last real page; the
+        // page change triggers a fresh load.
+        const lastPage = Math.max(1, Math.ceil(total / requestedPageSize));
+        if (requestedPage > lastPage) {
+          setStaffPage(lastPage);
+          return staffStoreRef.current.allItems;
+        }
+
+        // NOTE: page / pageSize are owned by the UI. They are no longer
+        // overwritten from the response - a backend that echoes page 1 (or a
+        // late response) used to snap the pager back and break Prev / Next.
 
         const rows = pageResult.rows.map((user) =>
           withBackendBenefits(apiUserToStaffMember(user), user),
@@ -424,10 +470,10 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to load staff.";
-        setStaffError(message);
+        if (requestId === staffRequestIdRef.current) setStaffError(message);
         throw error;
       } finally {
-        setIsLoadingStaff(false);
+        if (requestId === staffRequestIdRef.current) setIsLoadingStaff(false);
       }
     },
     [
@@ -532,6 +578,71 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     options.loadArchived,
     refreshArchivedStaff,
     refreshStaff,
+  ]);
+
+  // ── Directory-wide headcounts for the stat cards ──────────────────────────
+  // The page request only returns one page of rows, so counting rows on screen
+  // gives the page size (e.g. 50), not the real headcount. Ask the server for
+  // the totals instead (pageSize 1 -> only the `total` field matters).
+  const countsPeopleType =
+    options.peopleType ??
+    options.people_type ??
+    options.personType ??
+    options.person_type ??
+    null;
+
+  useEffect(() => {
+    if (!organizationId) {
+      setStaffCounts(EMPTY_STAFF_COUNTS);
+      return;
+    }
+
+    let cancelled = false;
+
+    const base = {
+      role: options.role ?? "staff",
+      peopleType: countsPeopleType,
+      organizationId,
+      userId: currentUserId,
+      branchId: requestedBranchId ?? undefined,
+      page: 1,
+      pageSize: 1,
+    };
+
+    async function loadCounts() {
+      try {
+        const [all, active] = await Promise.all([
+          listStaffPage(base),
+          listStaffPage({ ...base, status: "active" }),
+        ]);
+        if (cancelled) return;
+
+        const total = Number(all.total || 0);
+        const activeCount = Math.min(total, Number(active.total || 0));
+        setStaffCounts({
+          total,
+          active: activeCount,
+          inactiveOrPending: Math.max(0, total - activeCount),
+          loaded: true,
+        });
+      } catch {
+        // Keep the last known counts; the stat bar falls back to page rows
+        // if nothing has ever loaded.
+      }
+    }
+
+    void loadCounts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    organizationId,
+    currentUserId,
+    requestedBranchId,
+    countsPeopleType,
+    options.role,
+    countsVersion,
   ]);
 
   const createStaff = useCallback(
@@ -797,6 +908,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       });
 
       staffStoreRef.current.remove(staffId);
+      setCountsVersion((version) => version + 1);
       await refreshArchivedStaff();
 
       return result;
@@ -818,6 +930,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       });
 
       await refreshStaff();
+      setCountsVersion((version) => version + 1);
       await refreshArchivedStaff();
 
       return result;
@@ -826,10 +939,11 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   );
 
   const deleteArchivedStaff = useCallback(
-    async (userId: number | string) => {
+    async (userId: number | string, reason?: string) => {
       const result = await deleteArchivedStaffRecord(userId, {
         organizationId,
         deletedBy: currentUserId,
+        reason,
       });
 
       setArchivedStaff((rows) =>
@@ -843,10 +957,11 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   );
 
   const bulkDeleteArchivedStaff = useCallback(
-    async (userIds: Array<number | string>) => {
+    async (userIds: Array<number | string>, reason?: string) => {
       const result = await bulkDeleteArchivedStaffRecords(userIds, {
         organizationId,
         deletedBy: currentUserId,
+        reason,
       });
 
       const deletedIds = new Set(
@@ -873,6 +988,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     isSavingStaff,
     staffError,
     staffTotal,
+    staffCounts,
     staffPage,
     staffPageSize,
     setStaffPage,

@@ -49,10 +49,23 @@ export interface UseDropdownPositionOptions {
   matchTriggerWidth?: boolean;
   /** Passed straight through to the returned position for convenience (BranchSelector's minWidth: 220). */
   minWidth?: number;
+  /**
+   * "bottom": always open below the trigger (default, previous behaviour).
+   * "top": always open above the trigger.
+   * "auto": open below, but flip above when there is not enough room below
+   *         the trigger (e.g. a pagination select at the bottom of the page).
+   */
+  placement?: "bottom" | "top" | "auto";
+  /** Approximate panel height in px, used by placement "auto". Default 280. */
+  estimatedHeight?: number;
 }
 
 export interface DropdownPosition {
+  /** Not used when `bottom` is set (panel opens upward). */
   top: number;
+  /** Set when the panel opens above the trigger; anchor with CSS `bottom`. */
+  bottom?: number;
+  openUp?: boolean;
   left?: number;
   right?: number;
   width?: number;
@@ -67,6 +80,8 @@ export function useDropdownPosition<T extends HTMLElement>(
     gap = 8,
     matchTriggerWidth = false,
     minWidth,
+    placement = "bottom",
+    estimatedHeight = 280,
   }: UseDropdownPositionOptions = {},
 ): DropdownPosition | null {
   const [position, setPosition] = useState<DropdownPosition | null>(null);
@@ -79,21 +94,42 @@ export function useDropdownPosition<T extends HTMLElement>(
     const rect = el.getBoundingClientRect();
     const top = rect.bottom + gap;
 
+    const spaceBelow = window.innerHeight - rect.bottom - gap;
+    const spaceAbove = rect.top - gap;
+    const openUp =
+      placement === "top" ||
+      (placement === "auto" &&
+        spaceBelow < estimatedHeight &&
+        spaceAbove > spaceBelow);
+    const bottom = openUp ? window.innerHeight - rect.top + gap : undefined;
+
     setPosition(
       align === "start"
         ? {
-            top,
-            left: rect.left,
-            width: matchTriggerWidth ? rect.width : undefined,
-            minWidth,
-          }
+          top,
+          bottom,
+          openUp,
+          left: rect.left,
+          width: matchTriggerWidth ? rect.width : undefined,
+          minWidth,
+        }
         : {
-            top,
-            right: window.innerWidth - rect.right,
-            minWidth,
-          },
+          top,
+          bottom,
+          openUp,
+          right: window.innerWidth - rect.right,
+          minWidth,
+        },
     );
-  }, [triggerRef, align, gap, matchTriggerWidth, minWidth]);
+  }, [
+    triggerRef,
+    align,
+    gap,
+    matchTriggerWidth,
+    minWidth,
+    placement,
+    estimatedHeight,
+  ]);
 
   useLayoutEffect(() => {
     if (!open) {

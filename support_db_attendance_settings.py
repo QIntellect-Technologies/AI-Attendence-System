@@ -2190,6 +2190,45 @@ def set_branch_default_shift(
         raise RuntimeError("Failed to set branch default shift")
     return result.data[0]
 
+
+def bulk_apply_shift_to_branch_staff(
+    org_id: str,
+    branch_id: str,
+    people_type: str,
+    shift_id: str,
+) -> int:
+    """Force-assign shift_id_ref on every active staff member in this
+    branch+people_type, giving the branch default shift 'parent authority'
+    over any individual-level allocation.
+
+    Returns the count of rows updated.
+    Called only when the client explicitly confirms the force_override action
+    in the UI — never triggered by a normal 'Save Default' click.
+    """
+    sb = get_supabase()
+    branch_key = require_specific_branch(branch_id, "Bulk-applying branch default shift")
+    get_branch_owned_by_org(org_id, branch_key)
+    normalized = normalize_people_type(people_type)
+    now = now_iso()
+
+    # Build query for all active staff in the branch matching people_type.
+    # people_type maps to client_staff.people_type (staff/student/worker etc.)
+    query = (
+        sb.table("client_staff")
+        .update({"shift_id_ref": str(shift_id), "updated_at": now})
+        .eq("org_id", str(org_id))
+        .eq("branch_id", branch_key)
+        .eq("is_archived", False)
+    )
+
+    # Only filter by people_type when it's not the catch-all "staff"
+    if normalized and normalized != "staff":
+        query = query.eq("people_type", normalized)
+
+    result = query.execute()
+    return len(result.data) if result.data else 0
+
+
 def set_attendance_workflow(org_id: str, branch_id: str, people_type: str, workflow: str) -> dict:
     """Support-only. Sets attendance_capture_settings.attendance_workflow
     for one branch+people_type — see local_node.attendance_marking_scenario

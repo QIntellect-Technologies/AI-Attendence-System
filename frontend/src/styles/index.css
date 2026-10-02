@@ -47,7 +47,7 @@
   justify-content: flex-end;
 }
 
-.branch-overview-performance-grid > * {
+.branch-overview-performance-grid>* {
   min-width: 0;
   max-width: 100%;
 }
@@ -80,7 +80,7 @@
   min-width: 0;
 }
 
-.staff-management-stats > * {
+.staff-management-stats>* {
   min-width: 0;
 }
 
@@ -164,7 +164,7 @@
   padding: 20px;
 }
 
-.dynamic-filter-drawer__body > * {
+.dynamic-filter-drawer__body>* {
   width: 100% !important;
   min-width: 0 !important;
   max-width: 100% !important;
@@ -189,6 +189,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -198,6 +199,7 @@
   from {
     transform: translateX(100%);
   }
+
   to {
     transform: translateX(0);
   }
@@ -236,7 +238,7 @@
     gap: 8px !important;
   }
 
-  .module-shell-actions > * {
+  .module-shell-actions>* {
     flex: 0 1 auto;
   }
 
@@ -249,7 +251,7 @@
     order: 2;
   }
 
-  .module-shell-actions > .staff-management-mobile-icon-button {
+  .module-shell-actions>.staff-management-mobile-icon-button {
     order: 3;
   }
 
@@ -266,9 +268,7 @@
     font-size: 0 !important;
   }
 
-  .staff-management-mobile-icon-button
-    > span:last-child
-    > span:not([aria-hidden]) {
+  .staff-management-mobile-icon-button>span:last-child>span:not([aria-hidden]) {
     display: none;
   }
 
@@ -390,17 +390,17 @@
     justify-content: flex-end;
   }
 
-  .admin-dashboard-header__mobile-account > div {
+  .admin-dashboard-header__mobile-account>div {
     min-width: 0;
     padding-left: 0 !important;
     max-width: 100%;
   }
 
-  .admin-dashboard-header__mobile-account > div > div:last-child {
+  .admin-dashboard-header__mobile-account>div>div:last-child {
     min-width: 0;
   }
 
-  .admin-dashboard-header__mobile-account > div p {
+  .admin-dashboard-header__mobile-account>div p {
     max-width: min(42vw, 180px) !important;
   }
 
@@ -452,8 +452,22 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .dynamic-filter-drawer-overlay,
   .dynamic-filter-drawer {
     animation: none;
   }
+}
+
+/* Recharts 3 makes each chart focusable (accessibilityLayer), so clicking a
+   chart drew the browser's default focus box around it. Suppress it. */
+.recharts-wrapper,
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface,
+.recharts-surface:focus,
+.recharts-surface:focus-visible,
+.recharts-wrapper *:focus,
+.recharts-wrapper *:focus-visible {
+  outline: none !important;
 }

@@ -29,7 +29,7 @@ import React, {
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 import { toastSuccess, toastError, toastInfo } from "../../utils/notifications";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { listStaffPage } from "../StaffManagement/api/staffApi";
 import {
   getCaptureSettings,
@@ -1473,6 +1473,8 @@ function useAttendanceSources(args: {
 export default function AttendanceView() {
   const navigate = useNavigate();
   const { branchId: branchIdParam } = useParams<{ branchId?: string }>();
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status") as AttendanceStatusFilter | null;
   // Support-created organizations have UUID ids and live Supabase attendance.
   // Always use the real API for them, even if VITE_USE_REAL_API was left false.
   //
@@ -1512,7 +1514,11 @@ export default function AttendanceView() {
   const [activeDept, setActiveDept] = useState<string | null>(null);
   const [activeSubgroup, setActiveSubgroup] = useState<string | null>(null);
   const [activeStatus, setActiveStatus] =
-    useState<AttendanceStatusFilter>("all");
+    useState<AttendanceStatusFilter>(
+      (initialStatus && ["present", "absent", "late", "onTime"].includes(initialStatus))
+        ? initialStatus
+        : "all"
+    );
   const attendanceTableRef = useRef<HTMLDivElement>(null);
   const showAttendanceStatus = useCallback(
     (status: AttendanceStatusFilter) => {

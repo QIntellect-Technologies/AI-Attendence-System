@@ -158,6 +158,9 @@ export interface StaffMember {
   name: string;
   email?: string;
   phone: string;
+  /** Why this person was archived (captured at archive time). */
+  archiveReason?: string;
+  archivedAt?: string;
 
   branchId: number;
   branchName: string;

@@ -1,239 +1,537 @@
+// /**
+//  * modules/staff/api/staffMappers.ts
+//  * ─────────────────────────────────────────────────────────────────────────────
+//  * Staff API ↔ ModuleContext adapter.
+//  *
+//  * Person-code rules:
+//  * - Students are identified by registration number.
+//  * - Employees/workers/teachers/staff use their template-specific person code.
+//  * - Backend UUIDs remain internal and are never used as the visible person code.
+//  */
+
+// import type { User } from "../../../api/api";
+// import type { StaffMember } from "../../../contexts/ModuleContext";
+// import type { ShiftDefinition } from "../../../contexts/OrgConfigContext";
+// import { normalizePeopleType } from "../types/types";
+import type { StaffMember as DirectoryStaffMember } from "../types/staffTypes";
+
+// type StaffApiUser = User & {
+//   updated_at?: string | null;
+//   branch_ui_id?: number | string | null;
+//   branchUiId?: number | string | null;
+//   branchId?: number | string | null;
+//   branchName?: string | null;
+//   department_name?: string | null;
+//   role_name?: string | null;
+//   people_type?: string | null;
+//   peopleType?: string | null;
+//   person_type?: string | null;
+//   personType?: string | null;
+//   person_code?: string | null;
+//   personCode?: string | null;
+//   registration_number?: string | null;
+//   registrationNumber?: string | null;
+//   employee_number?: string | null;
+//   employeeNumber?: string | null;
+//   worker_id?: string | null;
+//   workerId?: string | null;
+//   teacher_code?: string | null;
+//   teacherCode?: string | null;
+//   shift_id_ref?: string | null;
+//   shiftIdRef?: string | null;
+
+//   geofence_lat?: number | string | null;
+//   geofenceLat?: number | string | null;
+//   geofence_lng?: number | string | null;
+//   geofenceLng?: number | string | null;
+//   geofence_radius_meters?: number | string | null;
+//   geofenceRadiusMeters?: number | string | null;
+//   geofence_label?: string | null;
+//   geofenceLabel?: string | null;
+
+//   office_ssid?: string | null;
+//   officeSsid?: string | null;
+//   office_bssid_list?: string[] | null;
+//   officeBssidList?: string[] | null;
+
+//   cnic?: string | null;
+//   father_name?: string | null;
+//   fatherName?: string | null;
+//   father_cnic?: string | null;
+//   fatherCnic?: string | null;
+//   father_phone?: string | null;
+//   fatherPhone?: string | null;
+//   father_number?: string | null;
+//   fatherNumber?: string | null;
+// };
+
+// export function backendStaffId(member: StaffMember): number | string | null {
+//   const raw = member.userId ?? member.id;
+//   if (raw === undefined || raw === null) return null;
+
+//   const text = String(raw).trim();
+//   if (!text) return null;
+
+//   const numeric = Number(text);
+//   return Number.isFinite(numeric) && numeric > 0 ? numeric : text;
+// }
+
+// function toUiBranchId(...values: unknown[]): number {
+//   for (const value of values) {
+//     if (value === undefined || value === null || value === "") continue;
+//     const numeric = Number(value);
+//     if (Number.isFinite(numeric) && numeric > 0) return numeric;
+//   }
+//   return 0;
+// }
+
+// function firstText(...values: unknown[]): string {
+//   for (const value of values) {
+//     const text = String(value ?? "").trim();
+//     if (text) return text;
+//   }
+//   return "";
+// }
+
+// function firstNumberOrNull(...values: unknown[]): number | null {
+//   for (const value of values) {
+//     if (value === undefined || value === null || value === "") continue;
+//     const numeric = Number(value);
+//     if (Number.isFinite(numeric)) return numeric;
+//   }
+//   return null;
+// }
+
+// function firstStringArray(...values: unknown[]): string[] {
+//   for (const value of values) {
+//     if (Array.isArray(value)) {
+//       const cleaned = value
+//         .map((item) => String(item ?? "").trim())
+//         .filter(Boolean);
+//       if (cleaned.length) return cleaned;
+//     }
+//   }
+//   return [];
+// }
+
+// export function apiUserToStaffMember(user: User): StaffMember {
+//   const row = user as StaffApiUser;
+//   const now = new Date().toISOString();
+
+//   const branchId = toUiBranchId(
+//     row.branch_ui_id,
+//     row.branchUiId,
+//     row.branchId,
+//     row.branch_id,
+//   );
+
+//   const peopleType = normalizePeopleType(
+//     row.peopleType ??
+//       row.people_type ??
+//       row.personType ??
+//       row.person_type ??
+//       row.role ??
+//       "staff",
+//   );
+
+//   const personCode = firstText(
+//     row.personCode,
+//     row.person_code,
+//     row.registrationNumber,
+//     row.registration_number,
+//     row.employeeNumber,
+//     row.employee_number,
+//     row.workerId,
+//     row.worker_id,
+//     row.teacherCode,
+//     row.teacher_code,
+//     row.employee_id,
+//   );
+
+//   const status = (row.status ?? "active") as StaffMember["status"];
+//   const shiftId = row.shift_id ?? row.shift ?? "morning";
+//   const shiftLabel = row.shift_label ?? row.shift ?? "Morning";
+//   const position = row.position ?? row.role_name ?? "Staff";
+
+//   return {
+//     id: String(row.id),
+//     employeeId: String(personCode || row.employee_id || row.id),
+//     personCode,
+//     registrationNumber:
+//       peopleType === "student"
+//         ? personCode
+//         : firstText(row.registrationNumber, row.registration_number),
+//     userId: String(row.id),
+
+//     name: row.name,
+//     email: row.email ?? "",
+//     phone: row.phone ?? "",
+
+//     branchId,
+//     branchName: row.branchName ?? row.branch_name ?? "",
+
+//     department: row.department ?? row.department_name ?? "",
+//     designationId: row.designation_id ?? row.designationId ?? null,
+//     role: position,
+//     position,
+//     peopleType,
+//     personType: peopleType,
+
+//     status,
+//     salary: Number(row.salary ?? 0),
+//     joinDate: row.join_date ?? "",
+
+//     staffType: row.staff_type ?? "office",
+
+//     shift: String(shiftId) as StaffMember["shift"],
+//     shiftId: String(shiftId) as ShiftDefinition["id"],
+//     shiftLabel: String(shiftLabel),
+//     shiftStart: row.duty_start ?? "09:00",
+//     shiftEnd: row.duty_end ?? "17:00",
+//     // The backend now resolves shift_id_ref -> the real `shifts` row and
+//     // folds its name/check_in_time/check_out_time into shift_label/
+//     // duty_start/duty_end above, so shiftLabel/shiftStart/shiftEnd are
+//     // already correct post-fix. shiftIdRef is carried through anyway so any
+//     // UI that needs to know "does this person have a real shift assigned"
+//     // (vs. the legacy free-text shift) doesn't have to re-derive it.
+//     shiftIdRef: row.shiftIdRef ?? row.shift_id_ref ?? null,
+
+//     moduleAccess: row.access_modules ?? [],
+//     accessModules: row.access_modules ?? [],
+
+//     presentDays: 0,
+
+//     profileImageUrl: row.profile_image_url ?? undefined,
+//     profileImageName: row.profile_image_name ?? undefined,
+
+//     createdAt: row.created_at ?? now,
+//     updatedAt: row.updated_at ?? row.created_at ?? now,
+
+//     // Field-staff geofence (static-location scenario) — null/undefined
+//     // means "not configured yet," which the mobile app and dashboard both
+//     // need to distinguish from "configured at 0,0."
+//     geofenceLat: firstNumberOrNull(row.geofenceLat, row.geofence_lat),
+//     geofenceLng: firstNumberOrNull(row.geofenceLng, row.geofence_lng),
+//     geofenceRadiusMeters: firstNumberOrNull(
+//       row.geofenceRadiusMeters,
+//       row.geofence_radius_meters,
+//     ),
+//     geofenceLabel: firstText(row.geofenceLabel, row.geofence_label),
+
+//     // Office-staff WiFi config — replaces the app's old hardcoded
+//     // SSID/single-BSSID constants. bssidList supports mesh offices with
+//     // multiple access points on the same SSID.
+//     officeSsid: firstText(row.officeSsid, row.office_ssid),
+//     officeBssidList: firstStringArray(
+//       row.officeBssidList,
+//       row.office_bssid_list,
+//     ),
+
+//     // Identity documents. Cast through `as StaffMember` below like every
+//     // other field in this object, since ModuleContext's StaffMember type
+//     // isn't the source of truth here — StaffManagement's own StaffMember
+//     // (built from this via toStaffMember) is what actually declares these.
+//     cnic: firstText(row.cnic),
+//     fatherName: firstText(row.fatherName, row.father_name),
+//     fatherCnic: firstText(row.fatherCnic, row.father_cnic),
+//     fatherPhone: firstText(
+//       row.fatherPhone,
+//       row.father_phone,
+//       row.fatherNumber,
+//       row.father_number,
+//     ),
+//   } as StaffMember;
+// }
+
+
 /**
- * modules/staff/utils/staffMapping.ts
+ * modules/staff/api/staffMappers.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * ModuleContext StaffMember -> local StaffMember adapter, plus backend id
- * resolution. Complements api/staffMappers.ts (backend row -> ModuleContext);
- * this file is the second hop of that same chain.
- * ─────────────────────────────────────────────────────────────────────────────
+ * Staff API ↔ ModuleContext adapter.
+ *
+ * Person-code rules:
+ * - Students are identified by registration number.
+ * - Employees/workers/teachers/staff use their template-specific person code.
+ * - Backend UUIDs remain internal and are never used as the visible person code.
  */
 
-import { type StaffMember as ModuleStaffMember } from "../../../contexts/ModuleContext";
-import { type ShiftDefinition } from "../../../contexts/OrgConfigContext";
+import type { User } from "../../../api/api";
+import type { StaffMember } from "../../../contexts/ModuleContext";
+import type { ShiftDefinition } from "../../../contexts/OrgConfigContext";
 import { normalizePeopleType } from "../types/types";
-import { type NamedConfigOption, type StaffMember } from "../types/staffTypes";
-import {
-  asNumber,
-  asNumberOrNull,
-  asRecord,
-  asStaffWorkType,
-  asStatus,
-  asString,
-  asStringArray,
-} from "./staffCoercions";
 
-export const toStaffMember = (member: ModuleStaffMember): StaffMember => {
-  const raw = asRecord(member);
+type StaffApiUser = User & {
+  updated_at?: string | null;
+  branch_ui_id?: number | string | null;
+  branchUiId?: number | string | null;
+  branchId?: number | string | null;
+  branchName?: string | null;
+  department_name?: string | null;
+  department_id?: number | string | null;
+  departmentId?: number | string | null;
+  class_id?: string | null;
+  classId?: string | null;
+  section_id?: string | null;
+  sectionId?: string | null;
+  role_name?: string | null;
+  designation_id?: number | string | null;
+  designationId?: number | string | null;
+  designation_name?: string | null;
+  designationName?: string | null;
+  people_type?: string | null;
+  peopleType?: string | null;
+  person_type?: string | null;
+  personType?: string | null;
+  person_code?: string | null;
+  personCode?: string | null;
+  registration_number?: string | null;
+  registrationNumber?: string | null;
+  employee_number?: string | null;
+  employeeNumber?: string | null;
+  worker_id?: string | null;
+  workerId?: string | null;
+  teacher_code?: string | null;
+  teacherCode?: string | null;
+  shift_id_ref?: string | null;
+  shiftIdRef?: string | null;
 
-  const id = asString(
-    raw.id ?? raw.userId ?? raw.user_id ?? raw.employeeId ?? raw.employee_id,
-    "",
-  );
+  geofence_lat?: number | string | null;
+  geofenceLat?: number | string | null;
+  geofence_lng?: number | string | null;
+  geofenceLng?: number | string | null;
+  geofence_radius_meters?: number | string | null;
+  geofenceRadiusMeters?: number | string | null;
+  geofence_label?: string | null;
+  geofenceLabel?: string | null;
 
-  const userId = asString(raw.userId ?? raw.user_id ?? raw.id, id);
-  const peopleType = asString(
-    raw.peopleType ?? raw.people_type ?? raw.personType ?? raw.person_type,
-    "staff",
-  );
+  office_ssid?: string | null;
+  officeSsid?: string | null;
+  office_bssid_list?: string[] | null;
+  officeBssidList?: string[] | null;
 
-  const externalCode = asString(
-    raw.personCode ??
-    raw.person_code ??
-    raw.registrationNumber ??
-    raw.registration_number ??
-    raw.studentId ??
-    raw.student_id ??
-    raw.rollNo ??
-    raw.roll_no ??
-    raw.admissionNo ??
-    raw.admission_no ??
-    raw.employeeId ??
-    raw.employee_id ??
-    raw.employeeNumber ??
-    raw.employee_number ??
-    raw.workerId ??
-    raw.worker_id ??
-    raw.teacherCode ??
-    raw.teacher_code ??
-    raw.code ??
-    raw.empId,
-    "",
-  );
-
-  const branchId = asNumber(raw.branchId ?? raw.branch_id, 0);
-  const accessModules = asStringArray(
-    raw.moduleAccess ?? raw.accessModules ?? raw.access_modules,
-  );
-
-  const roleName = asString(
-    raw.position ?? raw.role ?? raw.designation,
-    "Staff Member",
-  );
-
-  const shiftLabel = asString(
-    raw.shiftLabel ?? raw.shift_label ?? raw.shift,
-    "Morning",
-  );
-  const shiftId = asString(
-    raw.shiftId ?? raw.shift_id ?? raw.shift ?? "morning",
-    "morning",
-  ) as ShiftDefinition["id"];
-
-  return {
-    id,
-    userId,
-    employeeId: externalCode,
-    personCode: externalCode,
-    registrationNumber:
-      normalizePeopleType(peopleType) === "student" ? externalCode : "",
-    studentId: asString(raw.studentId ?? raw.student_id, externalCode),
-    rollNo: asString(raw.rollNo ?? raw.roll_no, ""),
-    code: externalCode,
-
-    name: asString(
-      raw.name ?? raw.staffName ?? raw.fullName,
-      "Unknown Employee",
-    ),
-    email: asString(raw.email, ""),
-    phone: asString(raw.phone, ""),
-
-    branchId,
-    branchName: asString(raw.branchName ?? raw.branch_name, ""),
-
-    department: asString(raw.department ?? raw.dept, "Unassigned"),
-    departmentId: (raw.departmentId ?? raw.department_id ?? null) as string | null,
-    classId: (raw.classId ?? raw.class_id ?? null) as string | null,
-    sectionId: (raw.sectionId ?? raw.section_id ?? null) as string | null,
-    designationId: (raw.designationId ?? raw.designation_id ?? null) as string | null,
-    designationName: asString(raw.designationName ?? raw.designation_name, ""),
-    role: roleName,
-    position: roleName,
-    accountRole: asString(
-      raw.accountRole ?? raw.account_role ?? raw.client_role,
-      "staff",
-    ),
-
-    status: asStatus(raw.status),
-    salary: asNumber(raw.salary ?? raw.basicSalary ?? raw.basic_salary, 0),
-    benefits: asStringArray(
-      raw.benefits ?? raw.staffBenefits ?? raw.staff_benefits,
-    ),
-    joinDate: asString(
-      raw.joinDate ?? raw.join_date ?? raw.createdAt ?? raw.created_at,
-      "",
-    ),
-
-    moduleAccess: accessModules,
-    accessModules,
-
-    staffType: asStaffWorkType(raw.staffType ?? raw.staff_type),
-    shift: shiftId,
-    shiftId,
-    shiftLabel,
-    shiftIdRef: ((raw.shiftIdRef ?? raw.shift_id_ref ?? null) as string | null),
-    shiftStart: asString(
-      raw.shiftStart ?? raw.dutyStart ?? raw.duty_start,
-      "09:00",
-    ),
-    shiftEnd: asString(raw.shiftEnd ?? raw.dutyEnd ?? raw.duty_end, "17:00"),
-
-    presentDays: asNumber(raw.presentDays ?? raw.present_days, 0),
-    createdAt: asString(raw.createdAt ?? raw.created_at, ""),
-    updatedAt: asString(raw.updatedAt ?? raw.updated_at, ""),
-
-    profileImageUrl: asString(raw.profileImageUrl ?? raw.profile_image_url, ""),
-    profileImageName: asString(
-      raw.profileImageName ?? raw.profile_image_name,
-      "",
-    ),
-    peopleType,
-
-    // Reporting Hierarchy fields — must be carried through here, since this
-    // is the ONE function every list-population site (staff.items.map,
-    // archivedStaff.map, the refreshStaff() re-fetch) funnels through to
-    // build the StaffMember objects that become `editMember`/modal `initial`.
-    // Omitting these previously meant the modal always read `undefined`
-    // for dashboardScope/managerId/linkedClientUserId — refetching after a
-    // save (onHierarchyChanged) re-ran this same mapper and stripped the
-    // just-saved value right back out, independent of whether the DB write
-    // or the route filtering were correct.
-    managerId: asString(raw.managerId ?? raw.manager_id, ""),
-    linkedClientUserId: asString(
-      raw.linkedClientUserId ?? raw.linked_client_user_id,
-      "",
-    ),
-    dashboardScope:
-      (raw.dashboardScope ?? raw.dashboard_scope) === "team"
-        ? "team"
-        : "branch",
-
-    // Attendance location config — same "must be carried through here"
-    // reasoning as the hierarchy fields above: this mapper is the single
-    // funnel every list/refetch site uses to build StaffMember, so
-    // omitting these means the modal silently forgets a saved geofence
-    // or WiFi config the next time it (re)initializes from `initial`.
-    geofenceLat: asNumberOrNull(raw.geofenceLat ?? raw.geofence_lat),
-    geofenceLng: asNumberOrNull(raw.geofenceLng ?? raw.geofence_lng),
-    geofenceRadiusMeters: asNumberOrNull(
-      raw.geofenceRadiusMeters ?? raw.geofence_radius_meters,
-    ),
-    geofenceLabel: asString(raw.geofenceLabel ?? raw.geofence_label, ""),
-    officeSsid: asString(raw.officeSsid ?? raw.office_ssid, ""),
-    officeBssidList: asStringArray(
-      raw.officeBssidList ?? raw.office_bssid_list,
-    ),
-
-    // Identity documents — carried through the same "must be mapped here"
-    // reasoning as the hierarchy/geofence fields above: this function is
-    // the single funnel every list/refetch site uses to build StaffMember.
-    cnic: asString(raw.cnic, ""),
-    fatherName: asString(raw.fatherName ?? raw.father_name, ""),
-    fatherCnic: asString(raw.fatherCnic ?? raw.father_cnic, ""),
-    fatherPhone: asString(
-      raw.fatherPhone ??
-      raw.father_phone ??
-      raw.father_number ??
-      raw.fatherNumber,
-      "",
-    ),
-  };
+  cnic?: string | null;
+  father_name?: string | null;
+  fatherName?: string | null;
+  father_cnic?: string | null;
+  fatherCnic?: string | null;
+  father_phone?: string | null;
+  fatherPhone?: string | null;
+  father_number?: string | null;
+  fatherNumber?: string | null;
 };
 
-export const backendUserId = (member: StaffMember): number | string | null => {
-  const raw = member.userId || member.id;
+export function backendStaffId(member: StaffMember): number | string | null {
+  const raw = member.userId ?? member.id;
   if (raw === undefined || raw === null) return null;
 
   const text = String(raw).trim();
   if (!text) return null;
 
-  const value = Number(text);
-  return Number.isFinite(value) && value > 0 ? value : text;
-};
+  const numeric = Number(text);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : text;
+}
 
-export function toNamedConfigOption(
-  value: unknown,
-  index: number,
-): NamedConfigOption {
-  const raw = asRecord(value);
-  const name = asString(raw.name ?? raw.label ?? raw.title, "").trim();
+function toUiBranchId(...values: unknown[]): number {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function firstNumberOrNull(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function firstStringArray(...values: unknown[]): string[] {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const cleaned = value
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean);
+      if (cleaned.length) return cleaned;
+    }
+  }
+  return [];
+}
+
+export function apiUserToStaffMember(user: User): StaffMember {
+  const row = user as StaffApiUser;
+  const now = new Date().toISOString();
+
+  const branchId = toUiBranchId(
+    row.branch_ui_id,
+    row.branchUiId,
+    row.branchId,
+    row.branch_id,
+  );
+
+  const peopleType = normalizePeopleType(
+    row.peopleType ??
+    row.people_type ??
+    row.personType ??
+    row.person_type ??
+    row.role ??
+    "staff",
+  );
+
+  const personCode = firstText(
+    row.personCode,
+    row.person_code,
+    row.registrationNumber,
+    row.registration_number,
+    row.employeeNumber,
+    row.employee_number,
+    row.workerId,
+    row.worker_id,
+    row.teacherCode,
+    row.teacher_code,
+    row.employee_id,
+  );
+
+  const status = (row.status ?? "active") as StaffMember["status"];
+  const shiftId = row.shift_id ?? row.shift ?? "morning";
+  const shiftLabel = row.shift_label ?? row.shift ?? "Morning";
+  const position = row.position ?? row.role_name ?? "Staff";
 
   return {
-    id: asString(raw.id ?? raw.key ?? name ?? index, String(index)),
-    name,
-    city: asString(raw.city, ""),
-  };
+    id: String(row.id),
+    employeeId: String(personCode || row.employee_id || row.id),
+    personCode,
+    registrationNumber:
+      peopleType === "student"
+        ? personCode
+        : firstText(row.registrationNumber, row.registration_number),
+    userId: String(row.id),
+
+    name: row.name,
+    email: row.email ?? "",
+    phone: row.phone ?? "",
+    archiveReason: String(
+      (row as any).archive_reason ??
+      (row as any).archiveReason ??
+      (row as any).archived_reason ??
+      (row as any).deletion_reason ??
+      "",
+    ),
+    archivedAt: String((row as any).archived_at ?? (row as any).deleted_at ?? ""),
+
+    branchId,
+    branchName: row.branchName ?? row.branch_name ?? "",
+
+    // row.department is now the backend's resolved display value: the live
+    // department's name when department_id is set, else the legacy
+    // free-text name for staff never migrated (see _client_staff_safe's
+    // department_display). row.department_id is the raw id, needed to seed
+    // the Live Assignment dropdown on Edit — see StaffModal.tsx's
+    // liveDepartmentId initializer.
+    department: row.department ?? row.department_name ?? "",
+    departmentId: row.department_id ?? row.departmentId ?? null,
+    classId: row.class_id ?? row.classId ?? null,
+    sectionId: row.section_id ?? row.sectionId ?? null,
+    designationId: row.designation_id ?? row.designationId ?? null,
+    designationName: row.designation_name ?? row.designationName ?? "",
+    role: position,
+    position,
+    peopleType,
+    personType: peopleType,
+
+    status,
+    salary: Number(row.salary ?? 0),
+    joinDate: row.join_date ?? "",
+
+    staffType: row.staff_type ?? "office",
+
+    shift: String(shiftId) as StaffMember["shift"],
+    shiftId: String(shiftId) as ShiftDefinition["id"],
+    shiftLabel: String(shiftLabel),
+    shiftStart: row.duty_start ?? "09:00",
+    shiftEnd: row.duty_end ?? "17:00",
+    // The backend now resolves shift_id_ref -> the real `shifts` row and
+    // folds its name/check_in_time/check_out_time into shift_label/
+    // duty_start/duty_end above, so shiftLabel/shiftStart/shiftEnd are
+    // already correct post-fix. shiftIdRef is carried through anyway so any
+    // UI that needs to know "does this person have a real shift assigned"
+    // (vs. the legacy free-text shift) doesn't have to re-derive it.
+    shiftIdRef: row.shiftIdRef ?? row.shift_id_ref ?? null,
+
+    moduleAccess: row.access_modules ?? [],
+    accessModules: row.access_modules ?? [],
+
+    presentDays: 0,
+
+    profileImageUrl: row.profile_image_url ?? undefined,
+    profileImageName: row.profile_image_name ?? undefined,
+
+    createdAt: row.created_at ?? now,
+    updatedAt: row.updated_at ?? row.created_at ?? now,
+
+    // Field-staff geofence (static-location scenario) — null/undefined
+    // means "not configured yet," which the mobile app and dashboard both
+    // need to distinguish from "configured at 0,0."
+    geofenceLat: firstNumberOrNull(row.geofenceLat, row.geofence_lat),
+    geofenceLng: firstNumberOrNull(row.geofenceLng, row.geofence_lng),
+    geofenceRadiusMeters: firstNumberOrNull(
+      row.geofenceRadiusMeters,
+      row.geofence_radius_meters,
+    ),
+    geofenceLabel: firstText(row.geofenceLabel, row.geofence_label),
+
+    // Office-staff WiFi config — replaces the app's old hardcoded
+    // SSID/single-BSSID constants. bssidList supports mesh offices with
+    // multiple access points on the same SSID.
+    officeSsid: firstText(row.officeSsid, row.office_ssid),
+    officeBssidList: firstStringArray(
+      row.officeBssidList,
+      row.office_bssid_list,
+    ),
+
+    // Identity documents. Cast through `as StaffMember` below like every
+    // other field in this object, since ModuleContext's StaffMember type
+    // isn't the source of truth here — StaffManagement's own StaffMember
+    // (built from this via toStaffMember) is what actually declares these.
+    cnic: firstText(row.cnic),
+    fatherName: firstText(row.fatherName, row.father_name),
+    fatherCnic: firstText(row.fatherCnic, row.father_cnic),
+    fatherPhone: firstText(
+      row.fatherPhone,
+      row.father_phone,
+      row.fatherNumber,
+      row.father_number,
+    ),
+  } as StaffMember;
 }
 
-export function configItemName(value: unknown): string {
-  return toNamedConfigOption(value, 0).name;
+/**
+ * Backend user id for a staff row — the id every /api/staff/:id endpoint
+ * expects. Accepts the Directory's StaffMember as well as the ModuleContext
+ * one (both carry `userId`/`id`).
+ */
+export function backendUserId(
+  member: Pick<StaffMember, "id" | "userId">,
+): number | string | null {
+  return backendStaffId(member as StaffMember);
 }
 
-// ─── Branch id resolution (UI ordinal -> backend UUID) ───────────────────────
-// Every branch-scoped attendance-settings endpoint (shifts, departments,
-// capture settings, visit plans) requires the real Supabase branch UUID and
-// rejects anything else — see support_db_time_utils.get_branch_owned_by_org,
-// which UUID-parses branch_id before ever querying the DB. cfg.branches[i].id
-// is a local UI ordinal (1, 2, 3…), NOT that UUID, so it must never be sent to
-// those endpoints directly. resolveApiBranchId (utils/tenantScope.ts) is the
-// single canonical resolver for this translation — imported here rather than
-// re-implemented, so there is exactly one place in the frontend that knows
-// how to turn a UI branch id into the backend id.
+/**
+ * ModuleContext rows are produced by apiUserToStaffMember(), which already
+ * fills every Directory field (shift, CNIC, hierarchy, ...). The Directory
+ * simply reads them through its own, richer StaffMember type.
+ */
+export function toStaffMember(member: StaffMember): DirectoryStaffMember {
+  return member as unknown as DirectoryStaffMember;
+}

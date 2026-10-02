@@ -63,6 +63,51 @@ export async function confirmDialog(opts: {
   });
 }
 
+/**
+ * Confirm dialog with a required free-text reason. Resolves to the trimmed
+ * reason when confirmed, or null when cancelled.
+ */
+export async function reasonDialog(opts: {
+  title?: string;
+  text?: string;
+  placeholder?: string;
+  confirmButtonText?: string;
+  cancelButtonText?: string;
+  minLength?: number;
+}): Promise<string | null> {
+  const {
+    title,
+    text,
+    placeholder = "Write the reason here…",
+    confirmButtonText = "Confirm",
+    cancelButtonText = "Cancel",
+    minLength = 3,
+  } = opts;
+  const result = await Swal.fire({
+    ...swalDefaults,
+    title,
+    text,
+    icon: "warning",
+    input: "textarea",
+    inputPlaceholder: placeholder,
+    inputAttributes: { maxlength: "500", "aria-label": "Reason" },
+    showCancelButton: true,
+    confirmButtonText,
+    cancelButtonText,
+    focusCancel: false,
+    confirmButtonColor: T.teal600,
+    preConfirm: (value: string) => {
+      const reason = (value ?? "").trim();
+      if (reason.length < minLength) {
+        Swal.showValidationMessage("A reason is required.");
+        return false;
+      }
+      return reason;
+    },
+  });
+  return result.isConfirmed ? String(result.value ?? "").trim() : null;
+}
+
 export async function alertDialog(opts: {
   title?: string;
   text?: string;
@@ -82,6 +127,7 @@ export async function alertDialog(opts: {
 
 export default {
   toastSuccess,
+  reasonDialog,
   toastError,
   toastInfo,
   confirmDialog,

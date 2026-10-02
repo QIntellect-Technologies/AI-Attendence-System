@@ -698,6 +698,7 @@ export async function setBranchDefaultShift(
     shift_id?: string | null;
     check_in_grace_override?: number | null;
     check_out_grace_override?: number | null;
+    force_override?: boolean;
   },
 ): Promise<Record<string, unknown>> {
   const res = await clientJson<{ default_shift: Record<string, unknown> }>(

@@ -1,13 +1,12 @@
-/**
- * pages/StaffManagement/components/StaffRow.tsx
- * ─────────────────────────────────────────────────────────────────────────────
- * One row of the people table. Cell alignment and text both come from
- * utils/staffTable so the row can't drift from the header.
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
 import React, { type FC, useState } from "react";
-import { Building2, Clock, Edit2, Eye, KeyRound, MapPin, Trash2 } from "lucide-react";
+import {
+  Building2,
+  Edit2,
+  Eye,
+  KeyRound,
+  MapPin,
+  Trash2,
+} from "lucide-react";
 import { T } from "../../../components/ui/theme";
 import { Spinner } from "../../../components/ui/Spinner";
 import { useAuthenticatedImageUrl } from "../../../hooks/useAuthenticatedImageUrl";
@@ -40,10 +39,13 @@ export const StaffRow: FC<{
   onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onOverride: () => void;
   /** "Generate Credentials" row action — only meaningful (and only
    * rendered) when peopleModel.shouldGenerateCredentials is true. */
   onGenerateCredentials: () => void;
+  /** Optional: jump to the Shifts tab with this person pre-selected.
+   * Accepted so the parent type-checks; not rendered as a button yet
+   * because the actions column is a fixed width. */
+  onOverride?: () => void;
   canDelete: boolean;
   branchName: (id: number) => string;
   highlighted?: boolean;
@@ -61,7 +63,6 @@ export const StaffRow: FC<{
   onView,
   onEdit,
   onDelete,
-  onOverride,
   onGenerateCredentials,
   canDelete,
   branchName,
@@ -114,9 +115,6 @@ export const StaffRow: FC<{
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: T.head }}>
                 {member.name}
-              </div>
-              <div style={{ fontSize: 11, color: T.muted }}>
-                {member.personCode || member.employeeId || "—"}
               </div>
             </div>
           </div>
@@ -250,9 +248,6 @@ export const StaffRow: FC<{
             }}
           >
             <Edit2 size={13} color={T.navy600} />
-          </button>
-          <button type="button" onClick={onOverride} style={iconBtn}>
-            <Clock size={13} color={T.teal600} />
           </button>
           {peopleModel.shouldGenerateCredentials && (
             <button

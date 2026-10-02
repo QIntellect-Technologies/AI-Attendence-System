@@ -4,7 +4,7 @@
  * Branch-scoped Overview tab.
  */
 
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { TrendingUp, UserCheck, Users, UserX } from "lucide-react";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
@@ -27,19 +27,49 @@ import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry"
 import type { DashboardLiveLogItem } from "../../hooks/useDashboardOverviewData";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
 import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
-import KpiDropdown, { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
+import { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
 import type { KpiDeptRow } from "../../components/dashboard/overview/KpiDropdown";
 
-import {
-  AttendancePerformanceCard,
-  CctvStatusCard,
-  PayrollTrendsCard,
-  PendingLeavesCard,
-  ShiftDistributionCard,
-  StatCard,
-  TodayStatusCard,
-  WeeklyAttendanceCard,
-} from "../../components/dashboard/overview";
+const KpiDropdown = lazy(() => import("../../components/dashboard/overview/KpiDropdown"));
+const StatCard = lazy(() => import("../../components/dashboard/overview").then(m => ({ default: m.StatCard })));
+const AttendancePerformanceCard = lazy(() => import("../../components/dashboard/overview/AttendancePerformanceCard"));
+const CctvStatusCard = lazy(() => import("../../components/dashboard/overview/CctvStatusCard"));
+const DepartmentPayrollCard = lazy(() => import("../../components/dashboard/overview/DepartmentPayrollCard"));
+const PayrollTrendsCard = lazy(() => import("../../components/dashboard/overview/PayrollTrendsCard"));
+const PendingLeavesCard = lazy(() => import("../../components/dashboard/overview/PendingLeavesCard"));
+const ShiftDistributionCard = lazy(() => import("../../components/dashboard/overview/ShiftDistributionCard"));
+const TodayStatusCard = lazy(() => import("../../components/dashboard/overview/TodayStatusCard"));
+const WeeklyAttendanceCard = lazy(() => import("../../components/dashboard/overview/WeeklyAttendanceCard"));
+
+const WidgetLoader: React.FC = () => (
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minHeight: 220,
+      width: "100%",
+      background: T.card,
+      borderRadius: 16,
+      border: `1px solid ${T.border}`,
+      gap: 12,
+      color: T.muted,
+    }}
+  >
+    <div
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: "50%",
+        border: `3px solid ${T.teal100}`,
+        borderTopColor: T.teal600,
+        animation: "spin .65s linear infinite",
+      }}
+    />
+    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    <span style={{ fontSize: 13, fontWeight: 500 }}>Loading…</span>
+  </div>
+);
 
 export type BranchOverviewBranchId = number | string;
 
@@ -83,7 +113,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     effectivePeopleType ?? undefined,
   );
 
-  useMemo(() => {
+  useEffect(() => {
     if (!activePeopleTypes.length) return;
     if (!selectedPeopleType && defaultType) {
       setSelectedPeopleType(defaultType);
@@ -142,7 +172,13 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     year: "numeric",
   });
 
-  const isInitialLoading = Boolean(data.loading && !data.error);
+  // Show skeleton loaders on first render regardless of cache speed
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setHasMounted(true), 50);
+    return () => clearTimeout(timer);
+  }, []);
+  const isInitialLoading = !hasMounted || Boolean(data.loading && !data.error);
   const statValue = (value: number | string): number | string =>
     isInitialLoading ? "—" : value;
   const statSub = (value: string): string =>
@@ -167,9 +203,9 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
 
   useEffect(() => {
     if (!showAttendanceModule) return;
-    getAttendanceLogs(500).then(setFetchedLogs).catch(() => {});
+    getAttendanceLogs(500).then(setFetchedLogs).catch(() => { });
     if (user?.org_id || user?.organization_id) {
-      listStaffRecords({ organizationId: user?.org_id || user?.organization_id }).then(setAllStaff).catch(() => {});
+      listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number }).then(setAllStaff).catch(() => { });
     }
   }, [showAttendanceModule, user?.org_id, user?.organization_id]);
 
@@ -221,6 +257,17 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     }));
   }, [fetchedLogs, allStaff]);
 
+  // Branch-scoped staff for the department allocation chart. `allStaff` is
+  // fetched org-wide, so narrow it to this branch when records carry a branch id.
+  const branchStaff = useMemo(
+    () =>
+      allStaff.filter((s) => {
+        const sid = s.branch_id ?? s.branchId;
+        return sid === undefined || sid === null || String(sid) === String(branchId);
+      }),
+    [allStaff, branchId],
+  );
+
   const headerActions = (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       {activePeopleTypes.length > 1 && (
@@ -232,7 +279,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
           minWidth={150}
         />
       )}
-      <RefreshButton variant="secondary" size="md" onClick={() => undefined} />
+      <RefreshButton variant="secondary" size="md" onClick={() => { void data.refresh?.(); }} />
     </div>
   );
 
@@ -315,88 +362,106 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       </div>
 
       {(showPeopleCountCard || showAttendanceModule) && (
-        <div style={gridAuto(220)}>
-          {showPeopleCountCard && (
-            <div style={{ position: "relative" }}>
-              <StatCard
-                title={totalPeopleTitle}
-                value={statValue(data.stats.totalStaff)}
-                sub="Active records"
-                icon={Users}
-                iconBg={T.teal100}
-                iconColor={T.teal600}
-                onClick={() => navigateToModule("employees")}
-              />
-            </div>
-          )}
+        <Suspense fallback={<WidgetLoader />}>
+          <div style={gridAuto(220)}>
+            {showPeopleCountCard && (
+              <div style={{ position: "relative" }}>
+                {isInitialLoading ? <WidgetLoader /> : (
+                  <StatCard
+                    title={totalPeopleTitle}
+                    value={statValue(data.stats.totalStaff)}
+                    sub="Active records"
+                    icon={Users}
+                    iconBg={T.teal100}
+                    iconColor={T.teal600}
+                    onClick={() => navigateToModule("employees")}
+                  />
+                )}
+              </div>
+            )}
 
-          {showAttendanceModule && (
-            <div ref={presentCardRef} style={{ position: "relative" }}>
-              <StatCard
-                title="Present Today"
-                value={statValue(data.stats.presentToday)}
-                sub={statSub(`${data.stats.avgAttendance}% attendance`)}
-                icon={UserCheck}
-                iconBg="#134E6320"
-                iconColor={T.navy700}
-                onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
-              />
-              <KpiDropdown
-                open={kpiDropdown === "present"}
-                label="Present by Department"
-                rows={deptPresentRows}
-                triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
-                onClose={() => setKpiDropdown(null)}
-                onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
-              />
-            </div>
-          )}
+            {showAttendanceModule && (
+              <div ref={presentCardRef} style={{ position: "relative" }}>
+                {isInitialLoading ? <WidgetLoader /> : (
+                  <StatCard
+                    title="Present Today"
+                    value={statValue(data.stats.presentToday)}
+                    sub={statSub(`${data.stats.avgAttendance}% attendance`)}
+                    icon={UserCheck}
+                    iconBg="#134E6320"
+                    iconColor={T.navy700}
+                    onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
+                  />
+                )}
+                <KpiDropdown
+                  open={kpiDropdown === "present"}
+                  label="Present by Department"
+                  rows={deptPresentRows}
+                  triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
+                  onClose={() => setKpiDropdown(null)}
+                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                />
+              </div>
+            )}
 
-          {showAttendanceModule && (
-            <div ref={absentCardRef} style={{ position: "relative" }}>
-              <StatCard
-                title="Absent Today"
-                value={statValue(data.stats.absentToday)}
-                sub={statSub(`${data.stats.lateToday} late`)}
-                icon={UserX}
-                iconBg="#FFF1F2"
-                iconColor="#E11D48"
-                onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
-              />
-              <KpiDropdown
-                open={kpiDropdown === "absent"}
-                label="Absent by Department"
-                rows={deptAbsentRows}
-                triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
-                onClose={() => setKpiDropdown(null)}
-                onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
-              />
-            </div>
-          )}
+            {showAttendanceModule && (
+              <div ref={absentCardRef} style={{ position: "relative" }}>
+                {isInitialLoading ? <WidgetLoader /> : (
+                  <StatCard
+                    title="Absent Today"
+                    value={statValue(data.stats.absentToday)}
+                    sub={statSub(`${data.stats.lateToday} late`)}
+                    icon={UserX}
+                    iconBg="#FFF1F2"
+                    iconColor="#E11D48"
+                    onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
+                  />
+                )}
+                <KpiDropdown
+                  open={kpiDropdown === "absent"}
+                  label="Absent by Department"
+                  rows={deptAbsentRows}
+                  triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
+                  onClose={() => setKpiDropdown(null)}
+                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                />
+              </div>
+            )}
 
-          {showAttendanceModule && (
-            <StatCard
-              title="Avg Attendance"
-              value={statValue(`${data.stats.avgAttendance}%`)}
-              icon={TrendingUp}
-              iconBg={T.amberBg}
-              iconColor={T.amber}
-            />
-          )}
-        </div>
+            {showAttendanceModule && (
+              isInitialLoading ? <WidgetLoader /> : (
+                <StatCard
+                  title="Avg Attendance"
+                  value={statValue(`${data.stats.avgAttendance}%`)}
+                  icon={TrendingUp}
+                  iconBg={T.amberBg}
+                  iconColor={T.amber}
+                />
+              )
+            )}
+          </div>
+        </Suspense>
       )}
 
       {(showAttendanceModule || showShiftDistribution) && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "620px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
           {showShiftDistribution && (
-            <ShiftDistributionCard shifts={data.shiftDistribution} />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <ShiftDistributionCard shifts={data.shiftDistribution} />
+              )}
+            </Suspense>
           )}
           {showAttendanceModule && (
-            <TodayStatusCard
-              data={data.todayStatus}
-              presentToday={data.stats.presentToday}
-              totalStaff={data.stats.totalStaff}
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <TodayStatusCard
+                  data={data.todayStatus}
+                  presentToday={data.stats.presentToday}
+                  totalStaff={data.stats.totalStaff}
+                />
+              )}
+            </Suspense>
           )}
         </div>
       )}
@@ -404,45 +469,74 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       {(showAttendanceModule || showLeaveModule || showCctvDashboard) && (
         <div style={equalSummaryWidgetGrid(300)}>
           {showAttendanceModule && (
-            <WeeklyAttendanceCard
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-              data={data.weeklyAttendance}
-              fetchedLogs={fetchedLogs}
-              allStaff={allStaff}
-              title="Attendance"
-              showBranchDropdown={false}
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <WeeklyAttendanceCard
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                  listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                  data={data.weeklyAttendance}
+                  fetchedLogs={fetchedLogs}
+                  allStaff={allStaff}
+                  title="Attendance"
+                  showBranchDropdown={false}
+                />
+              )}
+            </Suspense>
+          )}
+
+          {showAttendanceModule && (
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <AttendancePerformanceCard
+                  data={data.attendancePerformance}
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                />
+              )}
+            </Suspense>
           )}
 
           {showLeaveModule && (
-            <PendingLeavesCard
-              branchId={branchId}
-              showBranchName={false}
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <PendingLeavesCard
+                  branchId={branchId}
+                  showBranchName={false}
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                  listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                />
+              )}
+            </Suspense>
           )}
 
           {showCctvDashboard && (
-            <CctvStatusCard
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-              items={cctvItems}
-              showBranchName={false}
-              hideWhenEmpty
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <CctvStatusCard
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                  listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                  items={cctvItems}
+                  showBranchName={false}
+                  hideWhenEmpty
+                />
+              )}
+            </Suspense>
           )}
         </div>
       )}
 
-      {(showAttendanceModule || showPayrollModule) && (
+      {showPayrollModule && (
         <div className="branch-overview-performance-grid" style={gridAuto(360)}>
-          {showAttendanceModule && (
-            <AttendancePerformanceCard data={data.attendancePerformance} />
-          )}
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <PayrollTrendsCard data={data.payrollTrends} />
+            )}
+          </Suspense>
 
-          {showPayrollModule && <PayrollTrendsCard data={data.payrollTrends} />}
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <DepartmentPayrollCard allStaff={branchStaff} />
+            )}
+          </Suspense>
         </div>
       )}
     </div>

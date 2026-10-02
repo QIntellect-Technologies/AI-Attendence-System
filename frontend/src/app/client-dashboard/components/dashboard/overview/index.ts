@@ -10,3 +10,4 @@ export { default as CctvStatusCard } from "./CctvStatusCard";
 export { default as AttendancePerformanceCard } from "./AttendancePerformanceCard";
 export { default as PayrollTrendsCard } from "./PayrollTrendsCard";
 export { default as BranchFilterSelect } from "./BranchFilterSelect";
+export { default as OvertimeTrendsCard } from './OvertimeTrendsCard';

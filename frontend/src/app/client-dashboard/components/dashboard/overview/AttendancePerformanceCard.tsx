@@ -46,6 +46,8 @@ interface AttendancePerformanceCardProps {
   data: AttendancePerformanceItem[];
   branchSeries?: BranchAttendanceSeries[];
   action?: React.ReactNode;
+  /** Fixed card height — use to match sibling cards in an equal-height row. */
+  height?: number;
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ const AttendancePerformanceCard: React.FC<AttendancePerformanceCardProps> = ({
   data,
   branchSeries,
   action,
+  height,
 }) => {
   const isGlobal = Array.isArray(branchSeries) && branchSeries.length > 0;
 
@@ -90,6 +93,7 @@ const AttendancePerformanceCard: React.FC<AttendancePerformanceCardProps> = ({
         border: "1px solid #EEF2F7",
         padding: "16px 18px 14px",
         fontFamily: "'DM Sans', sans-serif",
+        ...(height ? { height, boxSizing: "border-box", overflow: "hidden" } : {}),
       }}
     >
       {/* Header */}
@@ -143,7 +147,7 @@ const AttendancePerformanceCard: React.FC<AttendancePerformanceCardProps> = ({
         series={multiSeries}
         segmentLabels={SEGMENT_LABELS}
         colors={SINGLE_COLORS}
-        singleHeight={220}
+        singleHeight={height ? Math.max(180, height - 100) : 220}
         multiHeight={200}
       />
     </div>

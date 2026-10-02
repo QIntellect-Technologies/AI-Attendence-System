@@ -1,16 +1,17 @@
-/**
- * ShiftDistributionCard.tsx
- */
-
 import React, { useState } from "react";
-import { Sun, Sunset, Moon, Settings2, ChevronRight, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Sun, Sunset, Moon, Settings2, X } from "lucide-react";
 import DashboardCard from "./DashboardCard";
 import { T } from "../../ui/theme";
 import type { ShiftDistributionItem } from "../../../hooks/useDashboardOverviewData";
 
 interface ShiftDistributionCardProps {
   shifts: ShiftDistributionItem[];
+  /** Called when user clicks "View all members" inside the popup. */
+  onViewMore?: (shiftKey: string) => void;
 }
+
+// ─── Shift visual map ────────────────────────────────────────────────────────
 
 function visualForShift(shift: ShiftDistributionItem) {
   const startHour = parseInt(shift.time.match(/^(\d{1,2}):/)?.[1] ?? "", 10);
@@ -21,34 +22,11 @@ function visualForShift(shift: ShiftDistributionItem) {
   return SHIFT_VISUALS.Custom;
 }
 
-const SHIFT_VISUALS: Record<
-  string,
-  {
-    icon: React.ElementType;
-    iconBg: string;
-    iconColor: string;
-  }
-> = {
-  Morning: {
-    icon: Sun,
-    iconBg: "#FEF3C7",
-    iconColor: T.amber,
-  },
-  Evening: {
-    icon: Sunset,
-    iconBg: "#EDE9FE",
-    iconColor: "#7C3AED",
-  },
-  Night: {
-    icon: Moon,
-    iconBg: T.teal100,
-    iconColor: T.teal600,
-  },
-  Custom: {
-    icon: Settings2,
-    iconBg: "#DBEAFE",
-    iconColor: "#1D4ED8",
-  },
+const SHIFT_VISUALS: Record<string, { icon: React.ElementType; iconBg: string; iconColor: string }> = {
+  Morning: { icon: Sun, iconBg: "#FEF3C7", iconColor: T.amber },
+  Evening: { icon: Sunset, iconBg: "#EDE9FE", iconColor: "#7C3AED" },
+  Night: { icon: Moon, iconBg: T.teal100, iconColor: T.teal600 },
+  Custom: { icon: Settings2, iconBg: "#DBEAFE", iconColor: "#1D4ED8" },
 };
 
 const DEPT_COLORS: Record<string, [string, string]> = {
@@ -64,38 +42,229 @@ const DEPT_COLORS: Record<string, [string, string]> = {
 };
 
 function initials(name: string) {
-  return name
-    .split(" ")
-    .map((word) => word[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  return name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
 }
 
-function safeDepartmentMembers(
-  dept: ShiftDistributionItem["branches"][number]["departments"][number],
-): ShiftDistributionItem["members"] {
-  return Array.isArray(dept.members) ? dept.members : [];
+// ─── Popup modal ─────────────────────────────────────────────────────────────
+
+interface ShiftModalProps {
+  shift: ShiftDistributionItem;
+  onClose: () => void;
+  onViewMore?: (shiftKey: string) => void;
 }
 
-const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({
-  shifts,
-}) => {
-  const [activeShift, setActiveShift] = useState<ShiftDistributionItem | null>(
-    null,
-  );
-  const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>(
-    {},
-  );
+const ShiftModal: React.FC<ShiftModalProps> = ({ shift, onClose, onViewMore }) => {
+  const visual = visualForShift(shift);
+  const Icon = visual.icon;
+  const members = shift.members ?? [];
+  const preview = members.slice(0, 5);
+  const hasMore = shift.staffCount > 5;
 
-  const toggleDept = (dept: string) => {
-    setExpandedDepts((prev) => ({
-      ...prev,
-      [dept]: prev[dept] === false,
-    }));
-  };
+  return createPortal(
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(10,30,50,0.40)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1200,
+        backdropFilter: "blur(2px)",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: T.card,
+          border: `1px solid ${T.border}`,
+          borderRadius: 20,
+          width: 440,
+          maxWidth: "92vw",
+          maxHeight: "82vh",
+          fontFamily: "'DM Sans', sans-serif",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 24px 64px rgba(10,30,60,0.22)",
+          overflow: "hidden",
+        }}
+      >
+        {/* ── Header ── */}
+        <div
+          style={{
+            padding: "18px 20px 14px",
+            borderBottom: `1px solid ${T.border}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+          }}
+        >
+          <div
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 12,
+              background: visual.iconBg,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Icon size={20} color={visual.iconColor} />
+          </div>
 
-  const isDeptOpen = (dept: string) => expandedDepts[dept] !== false;
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 15, fontWeight: 700, color: T.head }}>
+              {shift.label}
+            </p>
+            <p style={{ fontSize: 12, color: T.muted }}>{shift.time}</p>
+          </div>
+
+          <div style={{ textAlign: "right", marginRight: 6 }}>
+            <p style={{ fontSize: 24, fontWeight: 800, color: T.head, lineHeight: 1 }}>
+              {shift.staffCount}
+            </p>
+            <p style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>staff</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              width: 30, height: 30, borderRadius: 8,
+              border: `1px solid ${T.border}`, background: "none",
+              cursor: "pointer", color: T.muted,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* ── Dept summary pills ── */}
+        {shift.departments.length > 0 && (
+          <div
+            style={{
+              padding: "10px 20px",
+              borderBottom: `1px solid ${T.border}`,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 6,
+            }}
+          >
+            {shift.departments.map(dept => {
+              const [bg, color] = DEPT_COLORS[dept.name] ?? [T.slate100, T.body];
+              return (
+                <span
+                  key={dept.name}
+                  style={{
+                    fontSize: 11, fontWeight: 600,
+                    padding: "3px 9px", borderRadius: 20,
+                    background: bg, color,
+                  }}
+                >
+                  {dept.count} {dept.name}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Member list ── */}
+        <div
+          className="hide-scrollbar"
+          style={{ overflowY: "auto", flex: 1, padding: "8px 12px" }}
+        >
+          {preview.length === 0 ? (
+            <p style={{ fontSize: 13, color: T.muted, textAlign: "center", padding: "28px 0" }}>
+              No staff assigned to this shift
+            </p>
+          ) : (
+            preview.map(member => (
+              <div
+                key={member.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "9px 8px", borderRadius: 10,
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = T.slate50; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+              >
+                {/* Avatar */}
+                <div
+                  style={{
+                    width: 36, height: 36, borderRadius: "50%",
+                    background: T.teal100, color: T.teal600,
+                    fontSize: 12, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  {initials(member.name)}
+                </div>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{
+                    fontSize: 13, fontWeight: 600, color: T.head,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {member.name}
+                  </p>
+                  <p style={{ fontSize: 11, color: T.muted }}>
+                    {member.position || member.department}
+                  </p>
+                </div>
+
+                {/* Dept badge */}
+                {(() => {
+                  const [bg, color] = DEPT_COLORS[member.department] ?? [T.slate100, T.muted];
+                  return (
+                    <span style={{
+                      fontSize: 10, fontWeight: 600,
+                      padding: "3px 9px", borderRadius: 20,
+                      background: bg, color, whiteSpace: "nowrap", flexShrink: 0,
+                    }}>
+                      {member.department}
+                    </span>
+                  );
+                })()}
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* ── View More footer ── */}
+        {(hasMore || onViewMore) && preview.length > 0 && (
+          <div
+            onClick={() => { onClose(); onViewMore?.(shift.key); }}
+            style={{
+              borderTop: `1px solid ${T.border}`,
+              padding: "12px 20px",
+              fontSize: 12, fontWeight: 700,
+              color: T.teal600, textAlign: "center",
+              cursor: "pointer",
+              background: T.teal50,
+              transition: "background .15s",
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = T.teal100; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = T.teal50; }}
+          >
+            View all {shift.staffCount} members →
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
+// ─── Card ─────────────────────────────────────────────────────────────────────
+
+const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({ shifts, onViewMore }) => {
+  const [activeShift, setActiveShift] = useState<ShiftDistributionItem | null>(null);
 
   return (
     <>
@@ -114,7 +283,7 @@ const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({
             gap: 10,
           }}
         >
-          {shifts.map((shift) => {
+          {shifts.map(shift => {
             const visual = visualForShift(shift);
             const Icon = visual.icon;
 
@@ -132,118 +301,67 @@ const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({
                   gap: 14,
                   transition: "background .15s, border-color .15s",
                 }}
-                onMouseEnter={(event) => {
-                  event.currentTarget.style.background = T.slate50;
-                }}
-                onMouseLeave={(event) => {
-                  event.currentTarget.style.background = "transparent";
-                }}
+                onMouseEnter={e => { e.currentTarget.style.background = T.slate50; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
               >
+                {/* Icon */}
                 <div
                   style={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: 10,
+                    width: 38, height: 38, borderRadius: 10,
                     background: visual.iconBg,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    display: "flex", alignItems: "center", justifyContent: "center",
                     flexShrink: 0,
                   }}
                 >
                   <Icon size={18} color={visual.iconColor} />
                 </div>
 
+                {/* Info */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: T.head,
-                      marginBottom: 2,
-                      fontFamily: "'DM Sans', sans-serif",
-                    }}
-                  >
+                  <p style={{
+                    fontSize: 13, fontWeight: 700, color: T.head,
+                    marginBottom: 2,
+                  }}>
                     {shift.label}
                   </p>
                   <p style={{ fontSize: 11, color: T.muted }}>{shift.time}</p>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 4,
-                      marginTop: 6,
-                    }}
-                  >
+                  {/* Dept pills */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
                     {shift.departments.length === 0 && (
-                      <span style={{ fontSize: 10, color: T.muted }}>
-                        No staff
-                      </span>
+                      <span style={{ fontSize: 10, color: T.muted }}>No staff</span>
                     )}
-
-                    {shift.departments.slice(0, 2).map((dept) => {
-                      const [bg, color] = DEPT_COLORS[dept.name] ?? [
-                        T.slate100,
-                        T.body,
-                      ];
-
+                    {shift.departments.slice(0, 2).map(dept => {
+                      const [bg, color] = DEPT_COLORS[dept.name] ?? [T.slate100, T.body];
                       return (
-                        <span
-                          key={dept.name}
-                          style={{
-                            fontSize: 10,
-                            padding: "2px 7px",
-                            borderRadius: 20,
-                            background: bg,
-                            color,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
+                        <span key={dept.name} style={{
+                          fontSize: 10, padding: "2px 7px", borderRadius: 20,
+                          background: bg, color, whiteSpace: "nowrap",
+                        }}>
                           {dept.count} {dept.name}
                         </span>
                       );
                     })}
-
                     {shift.departments.length > 2 && (
-                      <span
-                        style={{
-                          fontSize: 10,
-                          padding: "2px 7px",
-                          borderRadius: 20,
-                          background: T.slate100,
-                          color: T.muted,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
+                      <span style={{
+                        fontSize: 10, padding: "2px 7px", borderRadius: 20,
+                        background: T.slate100, color: T.muted,
+                      }}>
                         +{shift.departments.length - 2} more
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    flexShrink: 0,
-                  }}
-                >
-                  <p
-                    style={{
-                      fontSize: 22,
-                      fontWeight: 700,
-                      color: T.head,
-                      lineHeight: 1,
-                      fontFamily: "'DM Sans', sans-serif",
-                    }}
-                  >
+                {/* Staff count */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <p style={{
+                    fontSize: 22, fontWeight: 700, color: T.head,
+                    lineHeight: 1,
+                  }}>
                     {shift.staffCount}
                   </p>
-                  <p style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>
-                    staff
-                  </p>
+                  <p style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>staff</p>
                 </div>
               </div>
             );
@@ -251,254 +369,13 @@ const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({
         </div>
       </DashboardCard>
 
+      {/* ── Popup modal ── */}
       {activeShift && (
-        <div
-          onClick={() => setActiveShift(null)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,45,74,0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            style={{
-              background: T.card,
-              border: `1px solid ${T.border}`,
-              borderRadius: 20,
-              padding: 24,
-              width: 500,
-              maxWidth: "90vw",
-              maxHeight: "80vh",
-              overflowY: "auto",
-              boxShadow: "0 20px 60px rgba(15,45,74,0.25)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 20,
-              }}
-            >
-              <div>
-                <p
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    color: T.head,
-                    fontFamily: "'DM Sans', sans-serif",
-                  }}
-                >
-                  {activeShift.label}
-                </p>
-                <p style={{ fontSize: 12, color: T.muted }}>
-                  {activeShift.time}
-                </p>
-              </div>
-
-              <button
-                onClick={() => setActiveShift(null)}
-                type="button"
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 8,
-                  border: `1px solid ${T.border}`,
-                  background: "none",
-                  cursor: "pointer",
-                  color: T.muted,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-
-            {activeShift.staffCount === 0 ? (
-              <p
-                style={{
-                  fontSize: 13,
-                  color: T.muted,
-                  textAlign: "center",
-                  padding: "30px 0",
-                }}
-              >
-                No staff assigned to this shift
-              </p>
-            ) : (
-              <>
-                <p style={{ fontSize: 12, color: T.muted, marginBottom: 16 }}>
-                  {activeShift.staffCount} staff across{" "}
-                  {activeShift.departments.length} department
-                  {activeShift.departments.length !== 1 ? "s" : ""}
-                </p>
-
-                {activeShift.branches.map((branch) => (
-                  <div key={branch.branchId} style={{ marginBottom: 14 }}>
-                    <div
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: 10,
-                        background: T.teal50,
-                        border: `1px solid ${T.teal100}`,
-                        marginBottom: 8,
-                      }}
-                    >
-                      <p
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 800,
-                          color: T.head,
-                          fontFamily: "'DM Sans', sans-serif",
-                        }}
-                      >
-                        {branch.branchName}
-                      </p>
-                      <p style={{ fontSize: 11, color: T.muted }}>
-                        {branch.city || "Branch"} · {branch.staffCount} staff
-                      </p>
-                    </div>
-
-                    {branch.departments.map((dept) => {
-                      const [bg, color] = DEPT_COLORS[dept.name] ?? [
-                        T.slate100,
-                        T.body,
-                      ];
-
-                      const deptKey = `${branch.branchId}-${dept.name}`;
-                      const isOpen = isDeptOpen(deptKey);
-
-                      return (
-                        <div key={deptKey} style={{ marginBottom: 8 }}>
-                          <div
-                            onClick={() => toggleDept(deptKey)}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              padding: "10px 14px",
-                              background: bg,
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              marginBottom: isOpen ? 6 : 0,
-                              border: `1px solid ${color}22`,
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 10,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  borderRadius: 8,
-                                  background: color,
-                                  color: "#fff",
-                                  fontSize: 12,
-                                  fontWeight: 700,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                }}
-                              >
-                                {dept.count}
-                              </div>
-
-                              <span
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: 700,
-                                  color,
-                                }}
-                              >
-                                {dept.name}
-                              </span>
-                            </div>
-
-                            <ChevronRight
-                              size={14}
-                              color={color}
-                              style={{
-                                transform: isOpen
-                                  ? "rotate(90deg)"
-                                  : "rotate(0deg)",
-                                transition: "transform .2s",
-                              }}
-                            />
-                          </div>
-
-                          {isOpen &&
-                            safeDepartmentMembers(dept).map((member) => (
-                              <div
-                                key={member.id}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 10,
-                                  padding: "7px 10px",
-                                  borderRadius: 8,
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    width: 30,
-                                    height: 30,
-                                    borderRadius: "50%",
-                                    background: bg,
-                                    color,
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                  }}
-                                >
-                                  {initials(member.name)}
-                                </div>
-
-                                <div style={{ flex: 1 }}>
-                                  <p style={{ fontSize: 13, color: T.head }}>
-                                    {member.name}
-                                  </p>
-                                  <p style={{ fontSize: 11, color: T.muted }}>
-                                    {member.position}
-                                  </p>
-                                </div>
-
-                                <span
-                                  style={{
-                                    fontSize: 10,
-                                    padding: "2px 8px",
-                                    borderRadius: 12,
-                                    background: bg,
-                                    color,
-                                  }}
-                                >
-                                  {member.department}
-                                </span>
-                              </div>
-                            ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        </div>
+        <ShiftModal
+          shift={activeShift}
+          onClose={() => setActiveShift(null)}
+          onViewMore={onViewMore}
+        />
       )}
     </>
   );

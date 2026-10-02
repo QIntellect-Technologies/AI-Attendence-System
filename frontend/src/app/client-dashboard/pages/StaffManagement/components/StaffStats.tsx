@@ -14,13 +14,23 @@ import { staffSalary } from "../utils/staffMember";
 // ─── Stat bar ─────────────────────────────────────────────────────────────────
 
 export const StaffStats: FC<{
+  /** Rows currently loaded (ONE page) - only used for the salary average and
+   * as a fallback while `counts` has not loaded yet. */
   staff: StaffMember[];
+  /** Directory-wide headcounts from the server (all pages). */
+  counts?: { total: number; active: number; inactiveOrPending: number } | null;
   peopleModel: PeopleRenderingModel;
   purchasedModules: string[];
-}> = ({ staff, peopleModel, purchasedModules }) => {
-  const active = staff.filter((s) => s.status === "active").length;
-  const inactive = staff.filter((s) => s.status === "inactive").length;
-  const pending = staff.filter((s) => s.status === "pending").length;
+}> = ({ staff, counts, peopleModel, purchasedModules }) => {
+  const pageActive = staff.filter((s) => s.status === "active").length;
+  const pageInactive = staff.filter((s) => s.status === "inactive").length;
+  const pagePending = staff.filter((s) => s.status === "pending").length;
+
+  const total = counts ? counts.total : staff.length;
+  const active = counts ? counts.active : pageActive;
+  const inactiveOrPending = counts
+    ? counts.inactiveOrPending
+    : pageInactive + pagePending;
   const payrollEnabled = purchasedModules
     .map((moduleKey) => String(moduleKey).trim().toLowerCase())
     .includes("payroll");
@@ -29,19 +39,19 @@ export const StaffStats: FC<{
   const cards: { label: string; val: number | string; color: string }[] = [
     {
       label: peopleModel.statsTotalLabel,
-      val: staff.length,
+      val: total,
       color: T.navy600,
     },
     { label: "Active", val: active, color: T.teal600 },
-    { label: "Inactive/Pending", val: inactive + pending, color: T.amber },
+    { label: "Inactive/Pending", val: inactiveOrPending, color: T.amber },
   ];
 
   if (showPayrollStats) {
     const avgSal = staff.length
       ? Math.round(
-          staff.reduce((acc, member) => acc + staffSalary(member), 0) /
-            staff.length,
-        )
+        staff.reduce((acc, member) => acc + staffSalary(member), 0) /
+        staff.length,
+      )
       : 0;
     cards.push({
       label: "Avg Salary",

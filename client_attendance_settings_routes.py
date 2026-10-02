@@ -274,6 +274,8 @@ def set_branch_default_shift(branch_id, people_type):
         shift_id = payload.get("shift_id")
         check_in_grace_override = payload.get("check_in_grace_override")
         check_out_grace_override = payload.get("check_out_grace_override")
+        force_override = bool(payload.get("force_override", False))
+
         result = settings_db.set_branch_default_shift(
             org_id,
             branch_id,
@@ -282,9 +284,20 @@ def set_branch_default_shift(branch_id, people_type):
             check_in_grace_override,
             check_out_grace_override,
         )
-        return ok({"default_shift": result})
+
+        # When force_override is True, the branch default takes "parent authority":
+        # every staff member in this branch+people_type gets shift_id_ref set
+        # directly, overriding any individual-level allocation.
+        affected = 0
+        if force_override and shift_id:
+            affected = settings_db.bulk_apply_shift_to_branch_staff(
+                org_id, branch_id, people_type, shift_id
+            )
+
+        return ok({"default_shift": result, "force_override_affected": affected})
 
     return handle(_run)
+
 
 
 # ─── Manual attendance instructions (admin-created overrides) ──────────────

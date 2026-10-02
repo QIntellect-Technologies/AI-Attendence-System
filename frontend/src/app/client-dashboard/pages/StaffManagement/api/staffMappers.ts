@@ -420,6 +420,14 @@ export function apiUserToStaffMember(user: User): StaffMember {
     name: row.name,
     email: row.email ?? "",
     phone: row.phone ?? "",
+    archiveReason: String(
+      (row as any).archive_reason ??
+      (row as any).archiveReason ??
+      (row as any).archived_reason ??
+      (row as any).deletion_reason ??
+      "",
+    ),
+    archivedAt: String((row as any).archived_at ?? (row as any).deleted_at ?? ""),
 
     branchId,
     branchName: row.branchName ?? row.branch_name ?? "",

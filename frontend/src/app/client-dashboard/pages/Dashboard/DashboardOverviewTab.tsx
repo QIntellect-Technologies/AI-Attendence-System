@@ -4,7 +4,7 @@
  * Super Admin / Global dashboard overview.
  */
 
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Users,
@@ -38,19 +38,54 @@ import {
 import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
 import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
-import KpiDropdown, { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
+import { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
 import type { KpiDeptRow } from "../../components/dashboard/overview/KpiDropdown";
 
-import {
-  StatCard,
-  TodayStatusCard,
-  WeeklyAttendanceCard,
-  PendingLeavesCard,
-  CctvStatusCard,
-  AttendancePerformanceCard,
-  PayrollTrendsCard,
-  ShiftDistributionCard,
-} from "../../components/dashboard/overview";
+const KpiDropdown = lazy(() => import("../../components/dashboard/overview/KpiDropdown"));
+const StatCard = lazy(() =>
+  import("../../components/dashboard/overview").then((m) => ({
+    default: m.StatCard,
+  })),
+);
+
+const AttendancePerformanceCard = lazy(() => import("../../components/dashboard/overview/AttendancePerformanceCard"));
+const CctvStatusCard = lazy(() => import("../../components/dashboard/overview/CctvStatusCard"));
+const PayrollTrendsCard = lazy(() => import("../../components/dashboard/overview/PayrollTrendsCard"));
+const PendingLeavesCard = lazy(() => import("../../components/dashboard/overview/PendingLeavesCard"));
+const ShiftDistributionCard = lazy(() => import("../../components/dashboard/overview/ShiftDistributionCard"));
+const TodayStatusCard = lazy(() => import("../../components/dashboard/overview/TodayStatusCard"));
+const WeeklyAttendanceCard = lazy(() => import("../../components/dashboard/overview/WeeklyAttendanceCard"));
+const DepartmentPayrollCard = lazy(() => import("../../components/dashboard/overview/DepartmentPayrollCard"));
+
+const WidgetLoader: React.FC = () => (
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minHeight: 350,
+      width: "100%",
+      background: T.card,
+      borderRadius: 16,
+      border: `1px solid ${T.border}`,
+      gap: 12,
+      color: T.muted,
+    }}
+  >
+    <div
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: "50%",
+        border: `3px solid ${T.teal100}`,
+        borderTopColor: T.teal600,
+        animation: "spin .65s linear infinite",
+      }}
+    />
+    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    <span style={{ fontSize: 13, fontWeight: 500 }}>Loading…</span>
+  </div>
+);
 
 const money = (value: number) =>
   value >= 1_000_000
@@ -115,7 +150,7 @@ const DashboardOverviewTab: React.FC = () => {
   // Keep the selection in sync with what's actually available: pick a
   // default once types load, and fall back if the previously selected type
   // drops out of the active set (e.g. after a module/config change).
-  useMemo(() => {
+  useEffect(() => {
     if (!activePeopleTypes.length) return;
     if (!selectedPeopleType && defaultPeopleType) {
       setSelectedPeopleType(defaultPeopleType);
@@ -165,11 +200,15 @@ const DashboardOverviewTab: React.FC = () => {
     peopleType: selectedPeopleType,
   });
 
-  const isInitialLoading = Boolean(data.loading && !data.error);
-  const statValue = (value: number | string): number | string =>
-    isInitialLoading ? "—" : value;
-  const statSub = (value: string): string =>
-    isInitialLoading ? "Loading…" : value;
+  // Show skeleton loaders on first render regardless of cache speed
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setHasMounted(true), 50);
+    return () => clearTimeout(timer);
+  }, []);
+  const isInitialLoading = !hasMounted || Boolean(data.loading && !data.error);
+  const statValue = (value: number | string): number | string => isInitialLoading ? value : value;
+  const statSub = (value: string): string => isInitialLoading ? "Loading..." : value;
 
   const isAllBranches = branch.isAllBranches;
   const cctvItems = data.cctvStatus.filter((item) => Boolean(item?.id));
@@ -213,9 +252,9 @@ const DashboardOverviewTab: React.FC = () => {
 
   useEffect(() => {
     if (!showAttendanceModule) return;
-    getAttendanceLogs(500).then(setFetchedLogs).catch(() => {});
+    getAttendanceLogs(500).then(setFetchedLogs).catch(() => { });
     if (user?.org_id || user?.organization_id) {
-      listStaffRecords({ organizationId: user?.org_id || user?.organization_id }).then(setAllStaff).catch(() => {});
+      listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number }).then(setAllStaff).catch(() => { });
     }
   }, [showAttendanceModule, user?.org_id, user?.organization_id]);
 
@@ -295,201 +334,256 @@ const DashboardOverviewTab: React.FC = () => {
           />
         </div>
       </div>
-      <div style={gridAuto(220)}>
-        <StatCard
-          title={isAllBranches ? "Total Branches" : "Branch"}
-          value={
-            isAllBranches
-              ? data.stats.totalBranches
-              : (data.selectedBranchName ?? "—")
-          }
-          sub={isAllBranches ? "Active locations" : "Selected branch"}
-          icon={Building2}
-          iconBg={T.teal100}
-          iconColor={T.teal600}
-        />
-
-        {showPeopleCountCard && (
-          <div style={{ position: "relative" }}>
+      <Suspense fallback={<WidgetLoader />}>
+        {isInitialLoading ? <WidgetLoader /> : (
+          <div style={gridAuto(220)}>
             <StatCard
-              title={totalPeopleTitle}
-              value={statValue(data.stats.totalStaff)}
-              sub={totalPeopleSub}
-              icon={Users}
-              iconBg="#E0F2FE"
-              iconColor="#1A699F"
-              onClick={() => navigateToModule("employees")}
-            />
-          </div>
-        )}
-
-        {showAttendanceModule && (
-          <div ref={presentCardRef} style={{ position: "relative" }}>
-            <StatCard
-              title="Present Today"
-              value={statValue(data.stats.presentToday)}
-              sub={statSub(`${data.stats.avgAttendance}% attendance`)}
-              icon={UserCheck}
-              iconBg="#ECFDF5"
-              iconColor="#16A34A"
-              onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
-            />
-            <KpiDropdown
-              open={kpiDropdown === "present"}
-              label="Present by Department"
-              rows={deptPresentRows}
-              triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
-              onClose={() => setKpiDropdown(null)}
-              onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
-            />
-          </div>
-        )}
-
-        {showAttendanceModule && (
-          <div ref={absentCardRef} style={{ position: "relative" }}>
-            <StatCard
-              title="Absent Today"
-              value={statValue(data.stats.absentToday)}
-              sub={statSub(`${data.stats.lateToday} late`)}
-              icon={UserX}
-              iconBg="#FFF1F2"
-              iconColor="#E11D48"
-              onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
-            />
-            <KpiDropdown
-              open={kpiDropdown === "absent"}
-              label="Absent by Department"
-              rows={deptAbsentRows}
-              triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
-              onClose={() => setKpiDropdown(null)}
-              onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
-            />
-          </div>
-        )}
-      </div>
-
-      {(showAttendanceModule || showPayrollModule || showLeaveModule || showCctvDashboard) && (
-        <div style={gridAuto(220)}>
-          {showAttendanceModule && (
-            <StatCard
-              title="Avg Attendance"
-              value={statValue(`${data.stats.avgAttendance}%`)}
-              sub={statSub(
-                isAllBranches ? "Weighted global rate" : "Branch rate",
-              )}
-              icon={TrendingUp}
-              iconBg={T.amberBg}
-              iconColor={T.amber}
-            />
-          )}
-
-          {showPayrollModule && (
-            <StatCard
-              title="Monthly Payroll"
-              value={statValue(money(data.stats.monthlyPayroll))}
-              sub={statSub(isAllBranches ? "All branches" : "This branch")}
-              icon={Wallet}
+              title={isAllBranches ? "Total Branches" : "Branch"}
+              value={
+                isAllBranches
+                  ? data.stats.totalBranches
+                  : (data.selectedBranchName ?? "—")
+              }
+              sub={isAllBranches ? "Active locations" : "Selected branch"}
+              icon={Building2}
               iconBg={T.teal100}
               iconColor={T.teal600}
             />
-          )}
 
-          {showLeaveModule && (
-            <StatCard
-              title="Pending Leaves"
-              value={statValue(data.stats.pendingLeaves)}
-              sub={statSub("Need review")}
-              icon={CalendarClock}
-              iconBg="#FEF3C7"
-              iconColor="#D97706"
-            />
-          )}
+            {showPeopleCountCard && (
+              <div style={{ position: "relative" }}>
+                <StatCard
+                  title={totalPeopleTitle}
+                  value={statValue(data.stats.totalStaff)}
+                  sub={totalPeopleSub}
+                  icon={Users}
+                  iconBg="#E0F2FE"
+                  iconColor="#1A699F"
+                  onClick={() => navigateToModule("employees")}
+                />
+              </div>
+            )}
 
-          {showCctvDashboard && (
-            <StatCard
-              title="CCTV Alerts"
-              value={statValue(data.stats.cctvAlerts)}
-              sub={statSub("Security exceptions")}
-              icon={ShieldAlert}
-              iconBg="#FFF1F2"
-              iconColor="#E11D48"
-            />
+            {showAttendanceModule && (
+              <div ref={presentCardRef} style={{ position: "relative" }}>
+                <StatCard
+                  title="Present Today"
+                  value={statValue(data.stats.presentToday)}
+                  sub={statSub(`${data.stats.avgAttendance}% attendance`)}
+                  icon={UserCheck}
+                  iconBg="#ECFDF5"
+                  iconColor="#16A34A"
+                  onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
+                />
+                <KpiDropdown
+                  open={kpiDropdown === "present"}
+                  label="Present by Department"
+                  rows={deptPresentRows}
+                  triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
+                  onClose={() => setKpiDropdown(null)}
+                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                />
+              </div>
+            )}
+
+            {showAttendanceModule && (
+              <div ref={absentCardRef} style={{ position: "relative" }}>
+                <StatCard
+                  title="Absent Today"
+                  value={statValue(data.stats.absentToday)}
+                  sub={statSub(`${data.stats.lateToday} late`)}
+                  icon={UserX}
+                  iconBg="#FFF1F2"
+                  iconColor="#E11D48"
+                  onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
+                />
+                <KpiDropdown
+                  open={kpiDropdown === "absent"}
+                  label="Absent by Department"
+                  rows={deptAbsentRows}
+                  triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
+                  onClose={() => setKpiDropdown(null)}
+                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </Suspense>
+
+      {(showAttendanceModule || showPayrollModule || showLeaveModule || showCctvDashboard) && (
+        <Suspense fallback={<WidgetLoader />}>
+          {isInitialLoading ? <WidgetLoader /> : (
+            <div style={gridAuto(220)}>
+              {showAttendanceModule && (
+                <StatCard
+                  title="Avg Attendance"
+                  value={statValue(`${data.stats.avgAttendance}%`)}
+                  sub={statSub(
+                    isAllBranches ? "Weighted global rate" : "Branch rate",
+                  )}
+                  icon={TrendingUp}
+                  iconBg={T.amberBg}
+                  iconColor={T.amber}
+                />
+              )}
+
+              {showPayrollModule && (
+                <StatCard
+                  title="Monthly Payroll"
+                  value={statValue(money(data.stats.monthlyPayroll))}
+                  sub={statSub(isAllBranches ? "All branches" : "This branch")}
+                  icon={Wallet}
+                  iconBg={T.teal100}
+                  iconColor={T.teal600}
+                />
+              )}
+
+              {showLeaveModule && (
+                <StatCard
+                  title="Pending Leaves"
+                  value={statValue(data.stats.pendingLeaves)}
+                  sub={statSub("Need review")}
+                  icon={CalendarClock}
+                  iconBg="#FEF3C7"
+                  iconColor="#D97706"
+                />
+              )}
+
+              {showCctvDashboard && (
+                <StatCard
+                  title="CCTV Alerts"
+                  value={statValue(data.stats.cctvAlerts)}
+                  sub={statSub("Security exceptions")}
+                  icon={ShieldAlert}
+                  iconBg="#FFF1F2"
+                  iconColor="#E11D48"
+                />
+              )}
+            </div>
           )}
-        </div>
+        </Suspense>
       )}
 
       {(showAttendanceModule || showShiftDistribution) && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gridAutoRows: "620px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
           {showShiftDistribution && (
-            <ShiftDistributionCard shifts={data.shiftDistribution} />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <ShiftDistributionCard
+                  shifts={data.shiftDistribution}
+                  onViewMore={(shiftKey) => {
+                    const shift = data.shiftDistribution.find(s => s.key === shiftKey);
+                    const label = shift?.label ?? shiftKey;
+                    if (selectedBranchId && !isAllBranches) {
+                      navigate(
+                        getBranchModulePath("employees", Number(selectedBranchId)),
+                        { state: { shiftFilter: label } }
+                      );
+                    } else {
+                      navigate(
+                        getModulePath("employees"),
+                        { state: { shiftFilter: label } }
+                      );
+                    }
+                  }}
+                />
+              )}
+            </Suspense>
           )}
           {showAttendanceModule && (
-            <TodayStatusCard
-              data={data.todayStatus}
-              presentToday={data.stats.presentToday}
-              totalStaff={data.stats.totalStaff}
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <TodayStatusCard
+                  data={data.todayStatus}
+                  presentToday={data.stats.presentToday}
+                  totalStaff={data.stats.totalStaff}
+                />
+              )}
+            </Suspense>
           )}
         </div>
       )}
 
-      {(showAttendanceModule || showLeaveModule || showCctvDashboard) && (
-        <div style={equalSummaryWidgetGrid(300)}>
-          {showAttendanceModule && (
-            <WeeklyAttendanceCard
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-              title="Attendance"
-              data={isAllBranches ? undefined : data.weeklyAttendance}
-              fetchedLogs={fetchedLogs}
-              allStaff={allStaff}
-              branchSeries={
-                isAllBranches ? data.branchWeeklyAttendance : undefined
-              }
-            />
-          )}
+      {showAttendanceModule && (
+        <div className="dashboard-overview-attendance-grid" style={gridAuto(360)}>
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <WeeklyAttendanceCard
+                height={SUMMARY_WIDGET_CARD_HEIGHT}
+                listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                title="Attendance"
+                data={isAllBranches ? undefined : data.weeklyAttendance}
+                fetchedLogs={fetchedLogs}
+                allStaff={allStaff}
+                branchSeries={
+                  isAllBranches ? data.branchWeeklyAttendance : undefined
+                }
+              />
+            )}
+          </Suspense>
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <AttendancePerformanceCard
+                data={data.attendancePerformance}
+                branchSeries={
+                  isAllBranches ? data.branchAttendancePerformance : undefined
+                }
+              />
+            )}
+          </Suspense>
+        </div>
+      )}
 
+      {showPayrollModule && (
+        <div className="dashboard-overview-payroll-grid" style={gridAuto(360)}>
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <PayrollTrendsCard
+                data={data.payrollTrends}
+                branchSeries={
+                  isAllBranches ? data.branchPayrollTrends : undefined
+                }
+              />
+            )}
+          </Suspense>
+          <Suspense fallback={<WidgetLoader />}>
+            {isInitialLoading ? <WidgetLoader /> : (
+              <DepartmentPayrollCard allStaff={allStaff} />
+            )}
+          </Suspense>
+        </div>
+      )}
+
+      {(showLeaveModule || showCctvDashboard) && (
+        <div style={equalSummaryWidgetGrid(300)}>
           {showLeaveModule && (
-            <PendingLeavesCard
-              branchId={selectedBranchId as never}
-              showBranchName={isAllBranches}
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-              items={data.pendingLeaves}
-              disableFetch
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <PendingLeavesCard
+                  branchId={selectedBranchId as never}
+                  showBranchName={isAllBranches}
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                  listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                  items={data.pendingLeaves}
+                  disableFetch
+                />
+              )}
+            </Suspense>
           )}
 
           {showCctvDashboard && (
-            <CctvStatusCard
-              height={SUMMARY_WIDGET_CARD_HEIGHT}
-              listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
-              items={cctvItems}
-              showBranchName={isAllBranches}
-              hideWhenEmpty
-            />
-          )}
-        </div>
-      )}
-
-      {(showAttendanceModule || showPayrollModule) && (
-        <div style={gridAuto(360)}>
-          {showAttendanceModule && (
-            <AttendancePerformanceCard
-              data={data.attendancePerformance}
-              branchSeries={
-                isAllBranches ? data.branchAttendancePerformance : undefined
-              }
-            />
-          )}
-
-          {showPayrollModule && (
-            <PayrollTrendsCard
-              data={data.payrollTrends}
-              branchSeries={
-                isAllBranches ? data.branchPayrollTrends : undefined
-              }
-            />
+            <Suspense fallback={<WidgetLoader />}>
+              {isInitialLoading ? <WidgetLoader /> : (
+                <CctvStatusCard
+                  height={SUMMARY_WIDGET_CARD_HEIGHT}
+                  listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
+                  items={cctvItems}
+                  showBranchName={isAllBranches}
+                  hideWhenEmpty
+                />
+              )}
+            </Suspense>
           )}
         </div>
       )}

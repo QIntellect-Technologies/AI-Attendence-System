@@ -1590,6 +1590,7 @@ export async function deleteArchivedStaffRecord(
   payload: {
     organizationId?: number | string | null;
     deletedBy?: number | string | null;
+    reason?: string;
   } = {},
 ): Promise<StaffPermanentDeleteResponse> {
   return staffJson<StaffPermanentDeleteResponse>(
@@ -1599,6 +1600,7 @@ export async function deleteArchivedStaffRecord(
       body: JSON.stringify({
         organization_id: payload.organizationId ?? null,
         deleted_by: payload.deletedBy ?? null,
+        reason: payload.reason ?? null,
       }),
     },
   );
@@ -1909,6 +1911,7 @@ export async function bulkDeleteArchivedStaffRecords(
   payload: {
     organizationId?: number | string | null;
     deletedBy?: number | string | null;
+    reason?: string;
   } = {},
 ): Promise<StaffPermanentDeleteResponse> {
   return staffJson<StaffPermanentDeleteResponse>(
@@ -1919,6 +1922,7 @@ export async function bulkDeleteArchivedStaffRecords(
         user_ids: userIds.map((id) => String(id)).filter(Boolean),
         organization_id: payload.organizationId ?? null,
         deleted_by: payload.deletedBy ?? null,
+        reason: payload.reason ?? null,
       }),
     },
   );
