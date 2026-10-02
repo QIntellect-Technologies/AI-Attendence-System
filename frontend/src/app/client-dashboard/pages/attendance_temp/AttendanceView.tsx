@@ -33,8 +33,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { listStaffPage } from "../StaffManagement/api/staffApi";
 import {
   getCaptureSettings,
+  listBranchDepartments,
   listBranchShifts,
+  listDesignations,
   type CaptureSettings,
+  type DepartmentRecord,
   type ShiftRecord,
 } from "../StaffManagement/api/attendanceSettingsApi";
 import { fetchLiveCameras } from "../LiveAttendance/api/liveStreamApi";
@@ -97,6 +100,7 @@ import {
 
 import {
   Clock,
+  Loader2,
   UserX,
   Users,
   MapPin,
@@ -1502,6 +1506,7 @@ export default function AttendanceView() {
   const [bulkMarkingAbsent, setBulkMarkingAbsent] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
+  const [loadingAttendanceData, setLoadingAttendanceData] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeBranchId, setActiveBranchId] = useState<number | null>(null);
   const [activeDept, setActiveDept] = useState<string | null>(null);
@@ -1557,6 +1562,111 @@ export default function AttendanceView() {
     data,
     getBranchName,
   } = sources;
+
+  const departmentApiBranchIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          visibleBranches
+            .filter(
+              (branch) =>
+                !isGlobal ||
+                activeBranchId === null ||
+                Number(branch.id) === activeBranchId,
+            )
+            .map((branch) => getBackendBranchId(branch) ?? String(branch.id)),
+        ),
+      ),
+    [activeBranchId, isGlobal, visibleBranches],
+  );
+  const [configuredDepartments, setConfiguredDepartments] = useState<
+    DepartmentRecord[]
+  >([]);
+  const [configuredDesignations, setConfiguredDesignations] = useState<
+    string[]
+  >([]);
+
+  useEffect(() => {
+    if (
+      peopleModel.isStudentScope ||
+      !organizationIdForApi ||
+      departmentApiBranchIds.length === 0
+    ) {
+      setConfiguredDepartments([]);
+      return;
+    }
+    setConfiguredDepartments([]);
+    let cancelled = false;
+    Promise.all(
+      departmentApiBranchIds.map((branchId) =>
+        listBranchDepartments(branchId, organizationIdForApi),
+      ),
+    )
+      .then((departmentsByBranch) => {
+        if (!cancelled) setConfiguredDepartments(departmentsByBranch.flat());
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to load configured departments: ${error.message}`
+            : "Unable to load configured departments.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    departmentApiBranchIds,
+    organizationIdForApi,
+    peopleModel.isStudentScope,
+  ]);
+
+  useEffect(() => {
+    if (
+      peopleModel.isStudentScope ||
+      !organizationIdForApi ||
+      configuredDepartments.length === 0
+    ) {
+      setConfiguredDesignations([]);
+      return;
+    }
+    setConfiguredDesignations([]);
+    let cancelled = false;
+    Promise.all(
+      configuredDepartments.map((department) =>
+        listDesignations(department.id, organizationIdForApi, true),
+      ),
+    )
+      .then((designationsByDepartment) => {
+        if (cancelled) return;
+        setConfiguredDesignations(
+          Array.from(
+            new Set(
+              designationsByDepartment
+                .flat()
+                .map((designation) => designation.name.trim())
+                .filter(Boolean),
+            ),
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to load configured designations: ${error.message}`
+            : "Unable to load configured designations.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    configuredDepartments,
+    organizationIdForApi,
+    peopleModel.isStudentScope,
+  ]);
 
   // The "All Attendance People" entry is an aggregate view, not a real
   // person type — this dropdown should only ever offer concrete types
@@ -1759,9 +1869,13 @@ export default function AttendanceView() {
   ]);
 
   useEffect(() => {
-    if (!useRealApi) return;
+    if (!useRealApi) {
+      setLoadingAttendanceData(false);
+      return;
+    }
 
     const loadInitialData = async () => {
+      setLoadingAttendanceData(true);
       try {
         if (!organizationIdForApi) {
           setApiStaff([]);
@@ -1814,6 +1928,8 @@ export default function AttendanceView() {
         );
         setApiStaff([]);
         setApiAttendance([]);
+      } finally {
+        setLoadingAttendanceData(false);
       }
     };
 
@@ -2767,37 +2883,70 @@ export default function AttendanceView() {
     ];
   }, [data.branches, entityLabel, peopleType, staff, visibleBranches]);
 
-  const groupFilterOptions = useMemo(
-    () => [
+  const groupFilterOptions = useMemo(() => {
+    const countsByName = new Map(
+      groupCounts.map(({ name, count }) => [name, count]),
+    );
+    const configuredNames = peopleModel.isStudentScope
+      ? []
+      : configuredDepartments.map((department) => department.name.trim());
+    const groupNames = Array.from(
+      new Set([
+        ...configuredNames.filter(Boolean),
+        ...groupCounts.map(({ name }) => name),
+      ]),
+    ).sort((a, b) => a.localeCompare(b));
+
+    return [
       {
         value: "all",
         label: peopleModel.groupFilterAllLabel,
         description: `${totalStaff.toLocaleString()} ${entityLabel.toLowerCase()}`,
       },
-      ...groupCounts.map((item) => ({
-        value: item.name,
-        label: item.name,
-        description: `${item.count.toLocaleString()} ${entityLabel.toLowerCase()}`,
+      ...groupNames.map((name) => ({
+        value: name,
+        label: name,
+        description: `${(countsByName.get(name) ?? 0).toLocaleString()} ${entityLabel.toLowerCase()}`,
       })),
-    ],
-    [entityLabel, groupCounts, peopleModel.groupFilterAllLabel, totalStaff],
-  );
+    ];
+  }, [
+    configuredDepartments,
+    entityLabel,
+    groupCounts,
+    peopleModel.groupFilterAllLabel,
+    peopleModel.isStudentScope,
+    totalStaff,
+  ]);
 
   const subgroupFilterOptions = useMemo(
-    () => [
-      {
-        value: "all",
-        label: peopleModel.subgroupFilterAllLabel,
-        description: `${totalStaff.toLocaleString()} ${entityLabel.toLowerCase()}`,
-      },
-      ...subgroupCounts.map((item) => ({
-        value: item.name,
-        label: item.name,
-        description: `${item.count.toLocaleString()} ${entityLabel.toLowerCase()}`,
-      })),
-    ],
+    () => {
+      const countsByName = new Map(
+        subgroupCounts.map(({ name, count }) => [name, count]),
+      );
+      const subgroupNames = Array.from(
+        new Set([
+          ...(peopleModel.isStudentScope ? [] : configuredDesignations),
+          ...subgroupCounts.map((item) => item.name),
+        ]),
+      ).sort((a, b) => a.localeCompare(b));
+
+      return [
+        {
+          value: "all",
+          label: peopleModel.subgroupFilterAllLabel,
+          description: `${totalStaff.toLocaleString()} ${entityLabel.toLowerCase()}`,
+        },
+        ...subgroupNames.map((name) => ({
+          value: name,
+          label: name,
+          description: `${(countsByName.get(name) ?? 0).toLocaleString()} ${entityLabel.toLowerCase()}`,
+        })),
+      ];
+    },
     [
+      configuredDesignations,
       entityLabel,
+      peopleModel.isStudentScope,
       peopleModel.subgroupFilterAllLabel,
       subgroupCounts,
       totalStaff,
@@ -3152,18 +3301,18 @@ export default function AttendanceView() {
                 >
                   {allAttendanceRowsSelected ? "Deselect all" : "Select all"}
                 </button>
-                <button
-                  type="button"
-                  onClick={markSelectedAsAbsent}
-                  disabled={
-                    selectedAbsentStaff.length === 0 || bulkMarkingAbsent
-                  }
-                  className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {bulkMarkingAbsent
-                    ? "Marking absent..."
-                    : "Mark selected absent"}
-                </button>
+                {selectedAbsentStaff.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={markSelectedAsAbsent}
+                    disabled={bulkMarkingAbsent}
+                    className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {bulkMarkingAbsent
+                      ? "Marking absent..."
+                      : "Mark selected absent"}
+                  </button>
+                )}
                 <span className="text-xs text-gray-400">
                   {filter.selectedDate}
                 </span>
@@ -3664,7 +3813,18 @@ export default function AttendanceView() {
                         <div className="flex flex-col items-center gap-3 text-gray-400">
                           <Users className="w-10 h-10 opacity-30" />
                           <p className="text-sm font-medium">
-                            No {entityLabel.toLowerCase()} found
+                            {loadingAttendanceData || loadingRefresh ? (
+                              <span
+                                className="inline-flex items-center gap-2"
+                                role="status"
+                                aria-live="polite"
+                              >
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading attendance data…
+                              </span>
+                            ) : (
+                              "No data found for the selected filters."
+                            )}
                           </p>
                         </div>
                       </td>
@@ -3809,7 +3969,18 @@ export default function AttendanceView() {
                         <div className="flex flex-col items-center gap-3 text-gray-400">
                           <Users className="w-10 h-10 opacity-30" />
                           <p className="text-sm font-medium">
-                            No {entityLabel.toLowerCase()} found
+                            {loadingAttendanceData || loadingRefresh ? (
+                              <span
+                                className="inline-flex items-center gap-2"
+                                role="status"
+                                aria-live="polite"
+                              >
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading attendance data…
+                              </span>
+                            ) : (
+                              "No data found for the selected filters."
+                            )}
                           </p>
                         </div>
                       </td>

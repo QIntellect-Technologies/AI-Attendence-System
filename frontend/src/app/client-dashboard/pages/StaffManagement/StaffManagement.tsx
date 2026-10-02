@@ -341,7 +341,7 @@ const StaffDirectory: FC = () => {
         : liveDepartments.filter((dept) => dept.name === deptFilter);
     Promise.all(
       targetDepartments.map((dept) =>
-        listDesignations(dept.id, organizationId).catch(() => []),
+        listDesignations(dept.id, organizationId, true).catch(() => []),
       ),
     ).then((results) => {
       if (cancelled) return;

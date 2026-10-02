@@ -9,7 +9,7 @@
  * frontend until the backend is connected.
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ModernSelect, {
   ModernSelectOption,
@@ -32,13 +32,21 @@ import {
 } from "lucide-react";
 
 import { useOrg } from "../../contexts/OrgConfigContext";
-import { getBranchModulePath, getModulePath } from "../../config/moduleRegistry";
+import {
+  getBranchModulePath,
+  getModulePath,
+} from "../../config/moduleRegistry";
+import { getBackendBranchId } from "../../utils/tenantScope";
 import { usePayrollData } from "./hooks/usePayrollData";
 import type { PayrollRow } from "./hooks/usePayrollData";
 import useBranchSelector from "../../hooks/useBranchSelector";
 import BranchSelector from "../../components/ui/BranchSelector";
 import { FastPagination } from "../../components/common/FastPagination";
-import { parseLocalDate, useDateFilter } from "../../hooks/useDateFilter";
+import {
+  formatDate,
+  parseLocalDate,
+  useDateFilter,
+} from "../../hooks/useDateFilter";
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import DynamicFilterToolbar, {
   type AmountOperator,
@@ -77,6 +85,7 @@ import {
   SALARY_MIN,
   SALARY_MAX,
 } from "../StaffManagement/utils/staffValidation";
+import { listBranchDepartments } from "../StaffManagement/api/attendanceSettingsApi";
 const T = {
   teal600: "#0d9488",
   teal200: "#99f6e4",
@@ -174,16 +183,7 @@ type ActiveTab = "records" | "trend" | "salary";
 type PayrollStatusFilter = "all" | "Paid" | "Pending";
 type PayrollSortKey = keyof Pick<
   PayrollRow,
-  | "name"
-  | "department"
-  | "branchName"
-  | "netPay"
-  | "baseSalary"
-  | "overtimeAmount"
-  | "deductions"
-  | "presentDays"
-  | "unpaidLeaveDays"
-  | "lateCount"
+  "netPay" | "baseSalary" | "overtimeAmount" | "deductions" | "unpaidLeaveDays"
 >;
 
 const inputStyle: React.CSSProperties = {
@@ -776,16 +776,11 @@ const PAYROLL_SORT_OPTIONS: ReadonlyArray<{
   label: string;
   requires?: PayrollGatedModule;
 }> = [
-  { value: "name", label: "Name" },
-  { value: "department", label: "Department" },
-  { value: "branchName", label: "Branch" },
   { value: "netPay", label: "Net Salary" },
   { value: "baseSalary", label: "Base Salary" },
   { value: "overtimeAmount", label: "OT Pay", requires: "overtime" },
-  { value: "lateCount", label: "Late Comings" },
   { value: "unpaidLeaveDays", label: "Unpaid Leaves", requires: "leave" },
   { value: "deductions", label: "Deductions" },
-  { value: "presentDays", label: "Present Days" },
 ];
 
 export default function PayrollModule() {
@@ -826,10 +821,10 @@ export default function PayrollModule() {
   const [searchQuery, setSearchQuery] = useState("");
   const [amountOperator, setAmountOperator] = useState<AmountOperator>("all");
   const [amountValue, setAmountValue] = useState("");
-  const [sortKey, setSortKey] = useState<PayrollSortKey>("name");
+  const [sortKey, setSortKey] = useState<PayrollSortKey>("netPay");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [statusFilter, setStatusFilter] =
-    useState<PayrollStatusFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<PayrollStatusFilter>("all");
+  const [departmentFilter, setDepartmentFilter] = useState("all");
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -941,13 +936,65 @@ export default function PayrollModule() {
   const effectiveBranchId = isGlobal
     ? branchSelector.selectedBranchId
     : scopedBranchId;
+  const departmentBranchIds = useMemo(
+    () =>
+      cfg.branches
+        .filter(
+          (branch) =>
+            effectiveBranchId === undefined ||
+            branch.id === effectiveBranchId,
+        )
+        .map((branch) => getBackendBranchId(branch) ?? String(branch.id))
+        .filter(Boolean),
+    [cfg.branches, effectiveBranchId],
+  );
+  const [configuredDepartments, setConfiguredDepartments] = useState<string[]>(
+    [],
+  );
+  useEffect(() => {
+    if (!organizationId || departmentBranchIds.length === 0) {
+      setConfiguredDepartments([]);
+      return;
+    }
+    setConfiguredDepartments([]);
+    let cancelled = false;
+    Promise.all(
+      departmentBranchIds.map((branchId) =>
+        listBranchDepartments(branchId, organizationId),
+      ),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        setConfiguredDepartments(
+          Array.from(
+            new Set(
+              results
+                .flat()
+                .map((department) => department.name?.trim())
+                .filter((name): name is string => Boolean(name)),
+            ),
+          ).sort((a, b) => a.localeCompare(b)),
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to load configured departments: ${error.message}`
+            : "Unable to load configured departments.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [departmentBranchIds, organizationId]);
 
   const {
     rows,
-    stats,
     deptSummary,
     modulePeopleTypes,
     peopleType,
+    loading,
     updateBaseSalary,
     markPaid,
     markPending,
@@ -988,12 +1035,19 @@ export default function PayrollModule() {
   // Explicit "from date – to date" for the export header, independent of
   // payrollDateFilter.label (which collapses to just "January 2026" for
   // the monthly view — the export always wants both hard boundaries).
+  const todayDate = formatDate(new Date());
   const reportPeriodLabel = useMemo(
-    () =>
-      `${formatReportDate(payrollDateFilter.range.startDate)} – ${formatReportDate(
-        payrollDateFilter.range.endDate,
-      )}`,
-    [payrollDateFilter.range.startDate, payrollDateFilter.range.endDate],
+    () => {
+      const { startDate, endDate } = payrollDateFilter.range;
+      const reportEndDate =
+        startDate.slice(0, 7) === todayDate.slice(0, 7) ? todayDate : endDate;
+      return `${formatReportDate(startDate)} – ${formatReportDate(reportEndDate)}`;
+    },
+    [
+      payrollDateFilter.range.startDate,
+      payrollDateFilter.range.endDate,
+      todayDate,
+    ],
   );
 
   // Org identity fed into ExportButton — rendered in the header band of
@@ -1173,6 +1227,10 @@ export default function PayrollModule() {
       return (
         searchable.includes(normalizedQuery) &&
         matchesAmount(row.netPay) &&
+        (departmentFilter === "all" ||
+          (departmentFilter === "Unassigned"
+            ? !row.department?.trim()
+            : row.department === departmentFilter)) &&
         (statusFilter === "all" ||
           (statusFilter === "Paid"
             ? row.status === "Paid"
@@ -1201,6 +1259,7 @@ export default function PayrollModule() {
   }, [
     amountOperator,
     amountValue,
+    departmentFilter,
     rows,
     searchQuery,
     sortDirection,
@@ -1212,9 +1271,10 @@ export default function PayrollModule() {
     setSearchQuery("");
     setAmountOperator("all");
     setAmountValue("");
-    setSortKey("name");
+    setSortKey("netPay");
     setSortDirection("asc");
     setStatusFilter("all");
+    setDepartmentFilter("all");
     branchSelector.reset();
     payrollDateFilter.setMode("monthly");
   }, [branchSelector, payrollDateFilter]);
@@ -1259,13 +1319,30 @@ export default function PayrollModule() {
         onChange: (value: string) => setSelectedPeopleType(value),
       },
       {
-        id: "search",
-        type: "search",
-        value: searchQuery,
-        onChange: setSearchQuery,
-        placeholder: "Search name, ID, department, branch, status...",
-        grow: true,
-        minWidth: 300,
+        id: "department",
+        type: "select",
+        label: "Department",
+        value: departmentFilter,
+        options: [
+          { value: "all", label: "Departments" },
+          ...Array.from(
+            new Set(
+              [
+                ...configuredDepartments,
+                ...rows.map((row) =>
+                  row.department?.trim() ? row.department : "Unassigned",
+                ),
+              ],
+            ),
+          )
+            .sort((a, b) => a.localeCompare(b))
+            .map((department) => ({
+              value: department,
+              label: department,
+            })),
+        ],
+        minWidth: 160,
+        onChange: setDepartmentFilter,
       },
       {
         id: "amountOperator",
@@ -1357,6 +1434,15 @@ export default function PayrollModule() {
         onChange: (value: string) => setSortDirection(value as SortDirection),
       },
       {
+        id: "search",
+        type: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Search name, ID, department, branch, status...",
+        grow: true,
+        minWidth: 300,
+      },
+      {
         id: "reset",
         type: "reset",
         label: "Clear",
@@ -1367,11 +1453,13 @@ export default function PayrollModule() {
       amountOperator,
       amountValue,
       branchSelector,
+      departmentFilter,
       isGlobal,
       modulePeopleTypes,
       payrollDateFilter,
       peopleOptions,
       peopleType,
+      rows,
       resetListFilters,
       searchQuery,
       sortDirection,
@@ -1389,23 +1477,23 @@ export default function PayrollModule() {
         label: string;
         requires?: PayrollGatedModule;
       }>([
-      { key: "#", label: "Staff ID" },
-      { key: "name", label: "Name" },
-      { key: "cnic", label: "CNIC" },
-      ...(isGlobal ? [{ key: "branch", label: "Branch" }] : []),
-      { key: "dept", label: "Department" },
-      { key: "base", label: "Base Salary" },
-      { key: "allowances", label: "Allowances" },
-      { key: "present", label: "Present" },
-      { key: "otHrs", label: "OT Hrs", requires: "overtime" },
-      { key: "otRate", label: "OT Rate/hr", requires: "overtime" },
-      { key: "otPay", label: "OT Pay", requires: "overtime" },
-      { key: "lateComings", label: "Late Comings" },
-      { key: "unpaidLeaves", label: "Unpaid Leaves", requires: "leave" },
-      { key: "deductions", label: "Deductions" },
-      { key: "net", label: "Net Salary" },
-      { key: "status", label: "Status" },
-      { key: "action", label: "" },
+        { key: "#", label: "Staff ID" },
+        { key: "name", label: "Name" },
+        { key: "cnic", label: "CNIC" },
+        ...(isGlobal ? [{ key: "branch", label: "Branch" }] : []),
+        { key: "dept", label: "Department" },
+        { key: "base", label: "Base Salary" },
+        { key: "allowances", label: "Allowances" },
+        { key: "present", label: "Present" },
+        { key: "otHrs", label: "OT Hrs", requires: "overtime" },
+        { key: "otRate", label: "OT Rate/hr", requires: "overtime" },
+        { key: "otPay", label: "OT Pay", requires: "overtime" },
+        { key: "lateComings", label: "Late Comings" },
+        { key: "unpaidLeaves", label: "Unpaid Leaves", requires: "leave" },
+        { key: "deductions", label: "Deductions" },
+        { key: "net", label: "Net Salary" },
+        { key: "status", label: "Status" },
+        { key: "action", label: "" },
       ]),
     [isGlobal, gates],
   );
@@ -1569,9 +1657,11 @@ export default function PayrollModule() {
           successfulIds.forEach((id) => next.delete(id));
           return next;
         });
-        toastSuccess(`${successfulIds.size} ${
-          successfulIds.size === 1 ? "person" : "people"
-        } marked as ${targetStatus.toLowerCase()}.`);
+        toastSuccess(
+          `${successfulIds.size} ${
+            successfulIds.size === 1 ? "person" : "people"
+          } marked as ${targetStatus.toLowerCase()}.`,
+        );
       }
       if (failures.length > 0) {
         toastError(
@@ -1760,13 +1850,16 @@ export default function PayrollModule() {
     background: activeTab === tab ? T.navy700 : "transparent",
     color: activeTab === tab ? "#fff" : T.textMuted,
   });
-  const payrollStatusCounts = rows.reduce(
+  const payrollKpiStats = visibleRows.reduce(
     (counts, row) => {
+      counts.totalPayout += row.netPay;
+      counts.totalOT += row.overtimeAmount;
+      counts.totalStaff += 1;
       if (row.status === "Paid") counts.paid += 1;
       else counts.pending += 1;
       return counts;
     },
-    { paid: 0, pending: 0 },
+    { totalPayout: 0, totalOT: 0, totalStaff: 0, paid: 0, pending: 0 },
   );
 
   return (
@@ -1830,12 +1923,7 @@ export default function PayrollModule() {
               title: "Payroll Report",
               titleTag: `${selectedMonth} ${selectedYear}`,
               reportPeriod: reportPeriodLabel,
-              otRatePerHour: otRatePerHour,
-              summary: [
-                { label: "Total Pay-out", value: fmtPKR(stats.totalPayout) },
-                { label: "Total OT Paid", value: fmtPKR(stats.totalOT) },
-                { label: "Employees", value: String(stats.totalStaff) },
-              ],
+              ...(hasOvertime ? { otRatePerHour } : {}),
               columns: payrollPdfColumns,
             }}
             style={{
@@ -1908,7 +1996,7 @@ export default function PayrollModule() {
         >
           <StatCard
             label="Total Pay-out"
-            value={fmtPKR(stats.totalPayout)}
+            value={fmtPKR(payrollKpiStats.totalPayout)}
             icon={DollarSign}
             iconBg={T.teal100}
             iconColor={T.teal600}
@@ -1916,7 +2004,7 @@ export default function PayrollModule() {
           {hasOvertime && (
             <StatCard
               label="Total OT Paid"
-              value={fmtPKR(stats.totalOT)}
+              value={fmtPKR(payrollKpiStats.totalOT)}
               icon={Zap}
               iconBg="#d1e8f0"
               iconColor={T.navy600}
@@ -1924,7 +2012,7 @@ export default function PayrollModule() {
           )}
           <StatCard
             label="Employees"
-            value={stats.totalStaff}
+            value={payrollKpiStats.totalStaff}
             icon={Users}
             iconBg={T.blue100}
             iconColor={T.blue500}
@@ -1939,7 +2027,7 @@ export default function PayrollModule() {
           />
           <StatCard
             label="Paid"
-            value={payrollStatusCounts.paid}
+            value={payrollKpiStats.paid}
             icon={CheckCircle2}
             iconBg={T.green100}
             iconColor={T.green600}
@@ -1952,7 +2040,7 @@ export default function PayrollModule() {
           />
           <StatCard
             label="Pending"
-            value={payrollStatusCounts.pending}
+            value={payrollKpiStats.pending}
             icon={Clock}
             iconBg={T.amber100}
             iconColor={T.amber600}
@@ -2005,7 +2093,7 @@ export default function PayrollModule() {
             >
               {selectedPayrollRows.length > 0 && (
                 <span style={{ fontSize: 11, color: T.textMuted }}>
-                {selectedPayrollRows.length} selected
+                  {selectedPayrollRows.length} selected
                 </span>
               )}
               {selectedUnpaidRows.length > 0 && (
@@ -2056,9 +2144,7 @@ export default function PayrollModule() {
                   setSelectedPayrollStaffIds(
                     allVisibleRowsSelected
                       ? new Set()
-                      : new Set(
-                          visibleRows.map((row) => String(row.staffId)),
-                        ),
+                      : new Set(visibleRows.map((row) => String(row.staffId))),
                   )
                 }
                 disabled={visibleRows.length === 0 || processingPayroll}
@@ -2161,9 +2247,9 @@ export default function PayrollModule() {
                       <input
                         type="checkbox"
                         aria-label={`Select ${row.name} for payroll processing`}
-                        checked={
-                          selectedPayrollStaffIds.has(String(row.staffId))
-                        }
+                        checked={selectedPayrollStaffIds.has(
+                          String(row.staffId),
+                        )}
                         onChange={(event) =>
                           setSelectedPayrollStaffIds((current) => {
                             const next = new Set(current);
@@ -2221,8 +2307,8 @@ export default function PayrollModule() {
                           lines={
                             row.breakdown
                               ? [
-                                `${row.breakdown.overtimeHours}h × Rs.${row.otRate}/hr`,
-                              ]
+                                  `${row.breakdown.overtimeHours}h × Rs.${row.otRate}/hr`,
+                                ]
                               : []
                           }
                         />
@@ -2264,21 +2350,21 @@ export default function PayrollModule() {
                         lines={
                           row.breakdown
                             ? [
-                              row.breakdown.lateCount > 0
-                                ? `Late arrivals: ${row.breakdown.lateCount} → ${fmtPKR(row.breakdown.lateDeductionAmount)}`
-                                : "",
-                              row.breakdown.halfDayAttendanceCount > 0 ||
+                                row.breakdown.lateCount > 0
+                                  ? `Late arrivals: ${row.breakdown.lateCount} → ${fmtPKR(row.breakdown.lateDeductionAmount)}`
+                                  : "",
+                                row.breakdown.halfDayAttendanceCount > 0 ||
                                 row.breakdown.halfDayLeaveCount > 0
-                                ? `Half-days: ${row.breakdown.halfDayAttendanceCount + row.breakdown.halfDayLeaveCount} → ${fmtPKR(row.breakdown.halfDayDeductionAmount)}`
-                                : "",
-                              hasLeave && row.breakdown.unpaidLeaveDays > 0
-                                ? `Unpaid leave: ${row.breakdown.unpaidLeaveDays}d → ${fmtPKR(row.breakdown.unpaidLeaveDeductionAmount)}`
-                                : "",
-                              hasLeave &&
+                                  ? `Half-days: ${row.breakdown.halfDayAttendanceCount + row.breakdown.halfDayLeaveCount} → ${fmtPKR(row.breakdown.halfDayDeductionAmount)}`
+                                  : "",
+                                hasLeave && row.breakdown.unpaidLeaveDays > 0
+                                  ? `Unpaid leave: ${row.breakdown.unpaidLeaveDays}d → ${fmtPKR(row.breakdown.unpaidLeaveDeductionAmount)}`
+                                  : "",
+                                hasLeave &&
                                 row.breakdown.attendanceLeaveConflictDays > 0
-                                ? `⚠ ${row.breakdown.attendanceLeaveConflictDays}d on file as leave but also attended — excluded from deduction`
-                                : "",
-                            ].filter(Boolean)
+                                  ? `⚠ ${row.breakdown.attendanceLeaveConflictDays}d on file as leave but also attended — excluded from deduction`
+                                  : "",
+                              ].filter(Boolean)
                             : []
                         }
                       />
@@ -2360,7 +2446,28 @@ export default function PayrollModule() {
                         color: T.textLight,
                       }}
                     >
-                      No payroll records match the selected filters.
+                      {loading || refreshing ? (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <Loader2
+                            size={16}
+                            color={T.textMuted}
+                            style={{
+                              animation: "payroll-spin 0.7s linear infinite",
+                            }}
+                          />
+                          Loading payroll data…
+                        </span>
+                      ) : (
+                        "No data found for the selected filters."
+                      )}
                     </td>
                   </tr>
                 )}
@@ -2440,44 +2547,44 @@ export default function PayrollModule() {
               />
             </Field>
             {hasOvertime && (
-            <Field label="OT Rate / Hour">
-              <input
-                type="number"
-                min={0}
-                max={PAYROLL_VALUE_MAX}
-                step="any"
-                onKeyDown={blockInvalidNumberKeys}
-                value={draftPolicy.otRatePerHour}
-                onChange={(event) =>
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    otRatePerHour: Math.min(
-                      PAYROLL_VALUE_MAX,
-                      Number(event.target.value),
-                    ),
-                  }))
-                }
-                style={{
-                  ...inputStyle,
-                  background: T.teal50,
-                  borderColor: otRateConfigError ? T.red600 : T.teal200,
-                }}
-                aria-invalid={Boolean(otRateConfigError)}
-              />
-              {otRateConfigError && (
-                <p
-                  role="alert"
+              <Field label="OT Rate / Hour">
+                <input
+                  type="number"
+                  min={0}
+                  max={PAYROLL_VALUE_MAX}
+                  step="any"
+                  onKeyDown={blockInvalidNumberKeys}
+                  value={draftPolicy.otRatePerHour}
+                  onChange={(event) =>
+                    setDraftPolicy((p) => ({
+                      ...p,
+                      otRatePerHour: Math.min(
+                        PAYROLL_VALUE_MAX,
+                        Number(event.target.value),
+                      ),
+                    }))
+                  }
                   style={{
-                    margin: "5px 0 0",
-                    fontSize: 11,
-                    color: T.red600,
-                    fontWeight: 600,
+                    ...inputStyle,
+                    background: T.teal50,
+                    borderColor: otRateConfigError ? T.red600 : T.teal200,
                   }}
-                >
-                  {otRateConfigError}
-                </p>
-              )}
-            </Field>
+                  aria-invalid={Boolean(otRateConfigError)}
+                />
+                {otRateConfigError && (
+                  <p
+                    role="alert"
+                    style={{
+                      margin: "5px 0 0",
+                      fontSize: 11,
+                      color: T.red600,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {otRateConfigError}
+                  </p>
+                )}
+              </Field>
             )}
           </div>
 
@@ -2590,143 +2697,147 @@ export default function PayrollModule() {
           </div>
 
           {hasLeave && (
-          <div style={{ marginTop: 20, marginBottom: 24 }}>
-            <span
-              style={{
-                display: "block",
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: T.textMuted,
-                marginBottom: 8,
-              }}
-            >
-              Leave Type — Paid / Unpaid / Annual Quota
-            </span>
+            <div style={{ marginTop: 20, marginBottom: 24 }}>
+              <span
+                style={{
+                  display: "block",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: T.textMuted,
+                  marginBottom: 8,
+                }}
+              >
+                Leave Type — Paid / Unpaid / Annual Quota
+              </span>
 
-            {Object.entries(draftPolicy.leaveTypeRules).map(
-              ([leaveType, status]) => (
-                <div
-                  key={leaveType}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "8px 10px",
-                    border: `1px solid ${T.border}`,
-                    borderRadius: 8,
-                    marginBottom: 6,
-                  }}
-                >
-                  <span
-                    style={{ fontSize: 12, fontWeight: 700, color: T.textBody }}
-                  >
-                    {leaveType}
-                  </span>
+              {Object.entries(draftPolicy.leaveTypeRules).map(
+                ([leaveType, status]) => (
                   <div
-                    style={{ display: "flex", gap: 6, alignItems: "center" }}
+                    key={leaveType}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "8px 10px",
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 8,
+                      marginBottom: 6,
+                    }}
                   >
-                    <ModernSelect
-                      value={status}
-                      onChange={(value) =>
-                        setDraftPolicy((p) => ({
-                          ...p,
-                          leaveTypeRules: {
-                            ...p.leaveTypeRules,
-                            [leaveType]: value as "paid" | "unpaid",
-                          },
-                        }))
-                      }
-                      ariaLabel={`${leaveType} pay status`}
-                      width={110}
-                      minWidth={110}
-                      options={LEAVE_PAY_STATUS_OPTIONS}
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      title="Annual paid-day quota for this leave type"
-                      aria-label={`${leaveType} annual quota`}
-                      value={draftPolicy.leaveTypeQuotas[leaveType] ?? 0}
-                      onChange={(event) => {
-                        const quota = Math.max(
-                          0,
-                          Number(event.target.value) || 0,
-                        );
-                        setDraftPolicy((p) => ({
-                          ...p,
-                          leaveTypeQuotas: {
-                            ...p.leaveTypeQuotas,
-                            [leaveType]: quota,
-                          },
-                        }));
-                      }}
-                      style={{ ...inputStyle, width: 64, textAlign: "right" }}
-                    />
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 12,
                         fontWeight: 700,
-                        color: T.textMuted,
+                        color: T.textBody,
                       }}
                     >
-                      days/yr
+                      {leaveType}
                     </span>
-                    <button
-                      onClick={() =>
-                        setDraftPolicy((p) => {
-                          const nextRules = { ...p.leaveTypeRules };
-                          delete nextRules[leaveType];
-                          const nextQuotas = { ...p.leaveTypeQuotas };
-                          delete nextQuotas[leaveType];
-                          return {
-                            ...p,
-                            leaveTypeRules: nextRules,
-                            leaveTypeQuotas: nextQuotas,
-                          };
-                        })
-                      }
-                      style={{
-                        border: "none",
-                        background: "none",
-                        color: T.red600,
-                        cursor: "pointer",
-                      }}
+                    <div
+                      style={{ display: "flex", gap: 6, alignItems: "center" }}
                     >
-                      <X size={14} />
-                    </button>
+                      <ModernSelect
+                        value={status}
+                        onChange={(value) =>
+                          setDraftPolicy((p) => ({
+                            ...p,
+                            leaveTypeRules: {
+                              ...p.leaveTypeRules,
+                              [leaveType]: value as "paid" | "unpaid",
+                            },
+                          }))
+                        }
+                        ariaLabel={`${leaveType} pay status`}
+                        width={110}
+                        minWidth={110}
+                        options={LEAVE_PAY_STATUS_OPTIONS}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        title="Annual paid-day quota for this leave type"
+                        aria-label={`${leaveType} annual quota`}
+                        value={draftPolicy.leaveTypeQuotas[leaveType] ?? 0}
+                        onChange={(event) => {
+                          const quota = Math.max(
+                            0,
+                            Number(event.target.value) || 0,
+                          );
+                          setDraftPolicy((p) => ({
+                            ...p,
+                            leaveTypeQuotas: {
+                              ...p.leaveTypeQuotas,
+                              [leaveType]: quota,
+                            },
+                          }));
+                        }}
+                        style={{ ...inputStyle, width: 64, textAlign: "right" }}
+                      />
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: T.textMuted,
+                        }}
+                      >
+                        days/yr
+                      </span>
+                      <button
+                        onClick={() =>
+                          setDraftPolicy((p) => {
+                            const nextRules = { ...p.leaveTypeRules };
+                            delete nextRules[leaveType];
+                            const nextQuotas = { ...p.leaveTypeQuotas };
+                            delete nextQuotas[leaveType];
+                            return {
+                              ...p,
+                              leaveTypeRules: nextRules,
+                              leaveTypeQuotas: nextQuotas,
+                            };
+                          })
+                        }
+                        style={{
+                          border: "none",
+                          background: "none",
+                          color: T.red600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ),
-            )}
+                ),
+              )}
 
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input
-                placeholder="e.g. sick, casual, annual"
-                value={newLeaveTypeKey}
-                onChange={(event) => setNewLeaveTypeKey(event.target.value)}
-                style={inputStyle}
-                maxLength={40}
-              />
-              <button
-                onClick={() => {
-                  const key = newLeaveTypeKey.trim().toLowerCase();
-                  if (!key || draftPolicy.leaveTypeRules[key]) return;
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    leaveTypeRules: { ...p.leaveTypeRules, [key]: "paid" },
-                    leaveTypeQuotas: { ...p.leaveTypeQuotas, [key]: 0 },
-                  }));
-                  setNewLeaveTypeKey("");
-                }}
-                style={secondaryButtonStyle}
-              >
-                Add
-              </button>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <input
+                  placeholder="e.g. sick, casual, annual"
+                  value={newLeaveTypeKey}
+                  onChange={(event) => setNewLeaveTypeKey(event.target.value)}
+                  style={inputStyle}
+                  maxLength={40}
+                />
+                <button
+                  onClick={() => {
+                    const key = newLeaveTypeKey.trim().toLowerCase();
+                    if (!key || draftPolicy.leaveTypeRules[key]) return;
+                    setDraftPolicy((p) => ({
+                      ...p,
+                      leaveTypeRules: { ...p.leaveTypeRules, [key]: "paid" },
+                      leaveTypeQuotas: { ...p.leaveTypeQuotas, [key]: 0 },
+                    }));
+                    setNewLeaveTypeKey("");
+                  }}
+                  style={secondaryButtonStyle}
+                >
+                  Add
+                </button>
+              </div>
             </div>
-          </div>
           )}
           {/* Lives outside the Leave block: it reports an allowance-name
               error and must still show when the Leave module is off. */}
@@ -2967,16 +3078,16 @@ export default function PayrollModule() {
               gap: 8,
               cursor:
                 policySaving ||
-                  policyLoading ||
-                  rulesBranchUnavailable ||
-                  Boolean(payrollRulesError)
+                policyLoading ||
+                rulesBranchUnavailable ||
+                Boolean(payrollRulesError)
                   ? "not-allowed"
                   : "pointer",
               opacity:
                 policySaving ||
-                  policyLoading ||
-                  rulesBranchUnavailable ||
-                  Boolean(payrollRulesError)
+                policyLoading ||
+                rulesBranchUnavailable ||
+                Boolean(payrollRulesError)
                   ? 0.7
                   : 1,
             }}
@@ -3043,32 +3154,32 @@ export default function PayrollModule() {
               )}
             </Field>
             {hasOvertime && (
-            <Field label="OT Rate Override (Rs/hr)">
-              <input
-                type="number"
-                min={0}
-                max={PAYROLL_VALUE_MAX}
-                step="any"
-                onKeyDown={blockInvalidNumberKeys}
-                value={draftOtRateOverride}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  // Empty string is meaningful here — it means "no
-                  // override, fall back to the org default" — so don't
-                  // coerce it to 0.
-                  if (raw === "") return setDraftOtRateOverride("");
-                  setDraftOtRateOverride(
-                    String(Math.min(PAYROLL_VALUE_MAX, Number(raw))),
-                  );
-                }}
-                placeholder={`Org default: ${otRatePerHour}`}
-                style={{
-                  ...inputStyle,
-                  background: T.teal50,
-                  borderColor: T.teal200,
-                }}
-              />
-            </Field>
+              <Field label="OT Rate Override (Rs/hr)">
+                <input
+                  type="number"
+                  min={0}
+                  max={PAYROLL_VALUE_MAX}
+                  step="any"
+                  onKeyDown={blockInvalidNumberKeys}
+                  value={draftOtRateOverride}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    // Empty string is meaningful here — it means "no
+                    // override, fall back to the org default" — so don't
+                    // coerce it to 0.
+                    if (raw === "") return setDraftOtRateOverride("");
+                    setDraftOtRateOverride(
+                      String(Math.min(PAYROLL_VALUE_MAX, Number(raw))),
+                    );
+                  }}
+                  placeholder={`Org default: ${otRatePerHour}`}
+                  style={{
+                    ...inputStyle,
+                    background: T.teal50,
+                    borderColor: T.teal200,
+                  }}
+                />
+              </Field>
             )}
           </div>
           {hasOvertime && (
@@ -3193,11 +3304,11 @@ export default function PayrollModule() {
                                   raw.trim() === ""
                                     ? undefined
                                     : Math.min(
-                                      type.mode === "percent"
-                                        ? PAYROLL_PERCENT_MAX
-                                        : PAYROLL_VALUE_MAX,
-                                      Number(raw),
-                                    ),
+                                        type.mode === "percent"
+                                          ? PAYROLL_PERCENT_MAX
+                                          : PAYROLL_VALUE_MAX,
+                                        Number(raw),
+                                      ),
                               },
                             }));
                           }}
@@ -3235,27 +3346,27 @@ export default function PayrollModule() {
                 Math.max(
                   0,
                   Number(draftSalary) +
-                  (hasOvertime
-                    ? editingRow.otHours *
-                      (draftOtRateOverride.trim() === ""
-                        ? otRatePerHour
-                        : Number(draftOtRateOverride) || 0)
-                    : 0) +
-                  editingRow.manualAllowance +
-                  Object.entries(draftAppliedAllowances).reduce(
-                    (sum, [key, applied]) => {
-                      if (!applied?.enabled) return sum;
-                      const type = editingRowAllowanceTypes[key];
-                      if (!type) return sum;
-                      const value = applied.overrideValue ?? type.value ?? 0;
-                      if (type.mode === "percent")
-                        return sum + (Number(draftSalary) * value) / 100;
-                      if (type.mode === "none") return sum;
-                      return sum + value;
-                    },
-                    0,
-                  ) -
-                  editingRow.deductions,
+                    (hasOvertime
+                      ? editingRow.otHours *
+                        (draftOtRateOverride.trim() === ""
+                          ? otRatePerHour
+                          : Number(draftOtRateOverride) || 0)
+                      : 0) +
+                    editingRow.manualAllowance +
+                    Object.entries(draftAppliedAllowances).reduce(
+                      (sum, [key, applied]) => {
+                        if (!applied?.enabled) return sum;
+                        const type = editingRowAllowanceTypes[key];
+                        if (!type) return sum;
+                        const value = applied.overrideValue ?? type.value ?? 0;
+                        if (type.mode === "percent")
+                          return sum + (Number(draftSalary) * value) / 100;
+                        if (type.mode === "none") return sum;
+                        return sum + value;
+                      },
+                      0,
+                    ) -
+                    editingRow.deductions,
                 ),
               )}
             </span>
@@ -3432,11 +3543,11 @@ const Modal: React.FC<{
         position: "relative",
         ...(scrollable
           ? {
-            height: "fit-content",
-            minHeight: 0,
-            maxHeight: "min(75vh, calc(100vh - 32px))",
-            overflow: "hidden",
-          }
+              height: "fit-content",
+              minHeight: 0,
+              maxHeight: "min(75vh, calc(100vh - 32px))",
+              overflow: "hidden",
+            }
           : null),
       }}
       onClick={(event) => event.stopPropagation()}

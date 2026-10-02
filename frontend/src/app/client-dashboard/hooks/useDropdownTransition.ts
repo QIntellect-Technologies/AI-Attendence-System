@@ -79,6 +79,7 @@ export function useDropdownTransition<
   const panelRef = useRef<P>(null);
   const contentRef = useRef<C>(null);
   const wasOpen = useRef(open);
+  const heightAnimationRef = useRef<Animation | null>(null);
 
   // Mount on open; on close, collapse height to 0 then unmount.
   useLayoutEffect(() => {
@@ -144,13 +145,16 @@ export function useDropdownTransition<
       [{ height: "0px" }, { height: `${targetHeight}px` }],
       { duration: enterDurationMs, easing: ENTER_EASING, fill: "forwards" },
     );
+    heightAnimationRef.current = heightAnim;
     heightAnim.onfinish = () => {
-      // Release the animation's inline override so the panel can flex
-      heightAnim.cancel();
       // Let content size flex naturally after the expand finishes (e.g. if
       // the option list changes height later without a full reopen).
       panel.style.overflow = "visible";
       panel.style.height = "auto";
+      heightAnim.cancel();
+      if (heightAnimationRef.current === heightAnim) {
+        heightAnimationRef.current = null;
+      }
     };
 
     const rowAnims: Animation[] = [];
@@ -176,9 +180,35 @@ export function useDropdownTransition<
     return () => {
       heightAnim.onfinish = null;
       heightAnim.cancel();
+      if (heightAnimationRef.current === heightAnim) {
+        heightAnimationRef.current = null;
+      }
       rowAnims.forEach((a) => a.cancel());
     };
   }, [open, shouldRender, enterDurationMs]);
+
+  useLayoutEffect(() => {
+    if (!open || !shouldRender) return;
+
+    const panel = panelRef.current;
+    const content = contentRef.current;
+    if (!panel || !content || typeof ResizeObserver === "undefined") return;
+
+    let previousHeight = content.getBoundingClientRect().height;
+    const observer = new ResizeObserver(() => {
+      const nextHeight = content.getBoundingClientRect().height;
+      if (nextHeight === previousHeight) return;
+      previousHeight = nextHeight;
+
+      heightAnimationRef.current?.cancel();
+      heightAnimationRef.current = null;
+      panel.style.overflow = "visible";
+      panel.style.height = "auto";
+    });
+    observer.observe(content);
+
+    return () => observer.disconnect();
+  }, [open, shouldRender]);
 
   return { shouldRender, panelRef, contentRef };
 }
