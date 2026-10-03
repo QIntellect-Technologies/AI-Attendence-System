@@ -595,22 +595,32 @@ def compute_payroll_breakdown(
         else set()
     )
 
+    period_start_key = period_start.isoformat()
+    deduction_period_end_key = deduction_period_end.isoformat()
     late_rows = [
         row for row in attendance_rows
         if (row.get('checkInStatus') == 'late' or row.get('dayStatus') == 'late')
-        and row.get('date') in deduction_scheduled_dates
+        and period_start_key <= str(row.get('date') or '') <= deduction_period_end_key
     ]
     late_count = sum(
         1 for row in late_rows
         if _decision_included(row, _late_decision_key(row))
     )
+    scheduled_late_rows = [
+        row for row in late_rows
+        if row.get('date') in deduction_scheduled_dates
+    ]
     pending_late_decisions = [
         {'attendance_id': row.get('attendanceId'), 'date': row['date']}
-        for row in late_rows
+        for row in scheduled_late_rows
         if row.get('captureChannel') in ('local_node', 'mobile_app')
         and row.get(_late_decision_key(row)) is None
         and row.get('attendanceId')
     ]
+    deductible_late_count = sum(
+        1 for row in scheduled_late_rows
+        if _decision_included(row, _late_decision_key(row))
+    )
     half_day_attendance_count = sum(
         1 for r in attendance_rows
         if r.get('dayStatus') == 'half_day'
@@ -624,7 +634,11 @@ def compute_payroll_breakdown(
         and _decision_included(r, 'checkOutPayrollDecision')
     )
 
-    late_deduction_days, late_deduction_amount = _late_deduction(late_count, per_day_rate, policy)
+    late_deduction_days, late_deduction_amount = _late_deduction(
+        deductible_late_count,
+        per_day_rate,
+        policy,
+    )
 
     # Every attendance row is a real check-in event for that date — present,
     # late, or half-day all count as "was here" for reconciliation purposes.
