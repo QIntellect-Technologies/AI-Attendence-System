@@ -2706,6 +2706,7 @@ const StaffDirectory: FC = () => {
             canDelete={can("delete")}
             branchName={branchName}
             peopleModel={peopleModel}
+            hasMultipleBranches={hasMultipleBranches}
           />
         )}
 

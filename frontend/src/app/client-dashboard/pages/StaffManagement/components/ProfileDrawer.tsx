@@ -48,6 +48,8 @@ export const ProfileDrawer: FC<{
   canDelete: boolean;
   branchName: (id: number) => string;
   peopleModel: PeopleRenderingModel;
+  /** When false (single-branch org), the Branch row is hidden. */
+  hasMultipleBranches?: boolean;
 }> = ({
   member,
   onClose,
@@ -56,6 +58,7 @@ export const ProfileDrawer: FC<{
   canDelete,
   branchName,
   peopleModel,
+  hasMultipleBranches = true,
 }) => {
   const sm = STATUS_META[member.status];
   const { organizationId } = useOrg();
@@ -268,7 +271,9 @@ export const ProfileDrawer: FC<{
                   },
                 ]
               : []),
-            { Icon: MapPin, label: "Branch", val: branchName(member.branchId) },
+            ...(hasMultipleBranches
+              ? [{ Icon: MapPin, label: "Branch", val: branchName(member.branchId) }]
+              : []),
             {
               Icon: Building2,
               label: peopleModel.groupLabel,
@@ -289,19 +294,8 @@ export const ProfileDrawer: FC<{
               ? [
                   {
                     Icon: Briefcase,
-                    label: "Compensation",
+                    label: "Salary",
                     val: `PKR ${staffSalary(member).toLocaleString()}`,
-                  },
-                ]
-              : []),
-            ...(!peopleModel.isStudent
-              ? [
-                  {
-                    Icon: CheckCircle,
-                    label: `${peopleModel.personSingular} Benefits`,
-                    val: member.benefits.length
-                      ? member.benefits.join(", ")
-                      : "—",
                   },
                 ]
               : []),
@@ -361,47 +355,7 @@ export const ProfileDrawer: FC<{
             </div>
           ))}
 
-          {/* Module Access */}
-          {!peopleModel.isStudent && (
-            <div style={{ marginTop: 16 }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: T.muted,
-                  textTransform: "uppercase",
-                  letterSpacing: ".07em",
-                  marginBottom: 8,
-                }}
-              >
-                Dashboard Module Access
-              </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {staffModules(member).length ? (
-                staffModules(member).map((m) => (
-                  <span
-                    key={m}
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      padding: "3px 10px",
-                      borderRadius: 20,
-                      background: T.teal100,
-                      color: T.teal700,
-                      textTransform: "capitalize",
-                    }}
-                  >
-                    {m}
-                  </span>
-                ))
-              ) : (
-                <span style={{ fontSize: 12, color: T.muted }}>
-                  No access granted
-                </span>
-                )}
-              </div>
-            </div>
-          )}
+
         </div>
 
         {/* Actions */}
