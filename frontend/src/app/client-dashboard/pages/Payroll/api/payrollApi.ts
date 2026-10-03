@@ -163,8 +163,11 @@ export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   ],
 };
 
+// Older saved policies may still carry a defaultSalary; we drop it on read.
+type LegacyPayrollPolicy = Partial<PayrollPolicy> & { defaultSalary?: number };
+
 function normalizePayrollPolicy(
-  policy: Partial<PayrollPolicy> | undefined,
+  policy: LegacyPayrollPolicy | undefined,
 ): PayrollPolicy {
   const { defaultSalary: _legacyDefaultSalary, ...currentPolicy } = policy ?? {};
   const merged = { ...DEFAULT_PAYROLL_POLICY, ...currentPolicy };
@@ -515,8 +518,8 @@ async function requestJson<T>(
   if (!response.ok || data?.success === false) {
     throw new Error(
       data?.message ||
-        data?.error ||
-        friendlyRequestFailureMessage(response.status, "payroll"),
+      data?.error ||
+      friendlyRequestFailureMessage(response.status, "payroll"),
     );
   }
   return data as T;
@@ -552,8 +555,8 @@ function mapSalaryConfig(raw: RawPayrollSalaryConfig): PayrollSalaryConfig {
   const backendBranchId =
     cleanId(
       raw.backendBranchId ??
-        raw.backend_branch_id ??
-        (typeof branchId === "string" ? branchId : null),
+      raw.backend_branch_id ??
+      (typeof branchId === "string" ? branchId : null),
     ) || null;
 
   const breakdown = mapBreakdown(raw.payroll_breakdown);
@@ -569,10 +572,10 @@ function mapSalaryConfig(raw: RawPayrollSalaryConfig): PayrollSalaryConfig {
     name: raw.name ?? raw.staff_name ?? "Unknown",
     peopleType: String(
       raw.peopleType ??
-        raw.people_type ??
-        raw.personType ??
-        raw.person_type ??
-        "staff",
+      raw.people_type ??
+      raw.personType ??
+      raw.person_type ??
+      "staff",
     ).toLowerCase(),
     department: raw.department ?? raw.department_name ?? "General",
     branchId,
@@ -589,10 +592,10 @@ function mapSalaryConfig(raw: RawPayrollSalaryConfig): PayrollSalaryConfig {
     // field (defensive during rollout) — see PayrollSalaryConfig.effectiveOtRate.
     effectiveOtRate: Number(
       raw.effective_ot_rate ??
-        raw.effectiveOtRate ??
-        raw.ot_rate ??
-        raw.otRate ??
-        0,
+      raw.effectiveOtRate ??
+      raw.ot_rate ??
+      raw.otRate ??
+      0,
     ),
     otPay: Number(raw.ot_pay ?? breakdown?.overtimeAmount ?? 0),
     effectiveFrom: raw.effective_from ?? raw.effectiveFrom ?? null,
@@ -681,6 +684,46 @@ export async function getPayrollPolicy(
     `/payroll/policy?${query.toString()}`,
   );
   return normalizePayrollPolicy(data.policy);
+}
+
+/**
+ * True once the company has actually set up payroll rules (as opposed to the
+ * built-in defaults that getPayrollPolicy() fills in for every org). Judged on
+ * the RAW saved policy, before defaults are merged: at least one of an OT
+ * rate, leave-type rules, allowance types, a payroll calendar month, or income
+ * tax has to have been saved. Adjust here if "configured" should mean more
+ * or less than that.
+ */
+export function isPayrollPolicyConfigured(
+  policy: Partial<PayrollPolicy> | null | undefined,
+): boolean {
+  if (!policy || typeof policy !== "object") return false;
+  const hasEntries = (value: unknown): boolean =>
+    Boolean(value) &&
+    typeof value === "object" &&
+    Object.keys(value as Record<string, unknown>).length > 0;
+  return (
+    Number(policy.otRatePerHour) > 0 ||
+    hasEntries(policy.leaveTypeRules) ||
+    hasEntries(policy.allowanceTypes) ||
+    hasEntries(policy.payrollCalendarsByMonth) ||
+    policy.incomeTaxEnabled === true
+  );
+}
+
+export async function hasPayrollRulesConfigured(
+  organizationId: PayrollId,
+  scope?: PayrollPolicyScope,
+): Promise<boolean> {
+  const query = new URLSearchParams({
+    organization_id: String(organizationId),
+  });
+  const branchId = cleanPayrollId(scope?.branchId);
+  if (branchId !== null) query.set("branch_id", String(branchId));
+  const data = await requestJson<{ policy?: Partial<PayrollPolicy> | null }>(
+    `/payroll/policy?${query.toString()}`,
+  );
+  return isPayrollPolicyConfigured(data.policy);
 }
 
 export async function savePayrollPolicy(

@@ -8,7 +8,9 @@
  * Month selected : the header "mm/yyyy" picker (same box style as the Attendance
  *                  card's "mm/dd/yyyy") loads that month's payroll rows — the
  *                  same data the Payroll page shows for that month — and sums
- *                  base salary per department. Reset returns to the default view.
+ *                  base salary per department. Future months are excluded; a
+ *                  month with no payroll rows shows "No payroll for <month>".
+ *                  Reset returns to the default view.
  */
 
 import React, { useMemo, useRef, useState } from "react";
@@ -55,6 +57,11 @@ function monthTitle(month: string): string {
   });
 }
 
+/** Current calendar month as "YYYY-MM" (local time — never via toISOString). */
+function currentMonthKey(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 const CHART_HEIGHT = 200;
 
 const statusBoxStyle: React.CSSProperties = {
@@ -73,24 +80,31 @@ const MonthDepartmentChart: React.FC<{
   branchId?: number | string | null;
   peopleType?: string | null;
 }> = ({ month, branchId, peopleType }) => {
-  const { rows, loading, error } = usePayrollData({
+  const { rows, loading, refreshing, error } = usePayrollData({
     month,
     branchId: branchId ?? undefined,
     peopleType: peopleType ?? undefined,
   });
 
+  // Same rows the Payroll page shows for this month. A month that has not
+  // started yet can never have payroll, but the endpoint still returns a row
+  // per staff member for it, so those are dropped here.
+  const isFutureMonth = month > currentMonthKey();
+
   const data = useMemo(
     () =>
-      totalsByDepartment(
-        rows.map((row) => ({
-          department: row.department,
-          salary: row.baseSalary,
-        })),
-      ),
-    [rows],
+      isFutureMonth
+        ? []
+        : totalsByDepartment(
+          rows.map((row) => ({
+            department: row.department,
+            salary: row.baseSalary,
+          })),
+        ),
+    [rows, isFutureMonth],
   );
 
-  if (loading) {
+  if (loading || refreshing) {
     return (
       <div role="status" style={statusBoxStyle}>
         Loading {monthTitle(month)}…
@@ -104,12 +118,14 @@ const MonthDepartmentChart: React.FC<{
       </div>
     );
   }
-  return (
-    <GroupedBarChartCard
-      data={data.length > 0 ? data : NO_DATA}
-      singleHeight={CHART_HEIGHT}
-    />
-  );
+  if (data.length === 0) {
+    return (
+      <div role="status" style={statusBoxStyle}>
+        No payroll for {monthTitle(month)}
+      </div>
+    );
+  }
+  return <GroupedBarChartCard data={data} singleHeight={CHART_HEIGHT} />;
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────

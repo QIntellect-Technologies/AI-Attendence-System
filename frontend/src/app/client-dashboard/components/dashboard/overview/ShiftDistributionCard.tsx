@@ -272,6 +272,7 @@ const ShiftDistributionCard: React.FC<ShiftDistributionCardProps> = ({ shifts, o
         title="Shift distribution"
         subtitle="Click a shift to view staff"
         height="100%"
+        hideAction
       >
         <div
           className="hide-scrollbar"

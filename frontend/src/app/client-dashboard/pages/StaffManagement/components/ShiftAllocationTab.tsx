@@ -179,7 +179,7 @@ const SummaryRow: FC<{
         </div>
         <div
           onClick={(event) => event.stopPropagation()}
-          style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}
+          style={{ display: "flex", justifyContent: "flex-start", gap: 6, paddingLeft: 4 }}
         >
           {editing ? (
             <>
@@ -530,8 +530,8 @@ export const ShiftAllocationTab: FC<{
       "Actions",
     ];
     const summaryGridTemplate = isGlobalDashboard
-      ? "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(100px, 0.7fr)"
-      : "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(100px, 0.7fr)";
+      ? "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(112px, 0.7fr)"
+      : "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(112px, 0.7fr)";
 
     const saveRowShift = async (member: StaffMember) => {
       if (!scopedApiBranchId || !editingShiftId) return;
