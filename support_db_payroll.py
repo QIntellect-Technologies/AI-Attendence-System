@@ -5765,6 +5765,108 @@ def get_client_payroll_page(
             ) = get_paid_payroll_page_data(
                 org_key, period_start_text, period_end_text,
             )
+
+            # Historical-integrity fix: if a staff member was paid in this
+            # period but has since been archived/deleted, they will be absent
+            # from staff_rows (which only contains currently-active staff).
+            # Fetch their client_staff records (including is_archived=True) and
+            # merge them in so past-month charts (e.g. Department Allocation)
+            # still reflect the payroll cost that actually existed in that month.
+            existing_staff_id_set = set(staff_ids)
+            missing_paid_ids = [
+                sid for sid in paid_staff_ids
+                if sid and sid not in existing_staff_id_set
+            ]
+            if missing_paid_ids:
+                try:
+                    # Re-use the winning select-column variant from the active
+                    # staff query so we get the same fields (department_name etc.)
+                    archived_select = (
+                        winning_variant[0]
+                        if winning_variant and winning_variant[0] != '*'
+                        else 'id,org_id,branch_id,department_id,department_name,employee_id,name,email,people_type,status,is_archived,salary,created_at,updated_at'
+                    )
+                    archived_result = _execute_supabase(
+                        'client_payroll_page.archived_paid_staff',
+                        lambda: (
+                            get_supabase()
+                            .table('client_staff')
+                            .select(archived_select)
+                            .eq('org_id', org_key)
+                            .in_('id', missing_paid_ids)
+                        ),
+                    )
+                    for archived_row in archived_result.data or []:
+                        archived_row = dict(archived_row or {})
+                        # Apply the same people_type filter as above so we
+                        # don't leak rows of the wrong type into a scoped view.
+                        if clean_people_type:
+                            row_people_type = _normalize_people_type(
+                                archived_row.get('people_type') or archived_row.get('peopleType'),
+                                'staff',
+                            )
+                            if row_people_type != clean_people_type:
+                                continue
+                        staff_rows.append(archived_row)
+                        archived_id = _payroll_text(archived_row.get('id'))
+                        if archived_id:
+                            staff_ids.append(archived_id)
+                            existing_staff_id_set.add(archived_id)
+                except Exception:
+                    # Non-fatal: we still show the active staff correctly.
+                    logger.exception(
+                        'Failed to fetch archived paid staff for org=%s period=%s..%s',
+                        org_key, period_start_text, period_end_text,
+                    )
+
+            # ── B: archived DURING this period – current-month (Pending) ──────
+            # A person removed (archived) mid-month should still appear in the
+            # Department Allocation chart for that month even before payroll has
+            # been marked as Paid. archived_at is the exact UTC timestamp set
+            # by archive_client_staff, so we find staff archived within the
+            # period window and merge them in if not already present.
+            try:
+                archived_during_select = (
+                    winning_variant[0]
+                    if winning_variant and winning_variant[0] != '*'
+                    else 'id,org_id,branch_id,department_id,department_name,employee_id,name,email,people_type,status,is_archived,salary,archived_at,created_at,updated_at'
+                )
+                during_q = (
+                    get_supabase()
+                    .table('client_staff')
+                    .select(archived_during_select)
+                    .eq('org_id', org_key)
+                    .eq('is_archived', True)
+                    .gte('archived_at', period_start_text)
+                    .lte('archived_at', period_end_text + 'T23:59:59.999Z')
+                )
+                if backend_branch_id:
+                    during_q = during_q.eq('branch_id', backend_branch_id)
+                archived_during_result = _execute_supabase(
+                    'client_payroll_page.archived_during_period',
+                    lambda: during_q,
+                )
+                for archived_row in archived_during_result.data or []:
+                    archived_row = dict(archived_row or {})
+                    archived_id = _payroll_text(archived_row.get('id'))
+                    if not archived_id or archived_id in existing_staff_id_set:
+                        continue
+                    if clean_people_type:
+                        row_people_type = _normalize_people_type(
+                            archived_row.get('people_type') or archived_row.get('peopleType'),
+                            'staff',
+                        )
+                        if row_people_type != clean_people_type:
+                            continue
+                    staff_rows.append(archived_row)
+                    staff_ids.append(archived_id)
+                    existing_staff_id_set.add(archived_id)
+            except Exception:
+                logger.exception(
+                    'Failed to fetch archived-during-period staff for org=%s period=%s..%s',
+                    org_key, period_start_text, period_end_text,
+                )
+
             period_salary_by_staff = get_payroll_salary_period_snapshots(
                 org_key,
                 staff_ids,

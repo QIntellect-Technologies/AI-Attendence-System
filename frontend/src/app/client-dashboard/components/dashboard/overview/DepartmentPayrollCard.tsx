@@ -3,14 +3,16 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Total base payroll allocation per department.
  *
- * Default view   : sums each person's base salary from the pre-fetched
- *                  `allStaff` list (no extra request).
- * Month selected : the header "mm/yyyy" picker (same box style as the Attendance
- *                  card's "mm/dd/yyyy") loads that month's payroll rows — the
- *                  same data the Payroll page shows for that month — and sums
- *                  base salary per department. Future months are excluded; a
- *                  month with no payroll rows shows "No payroll for <month>".
- *                  Reset returns to the default view.
+ * Default view   : loads the *current calendar month* payroll via
+ *                  usePayrollData — identical to selecting the current month
+ *                  in the picker. This ensures staff archived mid-month still
+ *                  appear (the backend's "archived during period" backfill
+ *                  merges them in), whereas the old allStaff-based approach
+ *                  excluded anyone the moment they were archived.
+ *
+ * Month selected : the header "mm/yyyy" picker loads that month's payroll rows
+ *                  and sums base salary per department. Future months show
+ *                  "No payroll for <month>". Reset returns to the current month.
  */
 
 import React, { useMemo, useRef, useState } from "react";
@@ -21,10 +23,10 @@ import usePayrollData from "../../../pages/Payroll/hooks/usePayrollData";
 import { T } from "../../ui/theme";
 
 interface DepartmentPayrollCardProps {
-  allStaff: any[];
-  /** UI branch id; omit for "All branches". Only used when a month is picked. */
+  /** Kept for API compatibility; no longer used for the default view. */
+  allStaff?: any[];
+  /** UI branch id; omit for "All branches". */
   branchId?: number | string | null;
-  /** Only used when a month is picked. */
   peopleType?: string | null;
   action?: React.ReactNode;
 }
@@ -73,7 +75,7 @@ const statusBoxStyle: React.CSSProperties = {
   color: T.muted,
 };
 
-// ─── Month view (mounted only while a month is selected) ──────────────────────
+// ─── Shared chart renderer (used for both default and selected month) ─────────
 
 const MonthDepartmentChart: React.FC<{
   month: string;
@@ -86,9 +88,6 @@ const MonthDepartmentChart: React.FC<{
     peopleType: peopleType ?? undefined,
   });
 
-  // Same rows the Payroll page shows for this month. A month that has not
-  // started yet can never have payroll, but the endpoint still returns a row
-  // per staff member for it, so those are dropped here.
   const isFutureMonth = month > currentMonthKey();
 
   const data = useMemo(
@@ -131,37 +130,30 @@ const MonthDepartmentChart: React.FC<{
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const DepartmentPayrollCard: React.FC<DepartmentPayrollCardProps> = ({
-  allStaff,
   branchId,
   peopleType,
   action,
 }) => {
-  const [month, setMonth] = useState(""); // "YYYY-MM" or "" (default view)
+  // "" = no override → current month is used automatically.
+  const [monthOverride, setMonthOverride] = useState("");
   const monthInputRef = useRef<HTMLInputElement | null>(null);
 
-  const defaultData = useMemo(() => {
-    if (!allStaff || allStaff.length === 0) return [];
-    return totalsByDepartment(
-      allStaff.map((staff) => ({
-        department: staff.department_name || staff.department || "Unassigned",
-        salary: staff.base_salary ?? staff.baseSalary ?? staff.salary ?? 0,
-      })),
-    );
-  }, [allStaff]);
+  const thisMonth = currentMonthKey();
+  // The month actually displayed: user's manual pick or the current month.
+  const activeMonth = monthOverride || thisMonth;
+  // True only when the user has deliberately picked a different month.
+  const hasOverride = Boolean(monthOverride);
 
-  const active = Boolean(month);
-
-  // "2026-10" → "10/2026"; empty → "mm/yyyy" placeholder.
-  const monthText = active
-    ? `${month.slice(5, 7)}/${month.slice(0, 4)}`
-    : "mm/yyyy";
+  // Picker label: show the selected month, or the current month with a subtle
+  // hint that it is the live default (no explicit selection needed).
+  const monthText = `${activeMonth.slice(5, 7)}/${activeMonth.slice(0, 4)}`;
 
   const monthPicker = (
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      {active && (
+      {hasOverride && (
         <button
           type="button"
-          onClick={() => setMonth("")}
+          onClick={() => setMonthOverride("")}
           style={{
             padding: "4px 10px",
             borderRadius: 6,
@@ -184,22 +176,22 @@ const DepartmentPayrollCard: React.FC<DepartmentPayrollCardProps> = ({
           gap: 8,
           padding: "3px 8px",
           borderRadius: 6,
-          border: active ? "1px solid #0f172a" : "1px solid #e2e8f0",
-          background: active ? "#f8fafc" : "transparent",
+          border: hasOverride ? "1px solid #0f172a" : "1px solid #e2e8f0",
+          background: hasOverride ? "#f8fafc" : "transparent",
           fontSize: 12,
-          color: active ? "#0f172a" : "#64748b",
+          color: hasOverride ? "#0f172a" : "#64748b",
           cursor: "pointer",
         }}
       >
         <span>{monthText}</span>
-        <Calendar size={13} color={active ? "#0f172a" : "#64748b"} />
+        <Calendar size={13} color={hasOverride ? "#0f172a" : "#64748b"} />
         {/* Invisible native month input on top: provides the real picker. */}
         <input
           ref={monthInputRef}
           type="month"
           aria-label="Select payroll month"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
+          value={monthOverride}
+          onChange={(e) => setMonthOverride(e.target.value)}
           onClick={() => {
             try {
               monthInputRef.current?.showPicker?.();
@@ -239,21 +231,17 @@ const DepartmentPayrollCard: React.FC<DepartmentPayrollCardProps> = ({
         }}
       >
         Total Base Payroll Cost per Department
-        {active ? ` · ${monthTitle(month)}` : ""}
+        {` · ${monthTitle(activeMonth)}`}
       </p>
 
-      {active ? (
-        <MonthDepartmentChart
-          month={month}
-          branchId={branchId}
-          peopleType={peopleType}
-        />
-      ) : (
-        <GroupedBarChartCard
-          data={defaultData.length > 0 ? defaultData : NO_DATA}
-          singleHeight={CHART_HEIGHT}
-        />
-      )}
+      {/* Always use the payroll endpoint — default = current month,
+          override = whatever the user picked. This ensures staff archived
+          mid-month still appear (backend backfills them for the period). */}
+      <MonthDepartmentChart
+        month={activeMonth}
+        branchId={branchId}
+        peopleType={peopleType}
+      />
     </DashboardCard>
   );
 };
