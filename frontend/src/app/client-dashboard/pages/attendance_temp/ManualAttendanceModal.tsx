@@ -58,11 +58,14 @@ export interface ManualAttendanceSubmitValues {
   notes: string;
 }
 
-const ARRIVAL_STATUS_OPTIONS = [
+export const ARRIVAL_STATUS_OPTIONS = [
   { value: "on_time", label: "On Time" },
   { value: "late", label: "Late" },
-  { value: "absent", label: "Absent" },
 ];
+
+export function normalizeEditableArrivalStatus(status: string | null): string {
+  return status === "late" ? "late" : "on_time";
+}
 
 const fieldLabelStyle: React.CSSProperties = {
   display: "block",
@@ -136,7 +139,7 @@ export const ManualAttendanceModal: FC<{
       setStaffId(String(record.staffId));
       setCheckInLocal(toDatetimeLocalValue(record.inTime, timeZone));
       setCheckOutLocal(toDatetimeLocalValue(record.outTime, timeZone));
-      setArrivalStatus(record.checkInStatus || "on_time");
+      setArrivalStatus(normalizeEditableArrivalStatus(record.checkInStatus));
       setNotes(record.notes ?? "");
     } else {
       setStaffId(initialStaffId != null ? String(initialStaffId) : "");

@@ -121,6 +121,8 @@ import {
 } from "./utils/attendanceDisplay";
 
 import ManualAttendanceModal, {
+  ARRIVAL_STATUS_OPTIONS,
+  normalizeEditableArrivalStatus,
   type ManualAttendanceStaffOption,
   type ManualAttendanceRecordSeed,
   type ManualAttendanceSubmitValues,
@@ -2086,7 +2088,9 @@ export default function AttendanceView() {
     setRowDraft({
       checkIn: toDatetimeLocalValue(todayRecord.inTime, branchTimezone),
       checkOut: toDatetimeLocalValue(todayRecord.outTime, branchTimezone),
-      arrivalStatus: (todayRecord as any)?.checkInStatus ?? "unscheduled",
+      arrivalStatus: normalizeEditableArrivalStatus(
+        (todayRecord as any)?.checkInStatus ?? null,
+      ),
       notes: todayRecord.notes ?? "",
     });
   };
@@ -3499,16 +3503,7 @@ export default function AttendanceView() {
                                 >
                                   <ModernSelect
                                     value={rowDraft.arrivalStatus}
-                                    options={[
-                                      { value: "on_time", label: "On Time" },
-                                      { value: "late", label: "Late" },
-                                      { value: "early", label: "Early" },
-                                      {
-                                        value: "unscheduled",
-                                        label: "Unscheduled",
-                                      },
-                                      { value: "absent", label: "Absent" },
-                                    ]}
+                                    options={ARRIVAL_STATUS_OPTIONS}
                                     onChange={(value) => {
                                       setRowDraft((draft) =>
                                         draft
