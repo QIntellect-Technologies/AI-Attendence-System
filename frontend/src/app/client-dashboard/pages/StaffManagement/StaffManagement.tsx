@@ -1390,6 +1390,40 @@ const StaffDirectory: FC = () => {
             }
           }
 
+          // Designations belong to a department, and the department only
+          // exists on the staff record after the assignDepartment() call
+          // above. The designation sent with the initial create call can
+          // therefore be dropped or left unresolved server-side, which made
+          // new staff show no designation in the table until edited.
+          // Re-apply it now through the same update path the Edit modal
+          // uses. Non-fatal, same as the department step.
+          if (data.liveDepartmentId && data.designationId) {
+            try {
+              await updateStaff(
+                result.user.id,
+                buildStaffApiPayload(
+                  data,
+                  organizationId,
+                  selectedBranchName,
+                  selectedBackendBranchId,
+                  shift,
+                  currentUserId,
+                  undefined,
+                  peopleModel.peopleType,
+                  data.designationName,
+                ),
+              );
+            } catch (designationAssignError) {
+              alert(
+                `Staff created, but assigning the selected designation failed: ` +
+                `${designationAssignError instanceof Error
+                  ? designationAssignError.message
+                  : "Unknown error"
+                }\n\nYou can assign it again by editing this staff member.`,
+              );
+            }
+          }
+
           // Reporting Hierarchy — same reasoning as the shift assignment
           // just above: the Add modal's manager/linked-account/visibility
           // pickers can't PATCH a staff_id that didn't exist yet, so those

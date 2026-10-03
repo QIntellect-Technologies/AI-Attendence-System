@@ -647,13 +647,13 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           .flatMap((page) => page.rows)
           .map((row) => withBackendBenefits(apiUserToStaffMember(row), row));
         const { active: activeCount, salaryTotal } = directoryRecords.reduce(
-            (counts, member) => ({
-              active:
-                counts.active + (member.status === "active" ? 1 : 0),
-              salaryTotal: counts.salaryTotal + staffSalary(member),
-            }),
-            { active: 0, salaryTotal: 0 },
-          );
+          (counts, member) => ({
+            active:
+              counts.active + (member.status === "active" ? 1 : 0),
+            salaryTotal: counts.salaryTotal + staffSalary(member),
+          }),
+          { active: 0, salaryTotal: 0 },
+        );
         setStaffDirectoryRecords(directoryRecords);
         setStaffCounts({
           total,
@@ -934,7 +934,16 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         );
       }
 
-      await assignStaffDepartmentApi(userId, departmentId, organizationId);
+      // The backend returns the fully-resolved staff row (department name
+      // folded in from the departments table). Rebuild the local record
+      // from it, same as assignShift does. Patching only departmentId left
+      // the `department` display name stale/empty, so a newly created staff
+      // member showed "—" in the table until the list was reloaded.
+      const updatedUser = await assignStaffDepartmentApi(
+        userId,
+        departmentId,
+        organizationId,
+      );
 
       const store = staffStoreRef.current;
       const existing = store.allItems.find(
@@ -942,11 +951,31 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       );
 
       if (existing) {
-        replaceStaffRecord({
-          ...existing,
-          departmentId,
-          department_id: departmentId,
-        } as StaffMember);
+        const mapped = updatedUser
+          ? apiUserToStaffMember(updatedUser as any)
+          : null;
+        const resolved = mapped
+          ? withBackendBenefits(
+            {
+              ...existing,
+              ...mapped,
+              // Keep local values if the response omits them.
+              branchId: mapped.branchId || existing.branchId,
+              designationId:
+                mapped.designationId ?? existing.designationId ?? null,
+              designationName:
+                mapped.designationName || existing.designationName || "",
+              departmentId,
+              department_id: departmentId,
+            } as StaffMember,
+            updatedUser as any,
+          )
+          : ({
+            ...existing,
+            departmentId,
+            department_id: departmentId,
+          } as StaffMember);
+        replaceStaffRecord(resolved);
       }
 
       return departmentId;
