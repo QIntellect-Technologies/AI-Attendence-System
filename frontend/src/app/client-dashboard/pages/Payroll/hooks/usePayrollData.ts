@@ -232,7 +232,7 @@ async function loadPayrollPageCached(
   return promise;
 }
 
-function invalidatePayrollPageCache(
+export function invalidatePayrollPageCache(
   organizationId?: string | number | null,
 ): void {
   if (!organizationId) {

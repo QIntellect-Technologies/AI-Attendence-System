@@ -39,6 +39,7 @@ import {
   toastSuccess,
 } from "../../utils/notifications";
 import { saveWithPendingPayrollSalaryDecision } from "../../utils/pendingPayrollSalary";
+import { invalidatePayrollPageCache } from "../Payroll/hooks/usePayrollData";
 import { useParams, useSearchParams, useLocation } from "react-router-dom";
 import {
   ArchiveRestore,
@@ -1678,6 +1679,11 @@ const StaffDirectory: FC = () => {
       setViewMember(null);
 
       toastSuccess("Record archived successfully.");
+      // Bust the payroll page cache so the Department Allocation chart
+      // immediately re-fetches and includes this (now-archived) staff member
+      // in the current month's data via the backend backfill, rather than
+      // serving stale rows that still excluded them.
+      invalidatePayrollPageCache();
     } catch (error) {
       toastError(
         error instanceof Error
