@@ -61,18 +61,19 @@ const PayrollTrendsCard: React.FC<PayrollTrendsCardProps> = ({
   // BranchPayrollSeries[] → LineChartSeries[]
   const multiSeries = isGlobal
     ? branchSeries!.map((b) => ({
-        name: b.branchName,
-        data: b.data.map((d) => ({
-          label: d.month,
-          value: d.Payroll,
-        })),
-      }))
+      name: b.branchName,
+      data: b.data.map((d) => ({
+        label: d.month,
+        value: d.Payroll,
+      })),
+    }))
     : undefined;
 
   return (
     <DashboardCard
       title="Payroll Trends"
       action={action}
+      hideAction
       height={300}
       bodyStyle={{ minHeight: 220, minWidth: 0, width: "100%" }}
     >

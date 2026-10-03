@@ -22,6 +22,12 @@ import {
   type TodayAttendanceRecord,
 } from "../../../pages/attendance_temp/api/attendanceApi";
 import { MoreHorizontal, ChevronDown, Building2, Users } from "lucide-react";
+import {
+  buildPresence,
+  staffDepartment,
+  staffStateOnDay,
+  toDateKey,
+} from "../../../utils/attendanceAnalytics";
 
 // ─── Department colours ────────────────────────────────────────────────────────
 const DEPT_COLORS = [
@@ -61,6 +67,10 @@ interface TodayStatusCardProps {
   data?: TodayStatusItem[];
   presentToday: number;
   totalStaff?: number;
+  /** Active staff roster. When given, absent = roster members with no attended row today. */
+  staff?: any[];
+  /** Today's attendance rows for the same scope as `staff`. */
+  records?: any[];
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -68,6 +78,8 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
   data,
   presentToday,
   totalStaff = 0,
+  staff,
+  records,
 }) => {
   const items = data ?? [];
   const { cfg } = useOrg();
@@ -77,6 +89,7 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (records) return; // parent supplied scoped data
     let active = true;
     getAttendanceToday({ limit: 2000 })
       .then((records) => {
@@ -88,7 +101,7 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     return () => {
       active = false;
     };
-  }, []);
+  }, [records]);
 
   // ── All configured department names (source of truth) ─────────────────────
   const cfgDeptNames = useMemo<string[]>(() => {
@@ -111,44 +124,49 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     return () => document.removeEventListener("mousedown", handler);
   }, [menuOpen]);
 
-  // Build department stats — cfg departments are the base, attendance counts are overlaid
+  // Build department stats. cfg departments seed the list; counts come from the
+  // roster (so people with no row today are Absent) when `staff` is provided,
+  // otherwise from the attendance rows alone (legacy behaviour).
   const deptStats = useMemo<DeptStats[]>(() => {
-    // Seed map with all configured departments (ensures HR, Sales, etc show even with 0 attendance)
-    const map = new Map<string, { present: number; late: number; absent: number }>(
-      cfgDeptNames.map((name) => [name, { present: 0, late: 0, absent: 0 }])
+    const map = new Map<string, { total: number; present: number; late: number; absent: number }>(
+      cfgDeptNames.map((name) => [name, { total: 0, present: 0, late: 0, absent: 0 }]),
     );
+    const bucketFor = (dept: string) => {
+      const matched =
+        cfgDeptNames.find((n) => n.toLowerCase() === dept.toLowerCase()) ?? dept;
+      if (!map.has(matched)) map.set(matched, { total: 0, present: 0, late: 0, absent: 0 });
+      return map.get(matched)!;
+    };
 
-    const seenStaff = new Set<string>();
-    for (const entry of todayRecords) {
-      const dept = entry.department;
-      if (!dept) continue; // skip entries with no department (don't bucket as Unassigned)
-      const staffId = entry.staffId ?? entry.userId ?? entry.id;
-      const identity = String(staffId);
-      if (seenStaff.has(identity)) continue;
-      seenStaff.add(identity);
-
-      // Case-insensitive match to cfg dept names
-      const matched = cfgDeptNames.find(
-        (n) => n.toLowerCase() === dept.toLowerCase()
-      ) ?? dept; // if not in cfg, use as-is
-      if (!map.has(matched)) map.set(matched, { present: 0, late: 0, absent: 0 });
-      const bucket = map.get(matched)!;
-      const status = (entry.status || "").toLowerCase();
-      if (status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day") {
-        if (status === "late") bucket.late++;
-        else bucket.present++;
+    if (staff) {
+      const todayMap = buildPresence(records ?? todayRecords).get(toDateKey(new Date()));
+      for (const member of staff) {
+        const b = bucketFor(staffDepartment(member));
+        const state = staffStateOnDay(member, todayMap);
+        b.total++;
+        b[state]++;
       }
-      else if (status === "absent") bucket.absent++;
+    } else {
+      const seenStaff = new Set<string>();
+      for (const entry of todayRecords) {
+        const dept = entry.department;
+        if (!dept) continue;
+        const identity = String(entry.staffId ?? entry.userId ?? entry.id);
+        if (seenStaff.has(identity)) continue;
+        seenStaff.add(identity);
+        const b = bucketFor(dept);
+        const status = (entry.status || "").toLowerCase();
+        if (status === "absent") b.absent++;
+        else if (status === "late") b.late++;
+        else b.present++;
+        b.total++;
+      }
     }
 
     return Array.from(map.entries())
-      .map(([name, counts]) => ({
-        name,
-        total: counts.present + counts.late + counts.absent,
-        ...counts,
-      }))
+      .map(([name, counts]) => ({ name, ...counts }))
       .sort((a, b) => b.total - a.total);
-  }, [todayRecords, cfgDeptNames]);
+  }, [todayRecords, records, staff, cfgDeptNames]);
 
   const hasDeptData = deptStats.length > 0;
 
@@ -168,10 +186,10 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
             value: d.total,
             color: DEPT_COLORS[i % DEPT_COLORS.length],
             pct:
-              totalStaff > 0
-                ? Math.round((d.total / totalStaff) * 100)
+              (staff ? staff.length : totalStaff) > 0
+                ? Math.round((d.total / (staff ? staff.length : totalStaff)) * 100)
                 : 0,
-            sub: `${d.present} present · ${d.absent} absent`,
+            sub: `${d.present + d.late} present${d.late ? ` (${d.late} late)` : ""} · ${d.absent} absent`,
           })),
           centerValue: String(deptStats.length),
           centerLabel: "Departments",
@@ -236,7 +254,7 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
       centerValue: String(dept.present),
       centerLabel: "Present",
     };
-  }, [hasDeptData, selectedDept, deptStats, items, presentToday, totalStaff]);
+  }, [hasDeptData, selectedDept, deptStats, items, presentToday, totalStaff, staff]);
 
   // SVG Donut Generator
   const svgDonut = useMemo(() => {
@@ -244,26 +262,26 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     const radius = 105;
     const circumference = 2 * Math.PI * radius;
     const strokeWidth = 40;
-    
+
     if (total === 0) {
       return (
-        <circle 
-          cx="125" cy="125" r={radius} 
-          fill="none" stroke={T.slate200} strokeWidth={strokeWidth} 
+        <circle
+          cx="125" cy="125" r={radius}
+          fill="none" stroke={T.slate200} strokeWidth={strokeWidth}
         />
       );
     }
 
     const activeSlices = donutData.filter((d) => d.value > 0);
-    const gap = activeSlices.length > 1 ? 6 : 0; 
-    
+    const gap = activeSlices.length > 1 ? 6 : 0;
+
     let currentOffset = 0;
     return activeSlices.map((slice, i) => {
       const sliceLength = (slice.value / total) * circumference;
       const strokeDasharray = `${Math.max(0, sliceLength - gap)} ${circumference}`;
       const strokeDashoffset = -currentOffset;
       currentOffset += sliceLength;
-      
+
       return (
         <circle
           key={i}
@@ -546,10 +564,10 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
           }}
         >
           {/* Outer SVG Donut */}
-          <svg 
-            width="250" 
-            height="250" 
-            viewBox="0 0 250 250" 
+          <svg
+            width="250"
+            height="250"
+            viewBox="0 0 250 250"
             style={{ filter: "drop-shadow(0 8px 12px rgba(0,0,0,0.06))" }}
           >
             {svgDonut}
@@ -570,32 +588,32 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
               boxShadow: "inset 0 4px 12px rgba(0,0,0,0.04)",
             }}
           >
-              <span
-                style={{
-                  fontSize: 36,
-                  fontWeight: 800,
-                  color: T.head,
-                  fontFamily: "'DM Sans', sans-serif",
-                  lineHeight: 1,
-                  letterSpacing: "-1px",
-                }}
-              >
-                {centerValue}
-              </span>
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: T.muted,
-                  fontFamily: "'DM Sans', sans-serif",
-                  marginTop: 6,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
-                }}
-              >
-                {centerLabel}
-              </span>
-            </div>
+            <span
+              style={{
+                fontSize: 36,
+                fontWeight: 800,
+                color: T.head,
+                fontFamily: "'DM Sans', sans-serif",
+                lineHeight: 1,
+                letterSpacing: "-1px",
+              }}
+            >
+              {centerValue}
+            </span>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: T.muted,
+                fontFamily: "'DM Sans', sans-serif",
+                marginTop: 6,
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+              }}
+            >
+              {centerLabel}
+            </span>
+          </div>
         </div>
 
         {/* ── Legend rows (Bottom) ── */}

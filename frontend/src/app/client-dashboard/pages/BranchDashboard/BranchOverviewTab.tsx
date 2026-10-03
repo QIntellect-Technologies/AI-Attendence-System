@@ -27,6 +27,8 @@ import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry"
 import type { DashboardLiveLogItem } from "../../hooks/useDashboardOverviewData";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
 import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
+import useBranchAttendanceAnalytics from "../../hooks/useBranchAttendanceAnalytics";
+import usePaidPayrollTrends from "../../hooks/usePaidPayrollTrends";
 import { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
 import type { KpiDeptRow } from "../../components/dashboard/overview/KpiDropdown";
 
@@ -159,6 +161,19 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     branchId,
     peopleType: effectivePeopleType ?? undefined,
     teamView: null,
+  });
+
+  const analytics = useBranchAttendanceAnalytics({
+    branchId,
+    peopleType: effectivePeopleType,
+    enabled: showAttendanceModule,
+  });
+
+  // Payroll Trends reads the same paid-payroll history as the Payroll page.
+  const payrollTrend = usePaidPayrollTrends({
+    branchId,
+    peopleType: effectivePeopleType,
+    enabled: showPayrollModule,
   });
 
   const activeBranch =
@@ -459,6 +474,8 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
                   data={data.todayStatus}
                   presentToday={data.stats.presentToday}
                   totalStaff={data.stats.totalStaff}
+                  staff={analytics.staff}
+                  records={analytics.todayRecords}
                 />
               )}
             </Suspense>
@@ -475,8 +492,8 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
                   height={SUMMARY_WIDGET_CARD_HEIGHT}
                   listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
                   data={data.weeklyAttendance}
-                  fetchedLogs={fetchedLogs}
-                  allStaff={allStaff}
+                  fetchedLogs={analytics.records}
+                  allStaff={analytics.staff}
                   title="Attendance"
                   showBranchDropdown={false}
                 />
@@ -489,6 +506,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
               {isInitialLoading ? <WidgetLoader /> : (
                 <AttendancePerformanceCard
                   data={data.attendancePerformance}
+                  computedData={analytics.monthlyPerformance}
                   height={SUMMARY_WIDGET_CARD_HEIGHT}
                 />
               )}
@@ -527,14 +545,20 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       {showPayrollModule && (
         <div className="branch-overview-performance-grid" style={gridAuto(360)}>
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading ? <WidgetLoader /> : (
-              <PayrollTrendsCard data={data.payrollTrends} />
+            {isInitialLoading || payrollTrend.pending ? <WidgetLoader /> : (
+              <PayrollTrendsCard
+                data={payrollTrend.ready ? payrollTrend.totals : data.payrollTrends}
+              />
             )}
           </Suspense>
 
           <Suspense fallback={<WidgetLoader />}>
             {isInitialLoading ? <WidgetLoader /> : (
-              <DepartmentPayrollCard allStaff={branchStaff} />
+              <DepartmentPayrollCard
+                allStaff={branchStaff}
+                branchId={branchId}
+                peopleType={effectivePeopleType}
+              />
             )}
           </Suspense>
         </div>

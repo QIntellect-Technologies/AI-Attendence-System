@@ -46,6 +46,8 @@ interface AttendancePerformanceCardProps {
   data: AttendancePerformanceItem[];
   branchSeries?: BranchAttendanceSeries[];
   action?: React.ReactNode;
+  /** Client-computed months (from raw records). Overrides `data` in single-series mode. */
+  computedData?: AttendancePerformanceItem[];
   /** Fixed card height — use to match sibling cards in an equal-height row. */
   height?: number;
 }
@@ -57,18 +59,20 @@ const AttendancePerformanceCard: React.FC<AttendancePerformanceCardProps> = ({
   branchSeries,
   action,
   height,
+  computedData,
 }) => {
   const isGlobal = Array.isArray(branchSeries) && branchSeries.length > 0;
 
+  const rows = computedData ?? data;
   const singleData = useMemo(
     () =>
-      data.map((d) => ({
+      rows.map((d) => ({
         label: d.month,
         segA: d["On Time"],
         segB: d.Late,
         segC: d.Absent,
       })),
-    [data],
+    [rows],
   );
 
   const multiSeries: StackedSeries[] | undefined = useMemo(() => {

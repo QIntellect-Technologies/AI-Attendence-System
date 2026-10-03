@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
+import useBranchAttendanceAnalytics from "../../hooks/useBranchAttendanceAnalytics";
+import usePaidPayrollTrends from "../../hooks/usePaidPayrollTrends";
 import { useBranchSelector } from "../../hooks/useBranchSelector";
 import { useOrg, useOrgMasterData } from "../../contexts/OrgConfigContext";
 import { useAuth } from "../../contexts/useAuth";
@@ -200,6 +202,22 @@ const DashboardOverviewTab: React.FC = () => {
     peopleType: selectedPeopleType,
   });
 
+  // Attendance bars (Week / 14 Days / single day) read one scoped, date-ranged
+  // fetch so every view counts the same unique-people-per-day data.
+  const analytics = useBranchAttendanceAnalytics({
+    branchId: selectedBranchId,
+    peopleType: effectivePeopleType,
+    enabled: showAttendanceModule,
+    lookbackDays: 14,
+  });
+
+  // Payroll Trends reads the same paid-payroll history as the Payroll page.
+  const payrollTrend = usePaidPayrollTrends({
+    branchId: selectedBranchId,
+    peopleType: effectivePeopleType,
+    enabled: showPayrollModule,
+  });
+
   // Show skeleton loaders on first render regardless of cache speed
   const [hasMounted, setHasMounted] = useState(false);
   useEffect(() => {
@@ -228,7 +246,11 @@ const DashboardOverviewTab: React.FC = () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
     try {
-      await data.refresh?.();
+      await Promise.all([
+        data.refresh?.(),
+        analytics.refresh(),
+        payrollTrend.refresh(),
+      ]);
     } finally {
       setIsRefreshing(false);
     }
@@ -514,8 +536,8 @@ const DashboardOverviewTab: React.FC = () => {
                 listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
                 title="Attendance"
                 data={isAllBranches ? undefined : data.weeklyAttendance}
-                fetchedLogs={fetchedLogs}
-                allStaff={allStaff}
+                fetchedLogs={analytics.records}
+                allStaff={analytics.staff ?? allStaff}
                 branchSeries={
                   isAllBranches ? data.branchWeeklyAttendance : undefined
                 }
@@ -538,18 +560,26 @@ const DashboardOverviewTab: React.FC = () => {
       {showPayrollModule && (
         <div className="dashboard-overview-payroll-grid" style={gridAuto(360)}>
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading ? <WidgetLoader /> : (
+            {isInitialLoading || payrollTrend.pending ? <WidgetLoader /> : (
               <PayrollTrendsCard
-                data={data.payrollTrends}
+                data={payrollTrend.ready ? payrollTrend.totals : data.payrollTrends}
                 branchSeries={
-                  isAllBranches ? data.branchPayrollTrends : undefined
+                  isAllBranches
+                    ? payrollTrend.ready
+                      ? payrollTrend.byBranch
+                      : data.branchPayrollTrends
+                    : undefined
                 }
               />
             )}
           </Suspense>
           <Suspense fallback={<WidgetLoader />}>
             {isInitialLoading ? <WidgetLoader /> : (
-              <DepartmentPayrollCard allStaff={allStaff} />
+              <DepartmentPayrollCard
+                allStaff={allStaff}
+                branchId={selectedBranchId}
+                peopleType={effectivePeopleType}
+              />
             )}
           </Suspense>
         </div>

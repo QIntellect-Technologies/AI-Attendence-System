@@ -11,6 +11,8 @@ interface DashboardCardProps {
   title?: string;
   subtitle?: string;
   action?: React.ReactNode;
+  /** Hide the default "..." button when no `action` is supplied. */
+  hideAction?: boolean;
   children: React.ReactNode;
   height?: number | string;
   style?: React.CSSProperties;
@@ -21,6 +23,7 @@ const DashboardCard: React.FC<DashboardCardProps> = ({
   title,
   subtitle,
   action,
+  hideAction = false,
   children,
   height,
   style,
@@ -79,7 +82,7 @@ const DashboardCard: React.FC<DashboardCardProps> = ({
             )}
           </div>
 
-          {action ?? (
+          {hideAction && !action ? null : (action ?? (
             <button
               type="button"
               style={{
@@ -93,7 +96,7 @@ const DashboardCard: React.FC<DashboardCardProps> = ({
             >
               <MoreHorizontal size={15} color={T.muted} />
             </button>
-          )}
+          ))}
         </div>
       )}
 
