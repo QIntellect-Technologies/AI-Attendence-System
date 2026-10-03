@@ -80,6 +80,17 @@ export const resolveEffectiveShift = (
 };
 
 export const shiftText = (member: StaffMember): string => {
+  // The mapper defaults every row to "Morning 09:00–17:00" when the
+  // backend has no shift text, and the create form used to save that
+  // default as legacy text. Only show a shift when the person is linked
+  // to a real shift row (the same field the Edit modal and the shift
+  // distribution use) or has an explicit per-person custom shift.
+  const linkedShiftId =
+    (member as any).shiftIdRef ?? (member as any).shift_id_ref ?? null;
+  const isCustomShift =
+    String((member as any).shiftId ?? (member as any).shift ?? "") ===
+    "custom";
+  if (!linkedShiftId && !isCustomShift) return "Unassigned";
   const shift = String(
     (member as any).shiftLabel ?? (member as any).shift ?? "Morning",
   );

@@ -194,7 +194,13 @@ export function staffColumnText(
   if (column.key === "class" || column.key === "department") {
     return member.department || "—";
   }
-  if (column.key === "section" || column.key === "designation") {
+  if (column.key === "designation") {
+    // Live designation only. Falling back to role/position showed the
+    // mapper's default "Staff" (or an old free-text value) for people
+    // with no designation, which contradicted the Edit modal.
+    return member.designationName || "—";
+  }
+  if (column.key === "section") {
     return member.designationName || member.role || member.position || "—";
   }
   if (column.key === "shift") return shiftText(member);
