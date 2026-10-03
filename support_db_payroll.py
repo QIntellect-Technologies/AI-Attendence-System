@@ -3317,6 +3317,7 @@ def _paid_payroll_rows(
     period_end: str,
     columns: str,
     log_label: str,
+    strict: bool = False,
 ) -> list[dict]:
     org_key = str(org_id)
     try:
@@ -3333,6 +3334,14 @@ def _paid_payroll_rows(
         )
         return result.data or []
     except Exception as exc:
+        if strict:
+            if _table_missing(exc, 'payroll_payments'):
+                raise RuntimeError(
+                    'Unable to determine whether prior payroll is paid: '
+                    'the payroll_payments table is missing.'
+                ) from exc
+            logger.exception('%s failed for org=%s', log_label, org_key)
+            raise
         if not _table_missing(exc, 'payroll_payments'):
             logger.exception('%s failed for org=%s', log_label, org_key)
         return []
@@ -3355,8 +3364,8 @@ def _paid_payroll_page_data(
     period_start: str,
     period_end: str,
     log_label: str,
-) -> tuple[set[str], dict[str, dict]]:
-    """Return paid staff IDs and complete saved snapshots with one query."""
+) -> tuple[set[str], dict[str, dict], dict[str, float]]:
+    """Return paid IDs, complete breakdowns, and saved base salaries."""
     org_key = str(org_id)
     rows = _paid_payroll_rows(
         org_key,
@@ -3371,6 +3380,7 @@ def _paid_payroll_page_data(
         if isinstance(row, dict) and _payroll_text(row.get('staff_id'))
     }
     snapshots: dict[str, dict] = {}
+    salary_snapshots: dict[str, float] = {}
     try:
         for row in rows:
             if not isinstance(row, dict):
@@ -3381,6 +3391,9 @@ def _paid_payroll_page_data(
             breakdown = row.get('breakdown')
             if not isinstance(breakdown, dict):
                 continue
+            base_salary = breakdown.get('base_salary')
+            if base_salary is not None:
+                salary_snapshots[staff_id] = _payroll_float(base_salary)
             if not payroll_engine.is_complete_breakdown_snapshot(breakdown):
                 logger.warning(
                     'Ignoring incomplete payroll snapshot for org=%s staff=%s period=%s..%s',
@@ -3393,16 +3406,16 @@ def _paid_payroll_page_data(
             snapshots[staff_id] = breakdown
     except Exception:
         logger.exception('%s snapshot parsing failed for org=%s', log_label, org_key)
-        return paid_staff_ids, {}
-    return paid_staff_ids, snapshots
+        return paid_staff_ids, {}, {}
+    return paid_staff_ids, snapshots, salary_snapshots
 
 
 def get_paid_payroll_page_data(
     org_id: str,
     period_start: str,
     period_end: str,
-) -> tuple[set[str], dict[str, dict]]:
-    """Return paid staff IDs and complete saved snapshots with one query."""
+) -> tuple[set[str], dict[str, dict], dict[str, float]]:
+    """Return paid IDs, complete breakdowns, and saved base salaries."""
     return _paid_payroll_page_data(
         org_id, period_start, period_end, 'get_paid_payroll_page_data',
     )
@@ -3419,7 +3432,7 @@ def get_paid_payroll_snapshot_breakdowns(
     missing fields that the payroll UI would otherwise display as zero.
     """
     org_key = str(org_id)
-    _, snapshots = _paid_payroll_page_data(
+    _, snapshots, _ = _paid_payroll_page_data(
         org_key,
         period_start,
         period_end,
@@ -3473,6 +3486,60 @@ def get_payroll_salary_period_snapshots(
     return snapshots
 
 
+def get_pending_payroll_salary_periods(
+    org_id: str,
+    staff_id: str,
+    effective_from: str,
+    effective_to: str,
+) -> list[dict[str, str]]:
+    """List unpaid full monthly periods before ``effective_to``.
+
+    The month containing ``effective_from`` is included so pending payroll
+    from a partial first month can be handled; the current month is excluded
+    by passing its first day as ``effective_to``.
+    """
+    org_key = _payroll_text(org_id)
+    staff_key = _payroll_text(staff_id)
+    if not org_key or not staff_key:
+        raise ValueError('organization_id and staff_id are required')
+
+    start = date.fromisoformat(effective_from)
+    end = date.fromisoformat(effective_to)
+    if end <= start:
+        return []
+
+    periods: list[dict[str, str]] = []
+    current = start.replace(day=1)
+    end_month = end.replace(day=1)
+    while current < end_month:
+        next_month = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+        period_start = current.isoformat()
+        period_end = (next_month - timedelta(days=1)).isoformat()
+        paid_rows = _paid_payroll_rows(
+            org_key,
+            period_start,
+            period_end,
+            'staff_id',
+            'get_pending_payroll_salary_periods',
+            strict=True,
+        )
+        if not any(
+            isinstance(row, dict)
+            and _payroll_text(row.get('staff_id')) == staff_key
+            for row in paid_rows
+        ):
+            periods.append({
+                'period_start': period_start,
+                'period_end': period_end,
+            })
+        current = next_month
+    return periods
+
+
 def save_pending_payroll_salary_snapshots(
     org_id: str,
     staff_id: str,
@@ -3484,9 +3551,10 @@ def save_pending_payroll_salary_snapshots(
 ) -> list[dict]:
     """Preserve pending monthly salaries or apply a salary change retroactively.
 
-    A partial first month retains the prior salary. Paid periods are immutable;
-    pending periods are filled with the prior salary for ``preserve`` or the
-    new salary for ``update``. Existing values remain untouched in preserve mode.
+    Paid periods retain their immutable breakdown salary (or their existing
+    period snapshot) so the payroll page never falls back to the new live
+    salary. Pending periods receive the prior salary for ``preserve`` or the
+    new salary for ``update``.
     """
     org_key = _payroll_text(org_id)
     staff_key = _payroll_text(staff_id)
@@ -3531,11 +3599,14 @@ def save_pending_payroll_salary_snapshots(
     except Exception as exc:
         if _table_missing(exc, 'payroll_salary_period_snapshots'):
             logger.warning(
-                'Unable to preserve historical payroll salaries for org=%s: '
+                'Unable to save historical payroll salaries for org=%s: '
                 'payroll_salary_period_snapshots migration is not applied',
                 org_key,
             )
-            return []
+            raise RuntimeError(
+                'Unable to save this salary change safely: apply the '
+                'payroll_salary_period_snapshots migration first.'
+            ) from exc
         raise
     existing_by_month = {
         _payroll_text(row.get('period_start')): _payroll_float(row.get('basic_salary'))
@@ -3544,28 +3615,41 @@ def save_pending_payroll_salary_snapshots(
     }
 
     snapshots: list[dict] = []
-    for index, (period_start, period_end) in enumerate(months):
+    for period_start, period_end in months:
+        paid_rows = _paid_payroll_rows(
+            org_key,
+            period_start,
+            (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
+            'staff_id, breakdown',
+            'save_pending_payroll_salary_snapshots.paid_period',
+            strict=True,
+        )
         existing_salary = existing_by_month.get(period_start)
-        if index == 0:
-            salary = existing_salary if existing_salary is not None else old_salary
+        paid_row = next(
+            (
+                row for row in paid_rows
+                if isinstance(row, dict)
+                and _payroll_text(row.get('staff_id')) == staff_key
+            ),
+            None,
+        )
+        if paid_row:
+            breakdown = paid_row.get('breakdown')
+            saved_salary = (
+                breakdown.get('base_salary')
+                if isinstance(breakdown, dict)
+                else None
+            )
+            salary = (
+                _payroll_float(saved_salary)
+                if saved_salary is not None
+                else existing_salary if existing_salary is not None
+                else old_salary
+            )
         elif action == 'preserve':
             salary = existing_salary if existing_salary is not None else old_salary
         else:
-            paid_rows = _paid_payroll_rows(
-                org_key,
-                period_start,
-                (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
-                'staff_id',
-                'save_pending_payroll_salary_snapshots.paid_period',
-            )
-            is_paid = any(
-                _payroll_text(row.get('staff_id')) == staff_key
-                for row in paid_rows
-                if isinstance(row, dict)
-            )
-            salary = (
-                existing_salary if existing_salary is not None else old_salary
-            ) if is_paid else new_salary
+            salary = new_salary
 
         snapshots.append({
             'org_id': org_key,
@@ -3576,7 +3660,7 @@ def save_pending_payroll_salary_snapshots(
             'updated_at': datetime.now(timezone.utc).isoformat(),
         })
 
-    try:
+    if snapshots:
         _execute_supabase(
             'save_pending_payroll_salary_snapshots',
             lambda: (
@@ -3588,15 +3672,6 @@ def save_pending_payroll_salary_snapshots(
                 )
             ),
         )
-    except Exception as exc:
-        if _table_missing(exc, 'payroll_salary_period_snapshots'):
-            logger.warning(
-                'Unable to save historical payroll salaries for org=%s: '
-                'payroll_salary_period_snapshots migration is not applied',
-                org_key,
-            )
-            return []
-        raise
     return snapshots
 
 
@@ -5683,7 +5758,11 @@ def get_client_payroll_page(
         try:
             period_start_date = date.fromisoformat(period_start_text)
             period_end_date = date.fromisoformat(period_end_text)
-            paid_staff_ids, paid_snapshot_breakdowns = get_paid_payroll_page_data(
+            (
+                paid_staff_ids,
+                paid_snapshot_breakdowns,
+                paid_salary_snapshots,
+            ) = get_paid_payroll_page_data(
                 org_key, period_start_text, period_end_text,
             )
             period_salary_by_staff = get_payroll_salary_period_snapshots(
@@ -5692,6 +5771,7 @@ def get_client_payroll_page(
                 period_start_text,
                 period_end_text,
             )
+            period_salary_by_staff.update(paid_salary_snapshots)
             for staff_id, snapshot in paid_snapshot_breakdowns.items():
                 snapshot_salary = snapshot.get('base_salary')
                 if snapshot_salary is not None:

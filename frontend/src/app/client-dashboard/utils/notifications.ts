@@ -2,6 +2,10 @@ import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 import { toast, type ToastOptions } from "react-toastify";
 import { T } from "../components/ui/theme";
+import {
+  type PendingPayrollPeriod,
+  type PendingPayrollSalaryAction,
+} from "./pendingPayrollSalary";
 
 const DEFAULT_TOAST_OPTS: ToastOptions = {
   position: "top-right",
@@ -61,6 +65,34 @@ export async function confirmDialog(opts: {
     focusCancel: true,
     confirmButtonColor: T.teal600,
   });
+}
+
+export async function pendingPayrollSalaryDialog(
+  periods: PendingPayrollPeriod[],
+): Promise<PendingPayrollSalaryAction | null> {
+  const months = periods
+    .map((period) => period.period_start.slice(0, 7))
+    .join(", ");
+  const result = await Swal.fire({
+    ...swalDefaults,
+    title: "Previous payroll is pending",
+    text:
+      `The following previous payroll period(s) are still pending: ${months}. ` +
+      "Choose whether to recalculate them using the new salary or keep their previous salary.",
+    icon: "warning",
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "Update pending payroll",
+    denyButtonText: "Keep previous salary",
+    cancelButtonText: "Cancel salary change",
+    focusCancel: true,
+    confirmButtonColor: T.teal600,
+    denyButtonColor: T.muted,
+  });
+
+  if (result.isConfirmed) return "update";
+  if (result.isDenied) return "preserve";
+  return null;
 }
 
 /**

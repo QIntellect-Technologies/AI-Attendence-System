@@ -20,6 +20,10 @@
 
 // import { BASE_URL, type User } from "../../../api/api";
 // import { handleSessionExpired } from "../../../api/sessionExpired";
+import {
+  parsePendingPayrollPeriods,
+  PendingPayrollSalaryDecisionError,
+} from "../../../utils/pendingPayrollSalary";
 
 // const AUTH_TOKEN_STORAGE_KEY = "dashboardAuthToken";
 
@@ -1029,12 +1033,24 @@ async function staffJson<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     let message = res.statusText;
+    let body: Record<string, unknown> = {};
 
     try {
-      const body = await res.json();
-      message = body.error ?? body.message ?? message;
+      body = await res.json();
+      message =
+        (typeof body.error === "string" && body.error) ||
+        (typeof body.message === "string" && body.message) ||
+        message;
     } catch {
       // Ignore non-JSON error bodies.
+    }
+
+    const pendingPeriods = parsePendingPayrollPeriods(body.pending_periods);
+    if (
+      body.code === "PENDING_PAYROLL_SALARY_DECISION_REQUIRED" &&
+      pendingPeriods
+    ) {
+      throw new PendingPayrollSalaryDecisionError(pendingPeriods);
     }
 
     throw new Error(message);
@@ -1110,6 +1126,7 @@ export interface StaffListParams {
 }
 
 export type StaffPayload = Partial<User> & {
+  pending_salary_action?: "preserve" | "update";
   password?: string;
   created_by_user_id?: number | string | null;
 

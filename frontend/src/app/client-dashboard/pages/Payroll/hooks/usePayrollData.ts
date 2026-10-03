@@ -41,6 +41,7 @@ import {
   normalizePeopleType,
   resolveModulePeopleTypes,
 } from "../../../utils/templateRendering";
+import { type PendingPayrollSalaryAction } from "../../../utils/pendingPayrollSalary";
 
 /** Sparse patch applied on top of whatever is already stored for a staff
  * member's salary_configs row — omit a key to leave it untouched (see
@@ -49,6 +50,7 @@ import {
  * replace of the applied-allowances map, same as savePayrollPolicy's
  * contract — the edit modal always sends its complete current selection. */
 export interface SalaryOverrides {
+  pendingSalaryAction?: PendingPayrollSalaryAction;
   allowances?: number;
   deductions?: number;
   otRate?: number;
@@ -924,6 +926,9 @@ export function usePayrollData(
         // never a partial patch of the map (see SalaryOverrides doc above).
         ...(overrides?.appliedAllowances !== undefined
           ? { appliedAllowances: overrides.appliedAllowances }
+          : {}),
+        ...(overrides?.pendingSalaryAction
+          ? { pendingSalaryAction: overrides.pendingSalaryAction }
           : {}),
         // effective_from is a `date` column on salary_configs — it must be
         // a real calendar date (YYYY-MM-DD), never the "YYYY-MM" shape used

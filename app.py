@@ -130,6 +130,7 @@ from support_routes import support_bp
 from tenant_routes import tenant_bp
 import support_db as support_cp_db
 import support_db_payroll
+from support_db_staff import _coerce_staff_salary
 from supabase_client import get_supabase
 from support_db_fast import (
     FastScope,
@@ -3623,6 +3624,86 @@ def api_client_user_basic(user_id):
         return jsonify({'success': False, 'error': str(e), 'message': str(e)}), 500
 
 
+class _PendingPayrollSalaryDecisionRequired(Exception):
+    def __init__(self, periods):
+        self.payload = {
+            'success': False,
+            'code': 'PENDING_PAYROLL_SALARY_DECISION_REQUIRED',
+            'message': (
+                'Choose whether pending previous payroll periods should use '
+                'the new salary or retain the previous salary.'
+            ),
+            'pending_periods': periods,
+            'options': ['preserve', 'update'],
+        }
+        super().__init__(self.payload['message'])
+
+
+def _tenant_salary_config_row(org_id, staff_id):
+    try:
+        result = (
+            supabase.table('salary_configs')
+            .select('basic_salary,allowances,deductions,ot_rate,applied_allowances,effective_from')
+            .eq('organization_id', org_id)
+            .eq('staff_id', staff_id)
+            .limit(1)
+            .execute()
+        )
+        return (result.data or [{}])[0]
+    except Exception as exc:
+        if not _is_missing_supabase_table(exc):
+            raise
+        return {}
+
+
+def _tenant_salary_change_context(org_id, staff_id, staff, existing=None):
+    existing = (
+        _tenant_salary_config_row(org_id, staff_id)
+        if existing is None
+        else existing
+    )
+    old_salary = float(
+        existing.get('basic_salary')
+        if existing.get('basic_salary') is not None
+        else (staff.get('salary') or 0)
+    )
+    history_start = (
+        staff.get('join_date')
+        or staff.get('created_at')
+        or existing.get('effective_from')
+        or date.today().isoformat()
+    )
+    return {
+        'existing': existing,
+        'old_salary': old_salary,
+        'history_start': str(history_start)[:10],
+    }
+
+
+def _require_pending_payroll_salary_decision(
+    org_id, staff_id, context, new_salary, action,
+):
+    if action not in (None, 'preserve', 'update'):
+        raise ValueError("pending_salary_action must be 'preserve' or 'update'")
+    if new_salary == context['old_salary']:
+        return action or 'preserve'
+
+    current_month_start = date.today().replace(day=1)
+    history_start = date.fromisoformat(context['history_start'])
+    if history_start >= current_month_start:
+        return action or 'preserve'
+
+    pending_periods = support_db_payroll.get_pending_payroll_salary_periods(
+        org_id,
+        staff_id,
+        context['history_start'],
+        current_month_start.isoformat(),
+    )
+    if pending_periods and action is None:
+        raise _PendingPayrollSalaryDecisionRequired(pending_periods)
+    return action or 'preserve'
+
+
 @app.route('/api/staff/<staff_id>', methods=['GET', 'PUT', 'DELETE'])
 @require_client_dashboard_auth
 def api_client_staff_detail(staff_id):
@@ -3644,9 +3725,28 @@ def api_client_staff_detail(staff_id):
 
         if request.method == 'PUT':
             data = request.get_json(silent=True) or {}
+            salary_context = None
+            if 'salary' in data:
+                org_id = str(g.dashboard_user.get('org_id') or '')
+                salary_context = _tenant_salary_change_context(
+                    org_id, str(staff_id), current,
+                )
+                requested_salary = _coerce_staff_salary(data.get('salary'))
+                data['salary'] = requested_salary
+                _require_pending_payroll_salary_decision(
+                    org_id,
+                    str(staff_id),
+                    salary_context,
+                    requested_salary,
+                    data.get('pending_salary_action'),
+                )
+
+            profile_data = dict(data)
+            if salary_context is not None:
+                profile_data.pop('salary', None)
             user = support_cp_db.update_client_staff(
                 str(staff_id),
-                data,
+                profile_data,
                 granted_by_is_admin=bool(g.dashboard_user.get('is_admin')),
             )
             if 'salary' in data:
@@ -3655,7 +3755,8 @@ def api_client_staff_detail(staff_id):
                     'user_id': str(staff_id),
                     'organization_id': str(g.dashboard_user.get('org_id') or ''),
                     'basic_salary': data.get('salary'),
-                })
+                }, salary_context=salary_context)
+                user['salary'] = data['salary']
             return jsonify({'success': True, 'user': user}), 200
 
         if request.method == 'DELETE':
@@ -3677,6 +3778,8 @@ def api_client_staff_detail(staff_id):
             }), 200
 
         return jsonify({'success': False, 'error': 'Unsupported method.'}), 405
+    except _PendingPayrollSalaryDecisionRequired as e:
+        return jsonify(e.payload), 409
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e), 'message': str(e)}), 404
     except Exception as e:
@@ -5107,7 +5210,14 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
             local_node_overtime_by_staff = support_cp_db.get_local_node_overtime_hours_for_payroll_period(
                 org_id, branch_text, period_start, period_end
             )
-            paid_staff_ids = support_cp_db.get_paid_payroll_periods(org_id, period_start, period_end)
+            (
+                paid_staff_ids,
+                _paid_breakdowns,
+                paid_salary_snapshots,
+            ) = support_db_payroll.get_paid_payroll_page_data(
+                org_id, period_start, period_end,
+            )
+            salary_period_snapshots.update(paid_salary_snapshots)
             period_resolvable = True
         except Exception:
             logger.exception('Payroll breakdown computation failed for org=%s branch=%s', org_id, branch_text)
@@ -5186,7 +5296,7 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
 
     return rows
 
-def _upsert_tenant_salary_config(data):
+def _upsert_tenant_salary_config(data, salary_context=None):
     org_id = _clean_id_text(data.get('organization_id') or data.get('org_id'))
     staff_id = _clean_id_text(
         data.get('staff_id')
@@ -5231,20 +5341,10 @@ def _upsert_tenant_salary_config(data):
     # already does — an org that never had this table yet should still be
     # able to save (falls back to "no existing row", i.e. every field comes
     # from `data`/defaults), not 500.
-    existing: dict = {}
-    try:
-        existing_result = (
-            supabase.table('salary_configs')
-            .select('basic_salary,allowances,deductions,ot_rate,applied_allowances,effective_from')
-            .eq('organization_id', org_id)
-            .eq('staff_id', staff_id)
-            .limit(1)
-            .execute()
-        )
-        existing = (existing_result.data or [{}])[0]
-    except Exception as exc:
-        if not _is_missing_supabase_table(exc):
-            raise
+    salary_context = salary_context or _tenant_salary_change_context(
+        org_id, staff_id, staff,
+    )
+    existing = salary_context['existing']
 
     def _patched_float(key, default=0, allow_negative=False):
         """Sparse-patch a numeric column, rejecting negatives by default.
@@ -5277,32 +5377,26 @@ def _upsert_tenant_salary_config(data):
     deductions = _patched_float('deductions')
     ot_rate = _patched_float('ot_rate')
 
-    old_salary = float(
-        existing.get('basic_salary')
-        if existing.get('basic_salary') is not None
-        else (staff.get('salary') or 0)
-    )
+    old_salary = salary_context['old_salary']
     if basic_salary != old_salary:
-        current_month_end = date.today().replace(day=1)
-        next_month_start = (
-            date(current_month_end.year + 1, 1, 1)
-            if current_month_end.month == 12
-            else date(current_month_end.year, current_month_end.month + 1, 1)
-        )
-        history_start = (
-            existing.get('effective_from')
-            or staff.get('created_at')
-            or date.today().isoformat()
-        )
-        support_db_payroll.save_pending_payroll_salary_snapshots(
+        current_month_start = date.today().replace(day=1)
+        salary_action = _require_pending_payroll_salary_decision(
             org_id,
             staff_id,
-            str(history_start)[:10],
-            next_month_start.isoformat(),
-            old_salary,
+            salary_context,
             basic_salary,
-            'preserve',
+            data.get('pending_salary_action'),
         )
+        if date.fromisoformat(salary_context['history_start']) < current_month_start:
+            support_db_payroll.save_pending_payroll_salary_snapshots(
+                org_id,
+                staff_id,
+                salary_context['history_start'],
+                current_month_start.isoformat(),
+                old_salary,
+                basic_salary,
+                salary_action,
+            )
 
     # applied_allowances is jsonb, not a float -- same sparse-patch rule as
     # the numeric fields above: a key present in `data` replaces it wholesale
@@ -5337,7 +5431,7 @@ def _upsert_tenant_salary_config(data):
         'applied_allowances': applied_allowances,
         'deductions': deductions,
         'ot_rate': ot_rate,
-        'effective_from': data.get('effective_from') or None,
+        'effective_from': data.get('effective_from') or existing.get('effective_from'),
         'updated_at': now,
     }
 
@@ -5688,6 +5782,8 @@ def api_set_salary(user_id=None):
             data['organization_id'] = raw_organization_id
             salary = _upsert_tenant_salary_config(data)
             return jsonify({'success': True, 'salary': salary}), 200
+        except _PendingPayrollSalaryDecisionRequired as exc:
+            return jsonify(exc.payload), 409
         except ValueError as exc:
             return jsonify({'success': False, 'message': str(exc)}), 400
         except Exception as exc:

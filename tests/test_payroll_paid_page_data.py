@@ -43,8 +43,14 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
 ):
     client = PaymentClient(
         [
-            {"staff_id": "paid-with-snapshot", "breakdown": {"complete": True}},
-            {"staff_id": "paid-old-snapshot", "breakdown": {"partial": True}},
+            {
+                "staff_id": "paid-with-snapshot",
+                "breakdown": {"complete": True, "base_salary": 52000},
+            },
+            {
+                "staff_id": "paid-old-snapshot",
+                "breakdown": {"partial": True, "base_salary": 48000},
+            },
             {"staff_id": "paid-without-snapshot", "breakdown": None},
         ]
     )
@@ -60,7 +66,7 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
         lambda snapshot: snapshot.get("complete") is True,
     )
 
-    paid_staff_ids, snapshots = payroll_db.get_paid_payroll_page_data(
+    paid_staff_ids, snapshots, salary_snapshots = payroll_db.get_paid_payroll_page_data(
         "org-1", "2026-10-01", "2026-10-31",
     )
 
@@ -76,7 +82,13 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
         "paid-old-snapshot",
         "paid-without-snapshot",
     }
-    assert snapshots == {"paid-with-snapshot": {"complete": True}}
+    assert snapshots == {
+        "paid-with-snapshot": {"complete": True, "base_salary": 52000},
+    }
+    assert salary_snapshots == {
+        "paid-with-snapshot": 52000,
+        "paid-old-snapshot": 48000,
+    }
 
 
 def test_breakdown_cache_is_limited_to_closed_paid_rows_with_snapshots():

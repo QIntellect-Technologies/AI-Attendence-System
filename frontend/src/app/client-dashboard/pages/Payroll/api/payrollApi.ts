@@ -8,6 +8,11 @@
 
 import { cleanId } from "../../../utils/tenantScope";
 import { friendlyRequestFailureMessage } from "../../../utils/apiErrors";
+import {
+  parsePendingPayrollPeriods,
+  PendingPayrollSalaryDecisionError,
+  type PendingPayrollSalaryAction,
+} from "../../../utils/pendingPayrollSalary";
 
 export type PayrollId = number | string;
 
@@ -241,6 +246,9 @@ export interface PayrollBreakdown {
   halfDayAttendanceCount: number;
   halfDayLeaveCount: number;
   halfDayDeductionAmount: number;
+  shortLeaveAttendanceCount: number;
+  shortLeaveHours: number;
+  shortLeaveDeductionAmount: number;
   unpaidLeaveDays: number;
   unpaidLeaveDeductionAmount: number;
   incomeTaxAmount: number;
@@ -312,6 +320,9 @@ export interface RawPayrollBreakdown {
   half_day_attendance_count?: number;
   half_day_leave_count?: number;
   half_day_deduction_amount?: number;
+  short_leave_attendance_count?: number;
+  short_leave_hours?: number;
+  short_leave_deduction_amount?: number;
   unpaid_leave_days?: number;
   unpaid_leave_deduction_amount?: number;
   income_tax_amount?: number;
@@ -388,6 +399,9 @@ export function mapBreakdown(
     halfDayAttendanceCount: Number(raw.half_day_attendance_count ?? 0),
     halfDayLeaveCount: Number(raw.half_day_leave_count ?? 0),
     halfDayDeductionAmount: Number(raw.half_day_deduction_amount ?? 0),
+    shortLeaveAttendanceCount: Number(raw.short_leave_attendance_count ?? 0),
+    shortLeaveHours: Number(raw.short_leave_hours ?? 0),
+    shortLeaveDeductionAmount: Number(raw.short_leave_deduction_amount ?? 0),
     unpaidLeaveDays: Number(raw.unpaid_leave_days ?? 0),
     unpaidLeaveDeductionAmount: Number(raw.unpaid_leave_deduction_amount ?? 0),
     incomeTaxAmount: Number(raw.income_tax_amount ?? 0),
@@ -448,6 +462,7 @@ export async function getPaidPayrollMonthlyTrends(params: {
 
 export interface SaveSalaryConfigPayload {
   basicSalary: number;
+  pendingSalaryAction?: PendingPayrollSalaryAction;
   // Omit a field entirely (rather than passing 0) to leave that column
   // untouched server-side — the backend upsert now patches only the keys
   // it receives and keeps whatever is already stored for the rest (see
@@ -516,6 +531,13 @@ async function requestJson<T>(
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) {
+    const pendingPeriods = parsePendingPayrollPeriods(data?.pending_periods);
+    if (
+      data?.code === "PENDING_PAYROLL_SALARY_DECISION_REQUIRED" &&
+      pendingPeriods
+    ) {
+      throw new PendingPayrollSalaryDecisionError(pendingPeriods);
+    }
     throw new Error(
       data?.message ||
       data?.error ||
@@ -800,6 +822,8 @@ export async function saveSalaryConfig(
     organization_id: String(organizationId),
     branch_id: payload.branchId ?? null,
   };
+  if (payload.pendingSalaryAction)
+    body.pending_salary_action = payload.pendingSalaryAction;
   if (payload.allowances !== undefined) body.allowances = payload.allowances;
   if (payload.deductions !== undefined) body.deductions = payload.deductions;
   if (payload.otRate !== undefined) body.ot_rate = payload.otRate;

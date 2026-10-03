@@ -65,14 +65,17 @@ import {
 } from "./hooks/usePayrollModuleGates";
 import {
   confirmDialog,
+  pendingPayrollSalaryDialog,
   toastSuccess,
   toastError,
 } from "../../utils/notifications";
+import { saveWithPendingPayrollSalaryDecision } from "../../utils/pendingPayrollSalary";
 import { setPayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
 import type { PayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
 import { formatDisplayDate } from "../../utils/formatDate";
 import {
   DEFAULT_PAYROLL_POLICY,
+  getSalaryConfigs,
   getPaidPayrollMonthlyTrends,
   getPayrollPolicy,
   type PayrollPolicy,
@@ -1134,6 +1137,45 @@ export default function PayrollModule() {
     month: periodMonth,
     peopleType: selectedPeopleType,
   });
+  const [configuredBaseSalaries, setConfiguredBaseSalaries] = useState<
+    Record<string, number>
+  >({});
+  const refreshSalaryConfiguration = useCallback(async () => {
+    if (!organizationId) {
+      setConfiguredBaseSalaries({});
+      return;
+    }
+    const configs = await getSalaryConfigs({
+      organizationId,
+      peopleType: peopleType ?? undefined,
+    });
+    const next: Record<string, number> = {};
+    configs.forEach((config) => {
+      if (config.userId !== null && config.userId !== undefined) {
+        next[String(config.userId)] = config.basicSalary;
+      }
+    });
+    setConfiguredBaseSalaries(next);
+  }, [organizationId, peopleType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      void refreshSalaryConfiguration().catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to refresh Salary Configuration: ${error.message}`
+            : "Unable to refresh Salary Configuration.",
+        );
+      });
+    refresh();
+    window.addEventListener("payroll-data-invalidated", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("payroll-data-invalidated", refresh);
+    };
+  }, [refreshSalaryConfiguration]);
 
   const handleLateDecision = useCallback(
     async (attendanceId: string, decision: PayrollDecision) => {
@@ -1477,6 +1519,22 @@ export default function PayrollModule() {
     statusFilter,
   ]);
 
+  const salaryConfigurationRows = useMemo(
+    () =>
+      visibleRows.map((row) => {
+        const configuredSalary =
+          configuredBaseSalaries[String(row.staffId || row.id)];
+        return configuredSalary === undefined
+          ? row
+          : {
+              ...row,
+              baseSalary: configuredSalary,
+              basicSalary: configuredSalary,
+            };
+      }),
+    [configuredBaseSalaries, visibleRows],
+  );
+
   const filteredDepartmentSummary = useMemo(() => {
     const totals = new Map<string, number>();
     visibleRows.forEach((row) => {
@@ -1701,7 +1759,9 @@ export default function PayrollModule() {
         { key: "#", label: "Staff ID" },
         { key: "name", label: "Name" },
         { key: "cnic", label: "CNIC" },
-        ...(isGlobal ? [{ key: "branch", label: "Branch" }] : []),
+        ...(isGlobal && cfg.branches.length > 1
+          ? [{ key: "branch", label: "Branch" }]
+          : []),
         { key: "dept", label: "Department" },
         { key: "base", label: "Base Salary" },
         { key: "allowances", label: "Allowances" },
@@ -1719,7 +1779,7 @@ export default function PayrollModule() {
         { key: "status", label: "Status" },
         { key: "action", label: "" },
       ]),
-    [hasIncomeTax, isGlobal, gates],
+    [cfg.branches.length, hasIncomeTax, isGlobal, gates],
   );
 
   // Body cells render off the same filtered list as the header, so a column
@@ -1952,17 +2012,33 @@ export default function PayrollModule() {
       // here (it would misdate the change to whichever month's report
       // happens to be open, and Postgres rejects it as an invalid date
       // besides). Omit it and let updateBaseSalary default to today.
-      await updateBaseSalary(
-        editingRow.staffId,
-        Number(draftSalary),
-        undefined,
-        {
-          // Omitted (not sent as 0) without the Overtime module, so saving a
-          // salary edit can't silently clear a previously-set per-staff rate.
-          ...(hasOvertime ? { otRate } : {}),
-          appliedAllowances: draftAppliedAllowances,
-        },
+      const salaryOverrides = {
+        // Omitted (not sent as 0) without the Overtime module, so saving a
+        // salary edit can't silently clear a previously-set per-staff rate.
+        ...(hasOvertime ? { otRate } : {}),
+        appliedAllowances: draftAppliedAllowances,
+      };
+      const saveResult = await saveWithPendingPayrollSalaryDecision(
+        (pendingSalaryAction) =>
+          updateBaseSalary(
+            editingRow.staffId,
+            Number(draftSalary),
+            undefined,
+            {
+              ...salaryOverrides,
+              ...(pendingSalaryAction ? { pendingSalaryAction } : {}),
+            },
+          ),
+        pendingPayrollSalaryDialog,
       );
+      if (saveResult.cancelled) return;
+      await refreshSalaryConfiguration().catch((error: unknown) => {
+        toastError(
+          error instanceof Error
+            ? `Salary was saved, but Salary Configuration could not be refreshed: ${error.message}`
+            : "Salary was saved, but Salary Configuration could not be refreshed.",
+        );
+      });
       setIsEditModalOpen(false);
       setEditingRow(null);
     } catch (err) {
@@ -1980,6 +2056,7 @@ export default function PayrollModule() {
     otRateConfigError,
     editingRow,
     updateBaseSalary,
+    refreshSalaryConfiguration,
     hasOvertime,
   ]);
 
@@ -2660,7 +2737,7 @@ export default function PayrollModule() {
                       </div>
                     </td>
                     <td style={tableCellStyle}>{row.cnic || "—"}</td>
-                    {isGlobal && (
+                    {isGlobal && cfg.branches.length > 1 && (
                       <td style={tableCellStyle}>
                         <Badge>{row.branchName}</Badge>
                       </td>
@@ -2885,24 +2962,26 @@ export default function PayrollModule() {
                         >
                           <FileText size={13} />
                         </button>
-                        <button
-                          type="button"
-                          aria-label={`Edit ${row.name}'s payroll`}
-                          title="Edit payroll"
-                          onClick={() => openEditModal(row)}
-                          style={{
-                            background: "none",
-                            border: `1px solid ${T.border}`,
-                            borderRadius: 8,
-                            padding: "6px 8px",
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            color: T.textMuted,
-                          }}
-                        >
-                          <Edit2 size={13} />
-                        </button>
+                        {!isPastPayrollMonth && (
+                          <button
+                            type="button"
+                            aria-label={`Edit ${row.name}'s payroll`}
+                            title="Edit payroll"
+                            onClick={() => openEditModal(row)}
+                            style={{
+                              background: "none",
+                              border: `1px solid ${T.border}`,
+                              borderRadius: 8,
+                              padding: "6px 8px",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              color: T.textMuted,
+                            }}
+                          >
+                            <Edit2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2979,7 +3058,7 @@ export default function PayrollModule() {
 
       {activeTab === "salary" && (
         <SalaryConfigTab
-          rows={visibleRows}
+          rows={salaryConfigurationRows}
           branches={branchOptions}
           selectedBranchId={effectiveBranchId}
           onEditRow={openEditModal}

@@ -32,11 +32,13 @@ import React, {
 import {
   alertDialog,
   confirmDialog,
+  pendingPayrollSalaryDialog,
   reasonDialog,
   toastError,
   toastInfo,
   toastSuccess,
 } from "../../utils/notifications";
+import { saveWithPendingPayrollSalaryDecision } from "../../utils/pendingPayrollSalary";
 import { useParams, useSearchParams, useLocation } from "react-router-dom";
 import {
   ArchiveRestore,
@@ -1182,20 +1184,29 @@ const StaffDirectory: FC = () => {
             );
           }
 
-          const updatedStaff = (await updateStaff(
-            userId,
-            buildStaffApiPayload(
-              data,
-              organizationId,
-              selectedBranchName,
-              selectedBackendBranchId,
-              shift,
-              currentUserId,
-              undefined,
-              peopleModel.peopleType,
-              data.designationName,
-            ),
-          )) as unknown as StaffMember;
+          const staffPayload = buildStaffApiPayload(
+            data,
+            organizationId,
+            selectedBranchName,
+            selectedBackendBranchId,
+            shift,
+            currentUserId,
+            undefined,
+            peopleModel.peopleType,
+            data.designationName,
+          );
+          const saveResult = await saveWithPendingPayrollSalaryDecision(
+            (pendingSalaryAction) =>
+              updateStaff(userId, {
+                ...staffPayload,
+                ...(pendingSalaryAction
+                  ? { pending_salary_action: pendingSalaryAction }
+                  : {}),
+              }),
+            pendingPayrollSalaryDialog,
+          );
+          if (saveResult.cancelled) return;
+          const updatedStaff = saveResult.value as unknown as StaffMember;
 
           if (files?.profileImageFile) {
             setTrainingOverlay({
