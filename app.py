@@ -5081,6 +5081,16 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
     period_start_date = period_end_date = None
     period_resolvable = False
     paid_staff_ids: set[str] = set()
+    salary_period_snapshots = (
+        support_db_payroll.get_payroll_salary_period_snapshots(
+            org_id,
+            [_clean_id_text(staff.get('id')) for staff in staff_rows],
+            period_start,
+            period_end,
+        )
+        if period_start and period_end
+        else {}
+    )
     if branch_text and period_start and period_end:
         try:
             period_start_date = date.fromisoformat(period_start)
@@ -5138,6 +5148,8 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
         overlay['department'] = overlay.get('department') or staff.get('department_name') or 'General'
         if 'basic_salary' not in overlay or overlay.get('basic_salary') is None:
             overlay['basic_salary'] = staff.get('salary') or 0
+        if staff_id in salary_period_snapshots:
+            overlay['basic_salary'] = salary_period_snapshots[staff_id]
 
         # Resolved unconditionally (not just when a period breakdown runs)
         # so "OT RATE/HR" is always correct, even before a period is picked.
@@ -5223,7 +5235,7 @@ def _upsert_tenant_salary_config(data):
     try:
         existing_result = (
             supabase.table('salary_configs')
-            .select('basic_salary,allowances,deductions,ot_rate,applied_allowances')
+            .select('basic_salary,allowances,deductions,ot_rate,applied_allowances,effective_from')
             .eq('organization_id', org_id)
             .eq('staff_id', staff_id)
             .limit(1)
@@ -5264,6 +5276,33 @@ def _upsert_tenant_salary_config(data):
     allowances = _patched_float('allowances')
     deductions = _patched_float('deductions')
     ot_rate = _patched_float('ot_rate')
+
+    old_salary = float(
+        existing.get('basic_salary')
+        if existing.get('basic_salary') is not None
+        else (staff.get('salary') or 0)
+    )
+    if basic_salary != old_salary:
+        current_month_end = date.today().replace(day=1)
+        next_month_start = (
+            date(current_month_end.year + 1, 1, 1)
+            if current_month_end.month == 12
+            else date(current_month_end.year, current_month_end.month + 1, 1)
+        )
+        history_start = (
+            existing.get('effective_from')
+            or staff.get('created_at')
+            or date.today().isoformat()
+        )
+        support_db_payroll.save_pending_payroll_salary_snapshots(
+            org_id,
+            staff_id,
+            str(history_start)[:10],
+            next_month_start.isoformat(),
+            old_salary,
+            basic_salary,
+            'preserve',
+        )
 
     # applied_allowances is jsonb, not a float -- same sparse-patch rule as
     # the numeric fields above: a key present in `data` replaces it wholesale
