@@ -3427,6 +3427,179 @@ def get_paid_payroll_snapshot_breakdowns(
     )
     return snapshots
 
+
+def get_payroll_salary_period_snapshots(
+    org_id: str,
+    staff_ids: list[str] | tuple[str, ...],
+    period_start: str,
+    period_end: str,
+) -> dict[str, float]:
+    """Return saved base salaries for staff in one exact payroll period."""
+    org_key = _payroll_text(org_id)
+    staff_keys = [_payroll_text(staff_id) for staff_id in staff_ids if _payroll_text(staff_id)]
+    if not org_key or not staff_keys:
+        return {}
+
+    try:
+        result = _execute_supabase(
+            'get_payroll_salary_period_snapshots',
+            lambda: (
+                get_supabase()
+                .table('payroll_salary_period_snapshots')
+                .select('staff_id, basic_salary')
+                .eq('org_id', org_key)
+                .in_('staff_id', staff_keys)
+                .eq('period_start', period_start)
+                .eq('period_end', period_end)
+            ),
+        )
+    except Exception as exc:
+        if _table_missing(exc, 'payroll_salary_period_snapshots'):
+            logger.warning(
+                'Payroll salary-period snapshots are not available for org=%s; '
+                'using the current configured salaries until the migration is applied',
+                org_key,
+            )
+            return {}
+        raise
+
+    snapshots: dict[str, float] = {}
+    for row in result.data or []:
+        if not isinstance(row, dict):
+            continue
+        staff_id = _payroll_text(row.get('staff_id'))
+        if staff_id and row.get('basic_salary') is not None:
+            snapshots[staff_id] = _payroll_float(row.get('basic_salary'))
+    return snapshots
+
+
+def save_pending_payroll_salary_snapshots(
+    org_id: str,
+    staff_id: str,
+    effective_from: str,
+    effective_to: str,
+    old_salary: float,
+    new_salary: float,
+    action: str,
+) -> list[dict]:
+    """Preserve pending monthly salaries or apply a salary change retroactively.
+
+    A partial first month retains the prior salary. Paid periods are immutable;
+    pending periods are filled with the prior salary for ``preserve`` or the
+    new salary for ``update``. Existing values remain untouched in preserve mode.
+    """
+    org_key = _payroll_text(org_id)
+    staff_key = _payroll_text(staff_id)
+    if not org_key or not staff_key:
+        raise ValueError('organization_id and staff_id are required')
+    if action not in {'preserve', 'update'}:
+        raise ValueError("action must be 'preserve' or 'update'")
+
+    start = date.fromisoformat(effective_from)
+    end = date.fromisoformat(effective_to)
+    if end < start:
+        raise ValueError('effective_to cannot be before effective_from')
+
+    first_month = start.replace(day=1)
+    end_month = end.replace(day=1)
+    months: list[tuple[str, str]] = []
+    current = first_month
+    while current < end_month:
+        next_month = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+        months.append((current.isoformat(), next_month.isoformat()))
+        current = next_month
+    if not months:
+        return []
+
+    try:
+        existing_result = _execute_supabase(
+            'get_existing_payroll_salary_period_snapshots',
+            lambda: (
+                get_supabase()
+                .table('payroll_salary_period_snapshots')
+                .select('period_start, basic_salary')
+                .eq('org_id', org_key)
+                .eq('staff_id', staff_key)
+                .gte('period_start', months[0][0])
+                .lt('period_start', months[-1][1])
+            ),
+        )
+    except Exception as exc:
+        if _table_missing(exc, 'payroll_salary_period_snapshots'):
+            logger.warning(
+                'Unable to preserve historical payroll salaries for org=%s: '
+                'payroll_salary_period_snapshots migration is not applied',
+                org_key,
+            )
+            return []
+        raise
+    existing_by_month = {
+        _payroll_text(row.get('period_start')): _payroll_float(row.get('basic_salary'))
+        for row in (existing_result.data or [])
+        if isinstance(row, dict) and row.get('period_start') is not None
+    }
+
+    snapshots: list[dict] = []
+    for index, (period_start, period_end) in enumerate(months):
+        existing_salary = existing_by_month.get(period_start)
+        if index == 0:
+            salary = existing_salary if existing_salary is not None else old_salary
+        elif action == 'preserve':
+            salary = existing_salary if existing_salary is not None else old_salary
+        else:
+            paid_rows = _paid_payroll_rows(
+                org_key,
+                period_start,
+                (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
+                'staff_id',
+                'save_pending_payroll_salary_snapshots.paid_period',
+            )
+            is_paid = any(
+                _payroll_text(row.get('staff_id')) == staff_key
+                for row in paid_rows
+                if isinstance(row, dict)
+            )
+            salary = (
+                existing_salary if existing_salary is not None else old_salary
+            ) if is_paid else new_salary
+
+        snapshots.append({
+            'org_id': org_key,
+            'staff_id': staff_key,
+            'period_start': period_start,
+            'period_end': (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
+            'basic_salary': salary,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+
+    try:
+        _execute_supabase(
+            'save_pending_payroll_salary_snapshots',
+            lambda: (
+                get_supabase()
+                .table('payroll_salary_period_snapshots')
+                .upsert(
+                    snapshots,
+                    on_conflict='org_id,staff_id,period_start,period_end',
+                )
+            ),
+        )
+    except Exception as exc:
+        if _table_missing(exc, 'payroll_salary_period_snapshots'):
+            logger.warning(
+                'Unable to save historical payroll salaries for org=%s: '
+                'payroll_salary_period_snapshots migration is not applied',
+                org_key,
+            )
+            return []
+        raise
+    return snapshots
+
+
 def mark_payroll_paid(
     org_id: str,
     staff_id: str,
@@ -5513,6 +5686,21 @@ def get_client_payroll_page(
             paid_staff_ids, paid_snapshot_breakdowns = get_paid_payroll_page_data(
                 org_key, period_start_text, period_end_text,
             )
+            period_salary_by_staff = get_payroll_salary_period_snapshots(
+                org_key,
+                staff_ids,
+                period_start_text,
+                period_end_text,
+            )
+            for staff_id, snapshot in paid_snapshot_breakdowns.items():
+                snapshot_salary = snapshot.get('base_salary')
+                if snapshot_salary is not None:
+                    period_salary_by_staff[staff_id] = _payroll_float(snapshot_salary)
+            for staff_id, snapshot_salary in period_salary_by_staff.items():
+                salary_by_staff[staff_id] = {
+                    **salary_by_staff.get(staff_id, {}),
+                    'basic_salary': snapshot_salary,
+                }
 
             # Pending payroll may still be affected by retroactive attendance
             # edits, so only reuse cached breakdowns when every displayed row
