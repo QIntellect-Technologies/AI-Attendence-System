@@ -2578,6 +2578,23 @@ _PAYROLL_STAFF_SELECT_VARIANT_CACHE: dict[str, tuple[float, tuple]] = {}
 _PAYROLL_BREAKDOWN_CACHE_TTL_SECONDS = 300.0
 _PAYROLL_BREAKDOWN_CACHE: dict[str, tuple[float, dict]] = {}
 
+
+def _can_cache_payroll_breakdown(
+    period_end: date,
+    staff_ids: list[str],
+    paid_staff_ids: set[str] | None,
+    paid_snapshot_breakdowns: dict[str, dict],
+) -> bool:
+    staff_id_set = set(staff_ids)
+    return (
+        period_end < date.today()
+        and bool(staff_id_set)
+        and paid_staff_ids is not None
+        and staff_id_set.issubset(paid_staff_ids)
+        and staff_id_set.issubset(paid_snapshot_breakdowns)
+    )
+
+
 def _invalidate_payroll_breakdown_cache(org_id: str) -> None:
     prefix = f'{str(org_id)}:'
     for key in list(_PAYROLL_BREAKDOWN_CACHE.keys()):
@@ -5497,16 +5514,17 @@ def get_client_payroll_page(
                 org_key, period_start_text, period_end_text,
             )
 
-            # [Fix-6] A CLOSED period (period_end already in the past) can't
-            # have new attendance/leave/overtime logged against it, so its
-            # computed breakdown never changes on a normal revisit of the
-            # same page/filters -- only recompute it once per TTL window.
-            # The current/open period (period_end_date >= today) always
-            # skips this cache and computes live, since its underlying data
-            # can still change within the same day.
+            # Pending payroll may still be affected by retroactive attendance
+            # edits, so only reuse cached breakdowns when every displayed row
+            # is paid and has its immutable saved snapshot.
             cache_key: str | None = None
             cached_breakdown = None
-            if period_end_date < date.today():
+            if _can_cache_payroll_breakdown(
+                period_end_date,
+                staff_ids,
+                paid_staff_ids,
+                paid_snapshot_breakdowns,
+            ):
                 cache_key = (
                     f'{org_key}:{"|".join(page_branch_ids)}:'
                     f'{period_start_text}:{period_end_text}:{"|".join(sorted(staff_ids))}:'
@@ -5516,7 +5534,7 @@ def get_client_payroll_page(
                 cached_breakdown = _cache_get(_PAYROLL_BREAKDOWN_CACHE, cache_key)
 
             if cached_breakdown is not None:
-                breakdown_by_staff, present_days_by_staff, paid_staff_ids = cached_breakdown
+                breakdown_by_staff, present_days_by_staff, _ = cached_breakdown
             else:
                 attendance_by_staff: dict[str, list[dict]] = {}
                 leaves_by_staff: dict[str, list[dict]] = {}

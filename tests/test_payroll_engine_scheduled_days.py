@@ -123,7 +123,9 @@ def test_deductions_only_include_scheduled_attendance_and_leave_through_today(mo
         period_end=date(2024, 2, 29),
     )
 
-    assert result.late_count == 1
+    assert result.late_count == 2
+    # The holiday late arrival is reported, but only the scheduled-day late
+    # arrival contributes to the payroll deduction.
     assert result.late_deduction_amount == result.per_day_rate
     assert result.half_day_attendance_count == 1
     assert result.half_day_deduction_amount == result.per_day_rate * 0.5

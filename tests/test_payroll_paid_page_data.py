@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import supabase_client
@@ -76,3 +77,33 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
         "paid-without-snapshot",
     }
     assert snapshots == {"paid-with-snapshot": {"complete": True}}
+
+
+def test_breakdown_cache_is_limited_to_closed_paid_rows_with_snapshots():
+    closed_period_end = date.today() - timedelta(days=1)
+    paid_staff_ids = {"staff-1"}
+
+    assert not payroll_db._can_cache_payroll_breakdown(
+        closed_period_end,
+        ["staff-1"],
+        set(),
+        {},
+    )
+    assert not payroll_db._can_cache_payroll_breakdown(
+        closed_period_end,
+        ["staff-1"],
+        paid_staff_ids,
+        {},
+    )
+    assert payroll_db._can_cache_payroll_breakdown(
+        closed_period_end,
+        ["staff-1"],
+        paid_staff_ids,
+        {"staff-1": {"late_count": 2}},
+    )
+    assert not payroll_db._can_cache_payroll_breakdown(
+        date.today(),
+        ["staff-1"],
+        paid_staff_ids,
+        {"staff-1": {"late_count": 2}},
+    )
