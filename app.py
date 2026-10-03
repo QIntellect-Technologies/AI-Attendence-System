@@ -5237,9 +5237,17 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
         cache_key = (staff_branch_id, staff_id_for_policy)
         cached = policy_cache.get(cache_key)
         if cached is None:
-            cached = support_cp_db.get_payroll_policy(
-                org_id, branch_id=staff_branch_id, staff_id=staff_id_for_policy
-            )
+            if period_start and period_end:
+                cached = support_cp_db.get_payroll_policy_for_period(
+                    org_id,
+                    period_start,
+                    branch_id=staff_branch_id,
+                    staff_id=staff_id_for_policy,
+                )
+            else:
+                cached = support_cp_db.get_payroll_policy(
+                    org_id, branch_id=staff_branch_id, staff_id=staff_id_for_policy
+                )
             policy_cache[cache_key] = cached
         return cached
 

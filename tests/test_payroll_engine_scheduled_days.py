@@ -229,6 +229,55 @@ def test_late_arrival_threshold_deducts_one_full_day_per_threshold():
     assert result.late_deduction_amount == result.per_day_rate
 
 
+def test_current_month_single_late_arrival_deducts_at_threshold_one():
+    result = compute_payroll_breakdown(
+        base_salary=3_000,
+        ot_hours=0,
+        ot_rate_per_hour=0,
+        period_start=date(2026, 10, 1),
+        period_end=date(2026, 10, 31),
+        policy={
+            'perDayRateBasis': 'scheduled_days',
+            'payrollWeeklyOffDays': ['sunday'],
+            'lateComingPolicy': {
+                'mode': 'occurrence_threshold',
+                'thresholdOccurrences': 1,
+            },
+        },
+        attendance_rows=[
+            {
+                'date': '2026-10-03',
+                'checkInStatus': 'late',
+                'dayStatus': 'present',
+                'captureChannel': 'manual',
+            },
+        ],
+        leave_rows=[],
+    )
+
+    assert result.late_count == 1
+    assert result.late_deduction_days == 1
+    assert result.late_deduction_amount == result.per_day_rate
+
+
+def test_fixed_late_arrival_rate_is_applied_for_each_included_late_checkin():
+    result = _breakdown(
+        attendance_rows=[
+            {'date': '2024-02-01', 'checkInStatus': 'late'},
+            {'date': '2024-02-03', 'checkInStatus': 'late'},
+        ],
+        policy=_policy(
+            lateComingPolicy={
+                'mode': 'flat_per_occurrence',
+                'flatAmountPerOccurrence': 500,
+            },
+        ),
+    )
+
+    assert result.late_count == 2
+    assert result.late_deduction_amount == 1_000
+
+
 def test_late_arrival_threshold_counts_only_complete_groups():
     policy = _policy(
         lateComingPolicy={

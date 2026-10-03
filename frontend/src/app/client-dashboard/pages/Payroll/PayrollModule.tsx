@@ -2181,16 +2181,11 @@ export default function PayrollModule() {
         // the table silently keeps showing the stale rate until a full
         // page reload re-fetches org config.
         updateCfg({ payrollPolicy: draftPolicy });
-      } else {
-        // A branch override must never touch the shared org-wide cfg —
-        // that's the global default every *other* branch falls back to.
-        // Instead, force-refetch this branch's payroll rows so the
-        // backend-resolved effective_ot_rate (support_db_payroll's
-        // resolve_effective_ot_rate) reflects the new override
-        // immediately, same as the org path but via the table's own data
-        // source rather than the shared cache.
-        void refresh({ force: true });
       }
+      // Payroll breakdowns include policy-based deductions as well as OT.
+      // Always refetch after a save so the active period uses the new rules
+      // instead of retaining the rows calculated before this update.
+      void refresh({ force: true });
       setIsRulesModalOpen(false);
       toastSuccess(
         isGlobal

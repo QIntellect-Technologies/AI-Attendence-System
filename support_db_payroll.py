@@ -2649,6 +2649,100 @@ _DEFAULT_PAYROLL_POLICY = {
 # be undefined. Using a sentinel instead of NULL keeps the constraint a
 # real, non-partial unique index that upsert can target directly.
 _PAYROLL_OVERRIDE_NO_SCOPE = ''
+_PAYROLL_POLICY_HISTORY_TABLE = 'payroll_policy_history'
+
+
+def _payroll_period_uses_history(effective_on: str) -> bool:
+    """Only closed prior months use snapshots; current/future months use live rules."""
+    effective_date = date.fromisoformat(effective_on)
+    return effective_date < date.today().replace(day=1)
+
+
+def _historical_payroll_policy(
+    org_id: str,
+    effective_on: str,
+    *,
+    branch_id: str | None = None,
+    staff_id: str | None = None,
+) -> dict | None:
+    """Return the latest saved policy for a scope on or before a date."""
+    effective_date = date.fromisoformat(effective_on).isoformat()
+
+    def _query():
+        query = (
+            get_supabase()
+            .table(_PAYROLL_POLICY_HISTORY_TABLE)
+            .select('effective_from, policy')
+            .eq('org_id', str(org_id))
+            .lte('effective_from', effective_date)
+        )
+        if staff_id:
+            query = (
+                query.eq('staff_id', str(staff_id))
+                .eq('branch_id', _PAYROLL_OVERRIDE_NO_SCOPE)
+            )
+        elif branch_id:
+            query = (
+                query.eq('branch_id', str(branch_id))
+                .eq('staff_id', _PAYROLL_OVERRIDE_NO_SCOPE)
+            )
+        else:
+            query = (
+                query.eq('branch_id', _PAYROLL_OVERRIDE_NO_SCOPE)
+                .eq('staff_id', _PAYROLL_OVERRIDE_NO_SCOPE)
+            )
+        return query.order('effective_from', desc=True).limit(1)
+
+    try:
+        result = _execute_supabase('get_historical_payroll_policy', _query)
+    except Exception as exc:
+        if _table_missing(exc, _PAYROLL_POLICY_HISTORY_TABLE):
+            raise RuntimeError(
+                'Historical payroll rules are unavailable: apply the '
+                'payroll_policy_history migration first.'
+            ) from exc
+        raise
+
+    rows = result.data or []
+    stored = rows[0].get('policy') if rows else None
+    return stored if isinstance(stored, dict) and stored else None
+
+
+def _save_payroll_policy_history(
+    org_id: str,
+    policy: dict,
+    effective_from: str,
+    *,
+    branch_id: str | None = None,
+    staff_id: str | None = None,
+) -> None:
+    payload = {
+        'org_id': str(org_id),
+        'branch_id': str(branch_id) if branch_id and not staff_id else _PAYROLL_OVERRIDE_NO_SCOPE,
+        'staff_id': str(staff_id) if staff_id else _PAYROLL_OVERRIDE_NO_SCOPE,
+        'effective_from': date.fromisoformat(effective_from).isoformat(),
+        'policy': policy,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        _execute_supabase(
+            'save_payroll_policy_history',
+            lambda: (
+                get_supabase()
+                .table(_PAYROLL_POLICY_HISTORY_TABLE)
+                .upsert(
+                    payload,
+                    on_conflict='org_id,branch_id,staff_id,effective_from',
+                )
+            ),
+        )
+    except Exception as exc:
+        if _table_missing(exc, _PAYROLL_POLICY_HISTORY_TABLE):
+            raise RuntimeError(
+                'Unable to save payroll rules safely: apply the '
+                'payroll_policy_history migration first.'
+            ) from exc
+        raise
 
 def _org_default_payroll_policy(org_id: str) -> dict:
     org_key = str(org_id)
@@ -2699,8 +2793,9 @@ def _payroll_policy_overrides_for_page(
     org_id: str,
     branch_ids: list[str],
     staff_ids: list[str],
+    effective_on: str | None = None,
 ) -> tuple[dict[str, dict], dict[str, dict]]:
-    """Load all effective page-scope overrides in one tenant-scoped query."""
+    """Load current or period-effective page-scope overrides in two queries."""
     org_key = str(org_id)
     branch_keys = {str(value) for value in branch_ids if value}
     staff_keys = {str(value) for value in staff_ids if value}
@@ -2715,19 +2810,43 @@ def _payroll_policy_overrides_for_page(
         if not scope_ids:
             return []
         try:
-            result = _execute_supabase(
-                f'get_payroll_policy_overrides_for_page.{scope_column}',
-                lambda: (
+            table_name = (
+                _PAYROLL_POLICY_HISTORY_TABLE
+                if effective_on
+                else 'payroll_policy_overrides'
+            )
+
+            def _query():
+                query = (
                     get_supabase()
-                    .table('payroll_policy_overrides')
-                    .select('branch_id, staff_id, policy')
+                    .table(table_name)
+                    .select(
+                        'branch_id, staff_id, policy, effective_from'
+                        if effective_on
+                        else 'branch_id, staff_id, policy'
+                    )
                     .eq('org_id', org_key)
                     .eq(empty_column, _PAYROLL_OVERRIDE_NO_SCOPE)
                     .in_(scope_column, sorted(scope_ids))
-                ),
+                )
+                if effective_on:
+                    query = query.lte('effective_from', effective_on)
+                    query = query.order('effective_from', desc=True)
+                return query
+
+            result = _execute_supabase(
+                f'get_payroll_policy_overrides_for_page.{scope_column}',
+                _query,
             )
             return result.data or []
         except Exception as exc:
+            if effective_on:
+                if _table_missing(exc, _PAYROLL_POLICY_HISTORY_TABLE):
+                    raise RuntimeError(
+                        'Historical payroll rules are unavailable: apply the '
+                        'payroll_policy_history migration first.'
+                    ) from exc
+                raise
             if not _table_missing(exc, 'payroll_policy_overrides'):
                 logger.exception(
                     'payroll policy %s override batch lookup failed for org=%s',
@@ -2736,24 +2855,43 @@ def _payroll_policy_overrides_for_page(
                 )
             return []
 
-    from concurrency import gather
+    from concurrency import gather, gather_or_raise
 
-    override_rows, _errors = gather({
+    jobs = {
         'branches': lambda: load_overrides('branch_id', branch_keys, 'staff_id'),
         'staff': lambda: load_overrides('staff_id', staff_keys, 'branch_id'),
-    }, max_workers=2)
+    }
+    if effective_on:
+        override_rows, _errors = gather_or_raise(
+            jobs,
+            essential=('branches', 'staff'),
+            max_workers=2,
+        )
+    else:
+        override_rows, _errors = gather(jobs, max_workers=2)
 
-    for row in override_rows.get('branches', []):
-        policy = row.get('policy')
-        branch_key = str(row.get('branch_id') or '')
-        if branch_key in branch_keys and isinstance(policy, dict):
-            branch_overrides[branch_key] = policy
+    def apply_overrides(rows: list[dict], keys: set[str], target: dict[str, dict], scope_column: str) -> None:
+        seen: set[str] = set()
+        for row in rows:
+            scope_key = str(row.get(scope_column) or '')
+            policy = row.get('policy')
+            if scope_key not in keys or scope_key in seen or not isinstance(policy, dict):
+                continue
+            target[scope_key] = policy
+            seen.add(scope_key)
 
-    for row in override_rows.get('staff', []):
-        policy = row.get('policy')
-        staff_key = str(row.get('staff_id') or '')
-        if staff_key in staff_keys and isinstance(policy, dict):
-            staff_overrides[staff_key] = policy
+    apply_overrides(
+        override_rows.get('branches', []),
+        branch_keys,
+        branch_overrides,
+        'branch_id',
+    )
+    apply_overrides(
+        override_rows.get('staff', []),
+        staff_keys,
+        staff_overrides,
+        'staff_id',
+    )
 
     logger.info(
         'Payroll policy overrides loaded for org=%s branches=%d staff=%d overrides=%d',
@@ -2855,6 +2993,45 @@ def get_payroll_policy(org_id: str, branch_id: str | None = None, staff_id: str 
         if staff_override:
             policy = {**policy, **staff_override}
     return policy
+
+
+def get_payroll_policy_for_period(
+    org_id: str,
+    period_start: str,
+    branch_id: str | None = None,
+    staff_id: str | None = None,
+) -> dict:
+    """Resolve org, branch, and staff policies effective for a payroll period."""
+    effective_date = date.fromisoformat(period_start).isoformat()
+    if not _payroll_period_uses_history(effective_date):
+        return get_payroll_policy(
+            org_id,
+            branch_id=branch_id,
+            staff_id=staff_id,
+        )
+
+    policy = dict(_DEFAULT_PAYROLL_POLICY)
+    org_policy = _historical_payroll_policy(org_id, effective_date)
+    if org_policy:
+        policy.update(org_policy)
+    if branch_id:
+        branch_policy = _historical_payroll_policy(
+            org_id,
+            effective_date,
+            branch_id=branch_id,
+        )
+        if branch_policy:
+            policy.update(branch_policy)
+    if staff_id:
+        staff_policy = _historical_payroll_policy(
+            org_id,
+            effective_date,
+            staff_id=staff_id,
+        )
+        if staff_policy:
+            policy.update(staff_policy)
+    return policy
+
 
 def get_leave_type_rules(org_id: str, branch_id: str | None = None) -> dict:
     """Effective leave-type paid/unpaid map for org_id (+ branch override,
@@ -3260,6 +3437,14 @@ def save_payroll_policy(org_id: str, policy: dict, branch_id: str | None = None,
         raise ValueError('organization_id is required to save payroll policy')
 
     _validate_payroll_policy(policy or {})
+    effective_from = date.today().replace(day=1).isoformat()
+    _save_payroll_policy_history(
+        org_key,
+        policy or {},
+        effective_from,
+        branch_id=branch_id,
+        staff_id=staff_id,
+    )
 
     if branch_id or staff_id:
         # branch_id/staff_id are NOT NULL on this table (sentinel
@@ -5705,22 +5890,44 @@ def get_client_payroll_page(
     present_days_by_staff: dict[str, int] = {}
     paid_staff_ids: set[str] | None = None
 
-    # Policy resolution (individual > branch > org — see get_payroll_policy)
-    # is independent of whether a pay period was requested, so it's hoisted
-    # out of the period-gated block below: the table needs the correct
-    # effective OT rate on every load, including an un-scoped "All
-    # Branches, no period" view, not only once attendance/leave data is
-    # being computed. branch_policy_cache/staff_policy_cache memoize per
-    # distinct branch/staff for this one request so an org with N branches
-    # costs N override lookups total, not one per staff row.
-    org_policy_default = _org_default_payroll_policy(org_key)
+    # Keep unscoped views on the existing live policy path. Period reports
+    # resolve each policy scope as of the first day of that payroll month.
+    policy_effective_on = None
+    if period_start_text and period_end_text:
+        try:
+            policy_effective_on = date.fromisoformat(period_start_text).isoformat()
+        except ValueError:
+            # The existing period computation below reports malformed dates;
+            # don't change that request's behavior during policy resolution.
+            policy_effective_on = None
+
+    use_historical_policy = bool(
+        policy_effective_on
+        and _payroll_period_uses_history(policy_effective_on)
+    )
+    if use_historical_policy:
+        historical_org_policy = _historical_payroll_policy(
+            org_key,
+            policy_effective_on,
+        )
+        org_policy_default = {
+            **_DEFAULT_PAYROLL_POLICY,
+            **(historical_org_policy or {}),
+        }
+    else:
+        org_policy_default = _org_default_payroll_policy(org_key)
     page_branch_ids = sorted({
         _payroll_text(staff.get('branch_id'))
         for staff in staff_rows
         if _payroll_text(staff.get('branch_id'))
     })
     branch_policy_overrides, staff_policy_overrides = (
-        _payroll_policy_overrides_for_page(org_key, page_branch_ids, staff_ids)
+        _payroll_policy_overrides_for_page(
+            org_key,
+            page_branch_ids,
+            staff_ids,
+            effective_on=policy_effective_on if use_historical_policy else None,
+        )
     )
 
     def resolve_policy(branch_id: str | None, staff_id: str) -> dict:
