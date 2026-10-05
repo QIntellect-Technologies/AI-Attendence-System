@@ -379,15 +379,45 @@ def log_attendance(user_id: int, detected_name: str, confidence: float, source: 
                 branch_id=str(cfg.get("branch", {}).get("id") or "1"),
                 people_type="staff",
                 person_code=str(user_id),
-                person_name=detected_name,
-                event_type="CHECK_IN",
+                staff_name=detected_name,
                 confidence=confidence,
-                camera_id=device_id or location or "camera",
                 source=source,
-                arrival_status=arrival_status
+                camera_id=device_id or location or "camera",
             )
         except Exception as sync_err:
             logger.warning(f"Shift evaluation / cloud sync note: {sync_err}")
+
+        # Cloud Real-Time Dashboard Sync (push detection to Main Cloud Dashboard)
+        try:
+            import support_db
+            all_staff = support_db.get_all_client_staff_raw()
+            matched_staff = next(
+                (s for s in all_staff if str(s.get("name", "")).strip().lower() == str(detected_name).strip().lower()),
+                None
+            )
+            if matched_staff:
+                org_id = matched_staff.get("org_id") or "1517402c-54f2-46c0-98ba-242703e5d816"
+                branch_id = matched_staff.get("backend_branch_id") or matched_staff.get("branch_uuid") or matched_staff.get("branch_id")
+                staff_id = matched_staff.get("id")
+                now_iso = datetime.now().isoformat()
+                
+                status_to_pass = "on_time"
+                if 'arrival_status' in locals() and arrival_status:
+                    status_to_pass = arrival_status.lower()
+
+                support_db.save_manual_attendance_record(
+                    org_id,
+                    {
+                        "staff_id": staff_id,
+                        "branch_id": branch_id,
+                        "check_in": now_iso,
+                        "arrival_status": status_to_pass,
+                        "notes": f"Auto-detected via AI Camera Engine ({source})"
+                    }
+                )
+                logger.info(f"Direct Cloud Sync Successful for '{detected_name}' (staff_id: {staff_id})")
+        except Exception as cloud_err:
+            logger.warning(f"Cloud dashboard direct sync note: {cloud_err}")
     except Exception as e:
         logger.error(f"Failed to log attendance for user {user_id}: {e}")
 

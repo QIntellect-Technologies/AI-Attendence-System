@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import numpy as np
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _THIS_DIR = str(Path(__file__).resolve().parent)
@@ -1151,8 +1152,11 @@ def get_user_photo(user_id):
 
 @app.route('/profile_photos/<path:filename>')
 def serve_profile_photo_direct(filename):
-    photos_dir = os.path.join(app.root_path, 'static', 'profile_photos')
-    return send_from_directory(photos_dir, filename)
+    photos_dir = os.path.join(_FLASK_DIR, 'static', 'profile_photos')
+    if os.path.exists(os.path.join(photos_dir, filename)):
+        return send_from_directory(photos_dir, filename)
+    photos_dir_alt = os.path.join(app.root_path, 'static', 'profile_photos')
+    return send_from_directory(photos_dir_alt, filename)
 
 
 # ============================================
