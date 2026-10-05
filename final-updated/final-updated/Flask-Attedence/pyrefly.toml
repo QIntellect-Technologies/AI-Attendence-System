@@ -1,0 +1,7 @@
+# Pyrefly configuration for Antigravity IDE
+python-path = "C:/Users/Fafcom Technology/anaconda3/envs/env310tfgpu/python.exe"
+site-package-path = "C:/Users/Fafcom Technology/anaconda3/envs/env310tfgpu/Lib/site-packages"
+extraSearchPaths = [
+    "C:/Users/Fafcom Technology/anaconda3/envs/env310tfgpu/Lib/site-packages",
+    "."
+]

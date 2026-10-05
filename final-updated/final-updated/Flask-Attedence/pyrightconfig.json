@@ -1,0 +1,9 @@
+{
+  "venvPath": "C:\\Users\\Fafcom Technology\\anaconda3\\envs",
+  "venv": "env310tfgpu",
+  "extraPaths": [
+    "C:\\Users\\Fafcom Technology\\anaconda3\\envs\\env310tfgpu\\Lib\\site-packages",
+    "d:\\QIntellect-AI-Attendence-11-9-2026\\Final-AI-Attendence-System\\Final-AI-Attendence-System\\Flask-Attedence"
+  ],
+  "pythonPath": "C:\\Users\\Fafcom Technology\\anaconda3\\envs\\env310tfgpu\\python.exe"
+}

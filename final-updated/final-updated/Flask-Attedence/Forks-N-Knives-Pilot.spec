@@ -1,0 +1,48 @@
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('templates', 'templates'), ('static', 'static'), ('yolov8n.pt', '.'), ('models', 'models'), ('attendance_forks_n_knives.db', '.'), ('attendance_forks_n_knives.db', 'attendance.db'), ('face_processor.py', '.'), ('database.py', '.'), ('config.py', '.'), ('logger_config.py', '.'), ('download_models.py', '.')]
+datas += collect_data_files('insightface')
+
+
+a = Analysis(
+    ['pilot_forks_n_knives.py'],
+    pathex=[],
+    binaries=[],
+    datas=datas,
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Forks-N-Knives-Pilot',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Forks-N-Knives-Pilot',
+)

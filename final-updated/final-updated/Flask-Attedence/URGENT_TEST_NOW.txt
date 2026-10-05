@@ -1,0 +1,58 @@
+================================================================================
+URGENT: CRITICAL FIX V2 - TEST NOW
+================================================================================
+
+ISSUE:
+  Previous fix didn't work. Face still flickering between different tracks.
+  
+  Logs showed: Track 3, 6, 13, 14, 16, 32, 36, 40, 48, 55, 58 (all "Imran Khalid")
+  
+  Same person was being detected as DIFFERENT TRACKS instead of staying on same track.
+
+ROOT CAUSE (REAL):
+  The code was CREATING NEW TRACKS instead of REUSING existing recognized tracks.
+  
+  When a recognized track expired from active_tracks (after 2.0 seconds), the code
+  would create a NEW track instead of REUSING the existing one.
+
+THE FIX:
+  ✅ REUSE recognized tracks instead of creating new ones
+  ✅ Increased reuse timeout from 2.0s to 3.0s
+  ✅ Increased reuse distance from 200px to 250px
+  
+  Now when a recognized track expires, we REUSE it instead of creating a new one.
+
+WHAT TO TEST:
+  1. Stand 6-8 feet from NVR camera
+  2. Walk left to right slowly
+  3. Watch the track ID in the logs
+  
+  BEFORE FIX:
+    Track 3: LOCK ESTABLISHED: 'Imran Khalid'
+    Track 6: LOCK ESTABLISHED: 'Imran Khalid' ← DIFFERENT TRACK (FLICKER!)
+    Track 13: LOCK ESTABLISHED: 'Imran Khalid' ← DIFFERENT TRACK (FLICKER!)
+  
+  AFTER FIX:
+    Track 3: LOCK ESTABLISHED: 'Imran Khalid'
+    Track 3: Imran Khalid tracked (SAME TRACK)
+    Track 3: Imran Khalid tracked (SAME TRACK)
+
+EXPECTED RESULT:
+  ✅ Same track ID throughout (e.g., always Track 3)
+  ✅ No flickering to different track IDs
+  ✅ Stable "Imran Khalid" with persistent bounding box
+
+FILES CHANGED:
+  - app.py (lines 670-730: Track reuse logic)
+
+DOCUMENTATION:
+  - CRITICAL_FIX_V2.md (detailed explanation)
+
+STATUS:
+  ✅ IMPLEMENTED
+  ✅ SYNTAX VERIFIED
+  ⏳ READY FOR TESTING
+
+================================================================================
+Test now and report results!
+================================================================================
