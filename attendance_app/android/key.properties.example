@@ -1,0 +1,14 @@
+# Copy this file to android/key.properties (already gitignored — never commit
+# the real one) and fill in the values after generating a keystore with:
+#
+#   keytool -genkey -v -keystore ~/attendancepro-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias attendancepro
+#
+# Keep the .jks file and these passwords somewhere safe outside the repo —
+# if you lose them you cannot publish an update under the same app; you'd
+# have to ship it as a new listing with a new applicationId.
+
+storePassword=<password you set for the keystore>
+keyPassword=<password you set for the key alias>
+keyAlias=attendancepro
+storeFile=/absolute/path/to/attendancepro-release.jks
