@@ -389,33 +389,46 @@ def log_attendance(user_id: int, detected_name: str, confidence: float, source: 
 
         # Cloud Real-Time Dashboard Sync (push detection to Main Cloud Dashboard)
         try:
-            import support_db
-            all_staff = support_db.get_all_client_staff_raw()
+            from support_db_staff import list_client_staff
+            from support_db_attendance_dashboard import save_manual_attendance_record
+            from supabase_client import get_supabase
+
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+            all_staff = list_client_staff(org_id)
             matched_staff = next(
                 (s for s in all_staff if str(s.get("name", "")).strip().lower() == str(detected_name).strip().lower()),
                 None
             )
             if matched_staff:
-                org_id = matched_staff.get("org_id") or "1517402c-54f2-46c0-98ba-242703e5d816"
                 branch_id = matched_staff.get("backend_branch_id") or matched_staff.get("branch_uuid") or matched_staff.get("branch_id")
                 staff_id = matched_staff.get("id")
                 now_iso = datetime.now().isoformat()
+                today_str = datetime.now().strftime("%Y-%m-%d")
                 
                 status_to_pass = "on_time"
                 if 'arrival_status' in locals() and arrival_status:
                     status_to_pass = arrival_status.lower()
 
-                support_db.save_manual_attendance_record(
-                    org_id,
-                    {
-                        "staff_id": staff_id,
-                        "branch_id": branch_id,
-                        "check_in": now_iso,
-                        "arrival_status": status_to_pass,
-                        "notes": f"Auto-detected via AI Camera Engine ({source})"
-                    }
-                )
+                payload = {
+                    "staff_id": staff_id,
+                    "branch_id": branch_id,
+                    "check_in": now_iso,
+                    "arrival_status": status_to_pass,
+                    "notes": f"Auto-detected via AI Camera Engine ({source})"
+                }
+
+                try:
+                    sb = get_supabase()
+                    existing = sb.table("attendance").select("id").eq("org_id", org_id).eq("staff_id", staff_id).gte("timestamp", f"{today_str}T00:00:00Z").limit(1).execute()
+                    if existing.data and len(existing.data) > 0:
+                        payload["id"] = existing.data[0]["id"]
+                except Exception:
+                    pass
+
+                save_manual_attendance_record(org_id, payload)
                 logger.info(f"Direct Cloud Sync Successful for '{detected_name}' (staff_id: {staff_id})")
+            else:
+                logger.warning(f"Direct Cloud Sync: No matching staff found for '{detected_name}' in organization")
         except Exception as cloud_err:
             logger.warning(f"Cloud dashboard direct sync note: {cloud_err}")
     except Exception as e:
