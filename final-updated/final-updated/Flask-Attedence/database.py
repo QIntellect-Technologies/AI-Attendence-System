@@ -414,6 +414,9 @@ def log_attendance(user_id: int, detected_name: str, confidence: float, source: 
                     "branch_id": branch_id,
                     "check_in": now_iso,
                     "arrival_status": status_to_pass,
+                    "source": "camera",
+                    "capture_channel": "local_node",
+                    "confidence": float(confidence),
                     "notes": f"Auto-detected via AI Camera Engine ({source})"
                 }
 

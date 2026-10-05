@@ -2732,8 +2732,12 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
         )
     if raw_status:
         updates['status'] = raw_status
-    if notes_provided:
-        updates['notes'] = notes
+    if 'source' in payload and payload['source']:
+        updates['source'] = payload['source']
+    if 'capture_channel' in payload and payload['capture_channel']:
+        updates['capture_channel'] = payload['capture_channel']
+    if 'confidence' in payload and payload['confidence'] is not None:
+        updates['confidence'] = float(payload['confidence'])
 
     if row_key:
         if not updates:
@@ -2782,20 +2786,9 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
             'staff_id': staff_id,
             'status': updates.get('status') or 'on_time',
             'day_status': 'present',
-            'source': 'manual',
-            # No DB default matches this path correctly -- capture_channel
-            # was silently taking the column's default (local_node),
-            # mislabeling every hand-entered row as camera-captured. Same
-            # reasoning as 'source' above: be explicit.
-            'capture_channel': 'manual',
-            # confidence is stored as a 0-1 fraction (cosine-similarity
-            # score from face matching) everywhere else in this table --
-            # never a percentage. 100.0 overflowed attendance.confidence's
-            # numeric(5,4) column (max magnitude 9.9999), which is the
-            # 'numeric field overflow' / code 22003 error the Add
-            # Attendance modal was surfacing. A manually-entered record
-            # is, by definition, fully confident.
-            'confidence': 1.0,
+            'source': payload.get('source') or 'manual',
+            'capture_channel': payload.get('capture_channel') or payload.get('source') or 'manual',
+            'confidence': float(payload.get('confidence', 1.0)),
         })
         insert_result = sb.table('attendance').insert(updates).execute()
         if not insert_result.data:
