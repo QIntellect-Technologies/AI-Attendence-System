@@ -44,6 +44,139 @@ def sb():
     return _current_sb
 
 
+from copy import deepcopy
+from types import SimpleNamespace
+import uuid
+
+
+class FakeNotModifier:
+    def __init__(self, query):
+        self.query = query
+
+    def is_(self, field, value):
+        if value is None or str(value).lower() in ("null", "none"):
+            self.query.filters.append(lambda row: row.get(field) is not None)
+        else:
+            self.query.filters.append(lambda row: row.get(field) != value)
+        return self.query
+
+    def eq(self, field, value):
+        self.query.filters.append(lambda row: str(row.get(field)) != str(value))
+        return self.query
+
+
+class FakeQuery:
+    def __init__(self, table):
+        self.table = table
+        self.operation = "select"
+        self.values = {}
+        self.filters = []
+        self._limit = None
+        self.not_ = FakeNotModifier(self)
+
+
+    def select(self, *_fields):
+        if self.operation != "insert":
+            self.operation = "select"
+        return self
+
+    def insert(self, values):
+        self.operation = "insert"
+        if isinstance(values, list):
+            self.values = values
+        else:
+            self.values = [values]
+        return self
+
+    def update(self, values):
+        self.operation = "update"
+        self.values = values
+        return self
+
+    def eq(self, field, value):
+        self.filters.append(lambda row: str(row.get(field)) == str(value))
+        return self
+
+    def in_(self, field, values):
+        val_set = {str(v) for v in values}
+        self.filters.append(lambda row: str(row.get(field)) in val_set)
+        return self
+
+    def limit(self, count):
+        self._limit = count
+        return self
+
+    def single(self):
+        self._limit = 1
+        return self
+
+    def order(self, field, desc=False):
+        return self
+
+    def is_(self, field, value):
+        if value is None or str(value).lower() in ("null", "none"):
+            self.filters.append(lambda row: row.get(field) is None)
+        else:
+            self.filters.append(lambda row: row.get(field) == value)
+        return self
+
+    def execute(self):
+        if self.operation == "insert":
+            inserted = []
+            for item in self.values:
+                row = deepcopy(item)
+                if "id" not in row or not row["id"]:
+                    row["id"] = str(uuid.uuid4())
+                self.table.rows.append(row)
+                inserted.append(row)
+            return SimpleNamespace(data=deepcopy(inserted))
+
+        matched = [
+            row for row in self.table.rows
+            if all(f(row) for f in self.filters)
+        ]
+        if self._limit is not None:
+            matched = matched[:self._limit]
+
+        if self.operation == "update":
+            self.table.update_count += 1
+            for row in matched:
+                row.update(self.values)
+        return SimpleNamespace(data=deepcopy(matched))
+
+
+
+class FakeTable:
+    def __init__(self):
+        self.rows = []
+        self.update_count = 0
+
+    def select(self, *fields):
+        return FakeQuery(self).select(*fields)
+
+    def insert(self, values):
+        return FakeQuery(self).insert(values)
+
+    def update(self, values):
+        return FakeQuery(self).update(values)
+
+
+class FakeSupabaseDB:
+    def __init__(self):
+        self.tables = {}
+
+    def table(self, name):
+        if name not in self.tables:
+            self.tables[name] = FakeTable()
+        return self.tables[name]
+
+
+@pytest.fixture
+def fake_supabase():
+    return FakeSupabaseDB()
+
+
+
 @pytest.fixture(autouse=True)
 def _reset_hierarchy_notifications_mocks():
     import support_db_hierarchy as hierarchy_db
