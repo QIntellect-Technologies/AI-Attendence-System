@@ -900,6 +900,25 @@ def delete_attendance_rows(local_event_ids: list[str]) -> list[dict[str, Any]]:
     return deleted_rows
 
 
+def delete_attendance_rows_for_person(branch_id: str, person_code: str, date_str: str) -> list[dict[str, Any]]:
+    """Delete attendance_buffer rows for a specific person on a given date (used by absent override instructions)."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM attendance_buffer WHERE branch_id = ? AND person_code = ? AND attendance_date = ?",
+            (branch_id, person_code, date_str),
+        )
+        rows = [dict(r) | {"metadata": json.loads(r["metadata"] or "{}")} for r in cur.fetchall()]
+        if rows:
+            conn.execute(
+                "DELETE FROM attendance_buffer WHERE branch_id = ? AND person_code = ? AND attendance_date = ?",
+                (branch_id, person_code, date_str),
+            )
+            conn.commit()
+        return rows
+
+
 def _resolve_held_checkouts(
     local_event_ids: list[str],
     *,

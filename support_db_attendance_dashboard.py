@@ -2429,6 +2429,28 @@ def mark_client_staff_absent_today(
         query = query.eq('branch_id', str(backend_branch_id))
 
     result = query.execute()
+
+    # Queue manual instruction so local node syncs the absent/deletion status
+    try:
+        from support_db_attendance_settings import create_manual_instruction
+        target_branch = str(backend_branch_id or staff.get("backend_branch_id") or staff.get("branch_id") or "")
+        if target_branch and target_branch != "all":
+            create_manual_instruction(
+                org_id=org_key,
+                branch_id=target_branch,
+                payload={
+                    "staff_id": staff_key,
+                    "person_code": staff.get("person_code"),
+                    "people_type": normalized_people_type or staff.get("people_type") or "staff",
+                    "attendance_date": _log_date or date_value or datetime.now(timezone.utc).date().isoformat(),
+                    "reason": "absent",
+                    "notes": "Marked absent from Cloud Dashboard",
+                },
+                created_by="system",
+            )
+    except Exception as exc:
+        logger.warning("mark_client_staff_absent_today: failed to queue manual instruction for node: %s", exc)
+
     return {
         'success': True,
         'staff_id': staff_key,

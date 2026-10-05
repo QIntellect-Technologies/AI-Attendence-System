@@ -150,6 +150,31 @@ class ManualInstructionsWorker:
                 check_in_instructed_iso = self._iso_for(attendance_date, check_in_time, cfg)
                 check_out_instructed_iso = self._iso_for(attendance_date, check_out_time, cfg)
 
+                # Check if this instruction is an explicit "Mark Absent" or "Clear" override
+                reason_str = str(inst.get("reason") or "").lower()
+                is_absent_instruction = (
+                    reason_str in ("absent", "clear", "delete")
+                    or (not check_in_instructed_iso and not check_out_instructed_iso)
+                )
+
+                if is_absent_instruction:
+                    branch_key = str(cfg.get("branch_id") or "")
+                    local_db.delete_attendance_rows_for_person(branch_key, str(person_code), attendance_date)
+                    from local_node.live_events import remove_events_by_staff_id
+                    remove_events_by_staff_id(str(person_code))
+                    if staff_id:
+                        remove_events_by_staff_id(str(staff_id))
+                    logger.info(
+                        "manual-instructions: absent instruction applied, deleted local attendance for person_code=%s date=%s",
+                        person_code, attendance_date,
+                    )
+                    try:
+                        ack_manual_instruction(str(inst_id), "applied", "Cleared local attendance for absent instruction")
+                    except Exception:
+                        logger.warning("manual-instructions: ack FAILED for absent instruction %s", inst_id)
+                    applied += 1
+                    continue
+
                 # A real camera sighting may already exist for this person+date
                 # (e.g. they walked in before this override was even created, or
                 # before this poll cycle picked it up). Never treat a prior

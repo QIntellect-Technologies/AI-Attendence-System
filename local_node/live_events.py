@@ -58,3 +58,14 @@ def list_events(limit: int = 100) -> list[dict[str, Any]]:
 def clear_events() -> None:
     with _lock:
         _events.clear()
+
+
+def remove_events_by_staff_id(staff_id: str) -> None:
+    """Remove matching events by staff_id or event id from the live stream deque."""
+    if not staff_id:
+        return
+    with _lock:
+        target = str(staff_id)
+        filtered = [e for e in _events if str(e.get("staff_id") or "") != target and str(e.get("id") or "") != target]
+        _events.clear()
+        _events.extend(filtered)
