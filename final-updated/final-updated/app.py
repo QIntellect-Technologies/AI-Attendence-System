@@ -8,11 +8,25 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
+import sys
 import json
-import numpy as np
-from datetime import datetime
 from pathlib import Path
-import mimetypes
+
+_THIS_DIR = str(Path(__file__).resolve().parent)
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
+_FLASK_DIR = os.path.join(_THIS_DIR, "Flask-Attedence")
+
+if _FLASK_DIR in sys.path:
+    sys.path.remove(_FLASK_DIR)
+sys.path.insert(0, _FLASK_DIR)
+
+if _THIS_DIR not in sys.path:
+    sys.path.append(_THIS_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.append(_ROOT_DIR)
+
+if "config" in sys.modules and not hasattr(sys.modules["config"], "ALLOWED_EXTENSIONS"):
+    del sys.modules["config"]
 
 import database as db
 import face_processor as fp

@@ -1,8 +1,27 @@
 import sqlite3
 import json
 import os
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
+
+_THIS_DIR = str(Path(__file__).resolve().parent)
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
+_FLASK_DIR = os.path.join(_THIS_DIR, "Flask-Attedence")
+
+if _FLASK_DIR in sys.path:
+    sys.path.remove(_FLASK_DIR)
+sys.path.insert(0, _FLASK_DIR)
+
+if _THIS_DIR not in sys.path:
+    sys.path.append(_THIS_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.append(_ROOT_DIR)
+
+if "config" in sys.modules and not hasattr(sys.modules["config"], "ALLOWED_EXTENSIONS"):
+    del sys.modules["config"]
+
 from logger_config import get_logger
 from config import DB_PATH, ATTENDANCE_LOG_RETENTION_DAYS
 

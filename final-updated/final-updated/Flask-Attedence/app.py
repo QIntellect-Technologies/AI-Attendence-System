@@ -37,6 +37,13 @@ for _dll_dir in [
             except Exception:
                 pass
 
+import sys
+_THIS_DIR = str(Path(__file__).resolve().parent)
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
+for _p in [_THIS_DIR, _ROOT_DIR]:
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import database as db
 import face_processor as fp
 from download_models import verify_models      
