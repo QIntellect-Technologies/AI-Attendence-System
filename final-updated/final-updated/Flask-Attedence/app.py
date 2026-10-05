@@ -66,8 +66,10 @@ from config import (
 
 logger = get_logger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize Flask app with absolute template & static folders
+TEMPLATE_DIR = os.path.join(_THIS_DIR, "templates")
+STATIC_DIR = os.path.join(_THIS_DIR, "static")
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 CORS(app)
 
 # Ensure CUDA DLLs are discoverable for ONNX Runtime on Windows before any model is created.

@@ -6,10 +6,10 @@ Flask AI Attendance System
 
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 import os
 import sys
 import json
+import numpy as np
 from pathlib import Path
 
 _THIS_DIR = str(Path(__file__).resolve().parent)
@@ -46,8 +46,10 @@ from config import (
 
 logger = get_logger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize Flask app with absolute template & static folders
+TEMPLATE_DIR = os.path.join(_FLASK_DIR, "templates")
+STATIC_DIR = os.path.join(_FLASK_DIR, "static")
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 CORS(app)
 
 import threading
