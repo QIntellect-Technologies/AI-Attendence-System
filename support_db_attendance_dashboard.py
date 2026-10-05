@@ -2446,10 +2446,34 @@ def mark_client_staff_absent_today(
                     "reason": "absent",
                     "notes": "Marked absent from Cloud Dashboard",
                 },
-                created_by="system",
+                created_by=None,
             )
     except Exception as exc:
         logger.warning("mark_client_staff_absent_today: failed to queue manual instruction for node: %s", exc)
+
+    try:
+        from support_db_fast import clear_fast_cache
+        clear_fast_cache()
+    except Exception:
+        pass
+
+    try:
+        import sqlite3, os
+        local_db_path = os.path.join(os.path.dirname(__file__), "final-updated", "final-updated", "Flask-Attedence", "attendance.db")
+        if os.path.exists(local_db_path):
+            with sqlite3.connect(local_db_path) as conn:
+                cursor = conn.cursor()
+                staff_name = staff.get("name")
+                if staff_name:
+                    cursor.execute("SELECT id FROM users WHERE LOWER(name) = LOWER(?)", (staff_name,))
+                    u_row = cursor.fetchone()
+                    if u_row:
+                        l_uid = u_row[0]
+                        cursor.execute("DELETE FROM attendance WHERE user_id = ? AND date(timestamp, 'localtime') = date('now', 'localtime')", (l_uid,))
+                        cursor.execute("INSERT OR REPLACE INTO manual_absent (user_id, date) VALUES (?, date('now', 'localtime'))", (l_uid,))
+                        conn.commit()
+    except Exception:
+        pass
 
     return {
         'success': True,
@@ -2810,6 +2834,12 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
     branches = list_branches(org_key)
     branch_by_id = {str(b.get('id')): b for b in branches if b.get('id')}
     branch_ui_by_id = {str(b.get('id')): idx for idx, b in enumerate(branches, start=1) if b.get('id')}
+
+    try:
+        from support_db_fast import clear_fast_cache
+        clear_fast_cache()
+    except Exception:
+        pass
 
     return _attendance_row_for_dashboard(
         row,
