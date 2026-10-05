@@ -51,27 +51,33 @@ def should_sync_attendance_event(
     return (current_dt - marked_dt).total_seconds() >= required_minutes * 60
 
 
+_active_worker: AttendanceSyncWorker | None = None
+
+
+def trigger_sync_now() -> None:
+    """Module-level helper to wake the background sync worker immediately when a new detection is recorded."""
+    if _active_worker:
+        _active_worker.wake()
+
+
 class AttendanceSyncWorker:
     def __init__(self, batch_size: int = 100) -> None:
-        # No fixed interval anymore — computed live from the branch's
-        # configured sync_delay_minutes every time the loop wakes up, so
-        # this worker only does its own polling as often as the client
-        # dashboard's OWN setting actually requires. Manual "Sync
-        # attendance" (force_all=True) and "Sync selected" bypass this
-        # entirely via NodeService.sync_all_attendance /
-        # sync_selected_attendance, unaffected by this loop.
+        global _active_worker
         self.batch_size = max(1, min(int(batch_size or 100), 500))
         self._stop = threading.Event()
+        self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        _active_worker = self
 
-    def _current_interval_seconds(self) -> int:
+    def wake(self) -> None:
+        self._wake_event.set()
+
+    def _current_interval_seconds(self) -> float:
         cfg = load_config()
         delay_minutes = max(0, int(cfg.get("sync_delay_minutes") or 0))
-        # Floor of 5 minutes: even a delay of 0 (sync ASAP once ready)
-        # shouldn't turn into a 30s-style tight poll — that's exactly the
-        # cost problem being fixed. A held/pending row still gets picked
-        # up promptly (within one interval) once it's actually ready.
-        return max(300, delay_minutes * 60)
+        if delay_minutes == 0:
+            return 3.0  # Real-time polling mode: check every 3 seconds
+        return float(min(30.0, delay_minutes * 60))
 
     def _sync_ready(self, row: dict[str, Any]) -> bool:
         if row.get("check_out_marked_at") and row.get("check_out_confirmed"):
@@ -108,6 +114,7 @@ class AttendanceSyncWorker:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake_event.set()
 
     
 
@@ -313,4 +320,6 @@ class AttendanceSyncWorker:
                 self.run_once()
             except Exception:
                 pass
-            self._stop.wait(self._current_interval_seconds())
+            interval = self._current_interval_seconds()
+            self._wake_event.wait(timeout=interval)
+            self._wake_event.clear()

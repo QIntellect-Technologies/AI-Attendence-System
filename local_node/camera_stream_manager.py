@@ -1538,6 +1538,7 @@ from local_node import perf_stats
 from local_node.recognition_engine import detect_and_extract, FaceEngineUnavailableError
 from local_node import local_db
 from local_node import shift_gate
+from local_node.attendance_sync_worker import trigger_sync_now
 from local_node.live_events import publish_event
 from local_node.recognition_worker import best_match
 
@@ -3023,6 +3024,7 @@ class CameraStreamManager:
                 metadata={"camera_name": state.camera_name},
                 event_dt_utc=datetime.now(timezone.utc),
             )
+            trigger_sync_now()
             perf_stats.record(state.camera_id, "detect.db_write", record_started)
             # Diagnostic for the "wrong window" class of bug (personal
             # shift override not reaching the node vs. a stale config poll

@@ -773,9 +773,16 @@ export function useDashboardOverviewData({
     };
     window.addEventListener("orgDataChanged", handleOrgDataChanged);
 
+    const pollInterval = window.setInterval(() => {
+      if (mountedRef.current) {
+        void load(true);
+      }
+    }, 5000);
+
     return () => {
       mountedRef.current = false;
       window.removeEventListener("orgDataChanged", handleOrgDataChanged);
+      window.clearInterval(pollInterval);
     };
   }, [load]);
 
