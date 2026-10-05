@@ -28,27 +28,18 @@ import numpy as np
 # Thresholds
 # ---------------------------------------------------------
 
-MIN_FACE_SIZE = 40
+MIN_FACE_SIZE = 28
 
-MIN_BLUR_SCORE = 100.0
+MIN_BLUR_SCORE = 60.0
 
-MIN_BRIGHTNESS = 30
+MIN_BRIGHTNESS = 20
 
-MAX_BRIGHTNESS = 220
+MAX_BRIGHTNESS = 235
 
-MIN_ASPECT_RATIO = 0.60
+MIN_ASPECT_RATIO = 0.50
 
-MAX_ASPECT_RATIO = 1.40
+MAX_ASPECT_RATIO = 1.60
 
-# Fallback floor used only when a caller doesn't pass its own configured
-# threshold (see is_good_enrollment_face below). Trainer Desktop and Local
-# Node each already define their own "real" quality floor in their own
-# config module (FACE_QUALITY_THRESHOLD = 0.7 in both) — this constant is
-# NOT that value on purpose. shared_face_engine intentionally never imports
-# a consumer's config module (same reason embedding.py takes `models_root`
-# as an explicit argument instead), so this is a conservative, permissive
-# default for callers that don't opt into a stricter policy, not a silent
-# substitute for one that does.
 DEFAULT_ENROLLMENT_QUALITY_FLOOR = 0.50
 
 
@@ -68,7 +59,7 @@ class FaceQualityResult:
 
     @property
     def passed(self) -> bool:
-        return self.score >= 0.50
+        return self.score >= 0.38
 
 
 # ---------------------------------------------------------
@@ -154,11 +145,12 @@ def assess_face_quality(
     # Size
     # -----------------------------------------------------
 
-    if h < MIN_FACE_SIZE or w < MIN_FACE_SIZE:
-
+    if h < 28 or w < 28:
         issues.append("face_too_small")
-
-        score -= 0.30
+        score -= 0.35
+    elif h < 45 or w < 45:
+        issues.append("small_face")
+        score -= 0.12
 
     # -----------------------------------------------------
     # Gray
@@ -172,11 +164,15 @@ def assess_face_quality(
 
     blur = _laplacian_variance(gray)
 
-    if blur < MIN_BLUR_SCORE:
-
+    if blur < 20.0:
         issues.append("blurry")
+        score -= 0.35
+    elif blur < 60.0:
+        issues.append("slightly_blurry")
+        score -= 0.15
+    elif blur < 100.0:
+        score -= 0.05
 
-        score -= 0.20
 
     # -----------------------------------------------------
     # Brightness
