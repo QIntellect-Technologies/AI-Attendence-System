@@ -1,0 +1,27 @@
+{
+  "package_version": 1,
+  "package_id": "f14c2b20-de52-4a6e-a911-df8d9841508f",
+  "generated_at": "2026-08-17T07:12:42+00:00",
+  "branch_label": "0003",
+  "source_csv_name": "People Enrollment.csv",
+  "source_csv_sha256": "21c602f6ebec7f9108ff73ff08a816e47850c456eff0d06ff8d1c74781f001ce",
+  "identity_key": "people_type + person_code",
+  "matching_rule": "Records are matched only using normalized people_type and person_code. Full name is informational only.",
+  "record_count": 1,
+  "failed_count": 0,
+  "records": [
+    {
+      "people_type": "staff",
+      "person_code": "1001",
+      "full_name": "Ubaid",
+      "group": "",
+      "subgroup": "",
+      "embedding_file": "embeddings/staff__1001.embedding.json",
+      "embedding_count": 146,
+      "avg_quality": 0.9273972602739724,
+      "model_version": "buffalo_l",
+      "checksum": "2d821f78403d1d16cbe949b336d9932969fb4ad0ec109e98429dcebeac13bb2c"
+    }
+  ],
+  "manifest_sha256": "795979bbe3bea662162a52d26aecda9c95e21b6b0ff925690af3a1a6a8fecb09"
+}

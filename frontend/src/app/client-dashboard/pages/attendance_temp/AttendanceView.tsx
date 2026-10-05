@@ -1,0 +1,4095 @@
+/**
+ * AttendanceView.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Dynamic, scope-aware attendance module.
+ *
+ * Architecture:
+ *   OrgConfigContext.masterData  → configured/master data (branches, bizType)
+ *   ModuleContext                → mutable entity data (staff, attendance)
+ *   useAttendanceSources()       → single source boundary for this component
+ *   useAttendanceBranchSummaries → extracted aggregation hook (shared/testable)
+ *
+ * Scope:
+ *   Route param :branchId → branch-scoped view (branch admin).
+ *   No param               → global view (org admin, all branches visible).
+ *
+ * Backend migration:
+ *   - hydrate masterData from OrgConfigContext API
+ *   - hydrate staff/attendance stores from ModuleContext API
+ *  *   - keep this UI almost unchanged
+ */
+
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import Swal from "sweetalert2";
+import "sweetalert2/dist/sweetalert2.min.css";
+import { toastSuccess, toastError, toastInfo } from "../../utils/notifications";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { listStaffPage } from "../StaffManagement/api/staffApi";
+import {
+  getCaptureSettings,
+  listBranchDepartments,
+  listBranchShifts,
+  listDesignations,
+  type CaptureSettings,
+  type DepartmentRecord,
+  type ShiftRecord,
+} from "../StaffManagement/api/attendanceSettingsApi";
+import { fetchLiveCameras } from "../LiveAttendance/api/liveStreamApi";
+import {
+  getTodayAttendance as getTodayNodeAttendance,
+  type AttendanceRecord as NodeAttendanceRecord,
+} from "./api/attendanceEventsApi";
+import {
+  markAttendanceAbsent,
+  updateAttendanceRecord,
+  createManualAttendanceRecord,
+  updateManualAttendanceRecord,
+  type AttendanceRecordEdit,
+} from "./api/attendanceApi";
+import { useOrg } from "../../contexts/OrgConfigContext";
+import { useModule, type LeaveRequest } from "../../contexts/ModuleContext";
+import {
+  getBranchModulePath,
+  getModulePath,
+} from "../../config/moduleRegistry";
+import { isModuleEnabled } from "../../utils/moduleAccess";
+import {
+  useAttendanceBranchSummaries,
+  type BranchAttendanceSummary,
+} from "../../hooks/useAttendanceBranchSummaries";
+
+import {
+  formatDate,
+  getPreviousCompletedPeriodRange,
+  useDateFilter,
+  parseLocalDate,
+} from "../../hooks/useDateFilter";
+import DateFilterBar from "../../components/ui/DateFilterBar";
+import StatCard from "../../components/dashboard/overview/StatCard";
+import DynamicFilterToolbar, {
+  type DynamicFilterSection,
+} from "../../components/ui/DynamicFilterToolbar";
+import ExportButton from "../../components/ui/ExportButton";
+import type { ExportExcelColumn } from "../../components/ui/ExportExcelButton";
+import RefreshButton from "../../components/ui/RefreshButton";
+import { FastPagination } from "../../components/common/FastPagination";
+import { useStatefulPagination } from "../LeaveManagement/shared/hooks/usePagination";
+import PeopleTypeSelector, {
+  type PeopleTypeOption,
+} from "../../components/ui/PeopleTypeSelector";
+import {
+  resolveTemplateRenderingModel,
+  readColumnValue,
+  type TemplateColumn,
+} from "../../utils/templateColumns";
+import {
+  isStudentPeopleType,
+  resolveModulePeopleTypes,
+} from "../../utils/templateRendering";
+
+import {
+  DAY_STATUS_LABELS,
+  derivePayrollDecisionBadge,
+  resolvePayrollDecision,
+} from "./utils/dayStatusLabels";
+
+import {
+  Clock,
+  Loader2,
+  UserX,
+  UserCheck,
+  TrendingUp,
+  Users,
+  MapPin,
+  ArrowUpRight,
+  ClipboardCheck,
+  Pencil,
+  Plus,
+  Check,
+  X,
+} from "lucide-react";
+
+import {
+  T,
+  type BranchLike,
+  getBranchTimezone,
+  toDatetimeLocalValue,
+  fromDatetimeLocalValue,
+} from "./utils/attendanceDisplay";
+
+import ManualAttendanceModal, {
+  ARRIVAL_STATUS_OPTIONS,
+  normalizeEditableArrivalStatus,
+  type ManualAttendanceStaffOption,
+  type ManualAttendanceRecordSeed,
+  type ManualAttendanceSubmitValues,
+} from "./ManualAttendanceModal";
+import ModernSelect from "../../components/ui/ModernSelect";
+
+import {
+  resolveBranchFromList,
+  getBackendBranchId,
+  getUiBranchId,
+  cleanId,
+} from "../../utils/tenantScope";
+
+// ─── Design Tokens ───────────────────────────────────────────────────
+// T, BranchLike, and the timezone helpers below now live in
+// ./utils/attendanceDisplay (imported above) so ManualAttendanceModal can
+// share them without a circular import with this file. See that module's
+// header comment for why.
+
+// ─── Dynamic label helpers ───────────────────────────────────────────────────
+
+const FALLBACK_ENTITY_LABELS: Record<string, string> = {
+  student: "Students",
+  staff: "Staff",
+  employee: "Employees",
+  worker: "Workers",
+  personnel: "Personnel",
+};
+
+function normalizeKey(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function readPeopleType(masterData: unknown): string {
+  const record = masterData as Record<string, unknown>;
+  const verticalConfig = (record.verticalConfig ??
+    record.vertical_config ??
+    {}) as Record<string, unknown>;
+  const attendancePeopleTypes =
+    record.attendancePeopleTypes ??
+    record.attendance_people_types ??
+    verticalConfig.attendance_people_types ??
+    verticalConfig.attendancePeopleTypes;
+
+  if (
+    Array.isArray(attendancePeopleTypes) &&
+    attendancePeopleTypes.length === 1
+  ) {
+    return normalizeKey(attendancePeopleTypes[0]) || "staff";
+  }
+
+  return (
+    normalizeKey(record.primaryPeopleType) ||
+    normalizeKey(record.primary_people_type) ||
+    normalizeKey(verticalConfig.primary_people_type) ||
+    "staff"
+  );
+}
+
+function readEntityLabel(masterData: unknown, peopleType: string): string {
+  const record = masterData as Record<string, unknown>;
+  const verticalConfig = (record.verticalConfig ??
+    record.vertical_config ??
+    {}) as Record<string, unknown>;
+  const labels = (verticalConfig.labels ?? record.labels ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const pluralKey = `${peopleType}_plural`;
+  const label =
+    labels[pluralKey] ??
+    labels[peopleType] ??
+    FALLBACK_ENTITY_LABELS[peopleType];
+  return String(label ?? "Staff");
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type AttendanceStatusFilter = "all" | "present" | "absent" | "late" | "onTime";
+
+interface AttendanceStaff {
+  id: string | number;
+  name: string;
+  email?: string;
+  phone?: string;
+  branchId?: number;
+  department?: string;
+  designation?: string;
+  role?: string;
+  jobTitle?: string;
+  empId?: string;
+  userId?: string | number;
+  shiftIdRef?: string | null;
+  checkInGraceOverride?: number | string | null;
+  shiftStart?: string;
+  shiftEnd?: string;
+  [key: string]: unknown;
+}
+
+interface ApiAttendance {
+  [key: string]: unknown;
+  id?: string | number;
+  user_id?: string | number;
+  user_name: string;
+  confidence?: number;
+  source?: string;
+  date?: string;
+  time?: string | null;
+  outTime?: string | null;
+  check_in?: string | null;
+  check_out?: string | null;
+  workDuration?: string | null;
+  status: string;
+  arrival_status?: string;
+  /** Real, timing-aware classification from resolve_check_in_status /
+   *  resolve_check_out_status — 'on_time' | 'late' | 'early' | 'unscheduled'.
+   *  This is what actually drives the Late badge; `status` stays a
+   *  presence flag ('PRESENT'/'ABSENT') and never carries lateness. */
+  check_in_status?: string | null;
+  check_out_status?: string | null;
+  /** Day-level outcome — 'present' | 'half_day' | 'short_leave' | 'late' |
+   *  'overtime'. Set by both the local-node hold-resolution actions and the
+   *  mobile/office-staff exceptions flow, so unlike arrival_status this is
+   *  reliable across both capture channels. See deriveDayStatusBadge. */
+  day_status?: string | null;
+  dayStatus?: string | null;
+  /** 'include' | 'exclude' | null — admin payroll decision for an already-
+   *  classified local-node row. Null for mobile-sourced rows today (that
+   *  path doesn't write this field yet) and for ordinary present days
+   *  (nothing to decide). See derivePayrollDecisionBadge. */
+  check_out_payroll_decision?: string | null;
+  checkOutPayrollDecision?: string | null;
+  /** 'include' | 'exclude' | null — same admin decision as above, but for
+   *  a day_status='late' row specifically. set_local_node_payroll_decision
+   *  writes 'late' decisions here instead of check_out_payroll_decision —
+   *  see resolvePayrollDecision (dayStatusLabels.ts), which is the only
+   *  place that should read this alongside check_out_payroll_decision. */
+  check_in_payroll_decision?: string | null;
+  checkInPayrollDecision?: string | null;
+  /** Operator-facing context, currently only ever set for a check-in
+   *  confirmed after its shift window closed but originally sighted
+   *  earlier — see attendanceApi.ts's AttendanceTimingFields. */
+  notes?: string | null;
+  /** local_node | cloud | mobile_app | null — see attendanceApi.ts's
+   *  AttendanceTimingFields for the shared definition/migration note. */
+  capture_channel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  captureChannel?: "local_node" | "cloud" | "mobile_app" | "manual" | null;
+  /** Physical camera id — resolved to a display name against cfg.cameras. */
+  camera_id?: string | number | null;
+  cameraId?: string | number | null;
+  branchId?: number;
+  branch_id?: number | string;
+  staffId?: string | number;
+  staffName?: string;
+}
+
+/**
+ * Resolves a UI branch id (1..N, local to this dashboard session) to the
+ * real Supabase branch UUID for tenant-scoped API calls. Delegates to the
+ * same resolver useStaffRecords/useAttendanceData use, so staff and
+ * attendance can never diverge on branch resolution again.
+ */
+function backendBranchIdForUi(
+  branches: BranchLike[],
+  uiBranchId?: number | null,
+): string | number | null {
+  if (!uiBranchId) return null;
+  const branch = resolveBranchFromList(branches, uiBranchId);
+  return getBackendBranchId(branch) ?? branch?.id ?? null;
+}
+
+function resolveUiBranchIdFromBackend(
+  branches: BranchLike[],
+  rawBranchId: number | string | null | undefined,
+): number | undefined {
+  const raw = String(rawBranchId ?? "").trim();
+  if (!raw) return undefined;
+
+  const branch = resolveBranchFromList(branches, rawBranchId);
+  const uiId = getUiBranchId(branch);
+  if (uiId !== null) return uiId;
+
+  // Preserve original pass-through behavior for a raw numeric id that
+  // doesn't match any loaded branch yet (e.g. route param before
+  // masterData.branches has hydrated).
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function readRecordValue(row: unknown, ...keys: string[]): unknown {
+  if (!row || typeof row !== "object") return undefined;
+  const record = row as Record<string, unknown>;
+
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readNullableText(row: unknown, ...keys: string[]): string | null {
+  const value = readRecordValue(row, ...keys);
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function readIdValue(
+  row: unknown,
+  ...keys: string[]
+): string | number | undefined {
+  const value = readRecordValue(row, ...keys);
+
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text || undefined;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function normalizeDateString(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const dateMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (dateMatch) return dateMatch[1];
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime())
+    ? ""
+    : parsed.toISOString().slice(0, 10);
+}
+
+function nodeAttendanceToView(
+  row: NodeAttendanceRecord,
+  branches: BranchLike[],
+): ApiAttendance {
+  // `row` is NOT a raw, unshaped backend row -- attendanceEventsApi.ts's
+  // getTodayAttendance is a thin pass-through over attendanceApi.ts's own
+  // getAttendanceToday, which already runs every record through
+  // mapLog/mapTimingFields/mapTodayRecord. staffId, dayStatus,
+  // checkOutPayrollDecision, backendBranchId/branchUuid, checkOutHoldReason,
+  // workDuration -- all of it is already correctly typed and populated on
+  // `row` by the time it reaches this function.
+  //
+  // Spreading it (rather than hand-picking each field via readNullableText
+  // against a guessed list of possible raw key names, as this function used
+  // to) means any field the canonical mapper adds in the future flows
+  // through automatically. The previous approach was solving a "raw row"
+  // problem that doesn't exist at this call site -- it just silently
+  // dropped whatever field it forgot to re-list by hand. day_status/
+  // short_leave was the field that bit us; there was nothing structurally
+  // stopping the next one.
+  const staffId = row.staffId ?? row.staff_id ?? row.userId ?? undefined;
+  const userId = row.userId ?? row.user_id ?? staffId ?? undefined;
+  const name =
+    row.userName ||
+    row.user_name ||
+    row.staffName ||
+    row.staff_name ||
+    String(staffId ?? userId ?? "Unknown");
+
+  // The real Supabase branch UUID -- mapLog preserves this distinctly from
+  // `branchId`/`branch_id` (which, on an already-mapped record, is already
+  // a UI ordinal in practice). Resolving off the UUID here is the
+  // unambiguous source of truth rather than assuming branchId's shape.
+  const backendId =
+    row.backendBranchId ??
+    row.backend_branch_id ??
+    row.branchUuid ??
+    row.branch_uuid ??
+    row.branchId ??
+    row.branch_id ??
+    null;
+  const uiBranchId = resolveUiBranchIdFromBackend(
+    branches,
+    backendId as string | number | null,
+  );
+
+  return {
+    ...row,
+    id: row.id,
+    user_id: userId,
+    user_name: name,
+    staffId,
+    staffName: name,
+    confidence: Number.isFinite(row.confidence) ? row.confidence : 0,
+    source: row.source ?? "camera",
+    // No fallback default here on purpose: a missing/unknown value should
+    // stay unknown (renders as "—" via captureChannelBadge) rather than
+    // being guessed as "local_node", which previously mislabeled manually
+    // -added and any other non-local_node rows whenever this field came
+    // through as null/undefined.
+    capture_channel: (row.capture_channel ?? row.captureChannel ?? null) as
+      | "local_node"
+      | "cloud"
+      | "mobile_app"
+      | "manual"
+      | null,
+    date: row.logDate ?? row.log_date ?? String(row.checkIn ?? "").slice(0, 10),
+    time: row.checkIn ?? row.check_in ?? null,
+    check_in: row.checkIn ?? row.check_in ?? null,
+    check_out: row.checkOut ?? row.check_out ?? null,
+    outTime: row.checkOut ?? row.check_out ?? null,
+    status: row.status ?? "PRESENT",
+    // Backward-compatible display label, driven by the real timing
+    // classification. 'unscheduled' (no shift/capture-settings/override
+    // configured) intentionally reads as On-Time rather than Late --
+    // absence of a schedule isn't lateness.
+    arrival_status: deriveArrivalStatus({
+      check_in_status: row.checkInStatus ?? row.check_in_status ?? undefined,
+      status: row.status ?? "PRESENT",
+    }),
+    branch_id: uiBranchId,
+    branchId: uiBranchId,
+  };
+}
+
+interface AttendanceExportRow {
+  code: string;
+  name: string;
+  designation: string;
+  branch: string;
+  department: string;
+  arrival: string;
+  month: string;
+  year: number;
+  totalDays: number;
+  present: number;
+  onTime: number;
+  late: number;
+  leaves: number;
+  absents: number;
+  attendanceRate: string;
+  firstCheckIn: string;
+  lastCheckOut: string;
+  totalWorkDuration: string;
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const KPICard: React.FC<{
+  label: string;
+  value: string | number;
+  sub: string;
+  accent?: boolean;
+  onClick?: () => void;
+}> = ({ label, value, sub, onClick }) => {
+  const lowerLabel = label.toLowerCase();
+  let icon = Users;
+  let iconBg = "#E0F2FE";
+  let iconColor = "#1A699F";
+
+  if (lowerLabel.includes("present")) {
+    icon = UserCheck;
+    iconBg = "#ECFDF5";
+    iconColor = "#16A34A";
+  } else if (lowerLabel.includes("absent")) {
+    icon = UserX;
+    iconBg = "#FFF1F2";
+    iconColor = "#E11D48";
+  } else if (lowerLabel.includes("late")) {
+    icon = TrendingUp;
+    iconBg = "#FEF3C7";
+    iconColor = "#D97706";
+  }
+
+  return (
+    <StatCard
+      title={label}
+      value={value}
+      sub={sub}
+      icon={icon}
+      iconBg={iconBg}
+      iconColor={iconColor}
+      onClick={onClick}
+    />
+  );
+};
+
+const BranchCard: React.FC<{
+  branch: BranchAttendanceSummary;
+  isActive: boolean;
+  onSelect: () => void;
+  onView: () => void;
+  entityLabel: string;
+}> = ({ branch, isActive, onSelect, onView, entityLabel }) => (
+  <div
+    onClick={onSelect}
+    className={`shrink-0 w-52 rounded-2xl p-4 border cursor-pointer transition-all ${
+      isActive
+        ? "bg-teal-700 border-teal-600 text-white"
+        : "bg-white border-gray-100 hover:border-teal-300"
+    }`}
+  >
+    <div className="flex items-start justify-between mb-3">
+      <div>
+        <p
+          className={`text-xs font-bold truncate max-w-30 ${
+            isActive ? "text-teal-200" : "text-gray-400"
+          }`}
+        >
+          {branch.branchName}
+        </p>
+        {branch.city && (
+          <p
+            className={`text-[10px] mt-0.5 flex items-center gap-0.5 ${
+              isActive ? "text-teal-300" : "text-gray-400"
+            }`}
+          >
+            <MapPin className="w-2.5 h-2.5" />
+            {branch.city}
+          </p>
+        )}
+      </div>
+    </div>
+    <p
+      className={`text-2xl font-black mb-1 ${
+        isActive ? "text-white" : "text-gray-900"
+      }`}
+    >
+      {branch.attendanceRate}%
+    </p>
+    <p
+      className={`text-[10px] mb-2 ${
+        isActive ? "text-teal-300" : "text-gray-400"
+      }`}
+    >
+      {branch.primaryCount.toLocaleString()} {entityLabel}
+    </p>
+    <div
+      className={`h-1 rounded-full mb-3 ${
+        isActive ? "bg-teal-600" : "bg-gray-100"
+      }`}
+    >
+      <div
+        className={`h-full rounded-full ${
+          isActive ? "bg-teal-200" : "bg-teal-500"
+        }`}
+        style={{ width: `${branch.attendanceRate}%`, transition: "width .5s" }}
+      />
+    </div>
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onView();
+      }}
+      className={`flex items-center gap-1 text-[10px] font-semibold transition-colors ${
+        isActive
+          ? "text-teal-200 hover:text-white"
+          : "text-teal-600 hover:text-teal-700"
+      }`}
+    >
+      View Branch <ArrowUpRight className="w-3 h-3" />
+    </button>
+  </div>
+);
+
+// ─── Safe helpers ─────────────────────────────────────────────────────────────
+
+const countByName = <T,>(items: T[], getName: (item: T) => unknown) => {
+  const counts = new Map<string, number>();
+  items.forEach((item) => {
+    const name = String(getName(item) ?? "Unassigned").trim() || "Unassigned";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+};
+
+const getStaffCode = (staffMember: AttendanceStaff): string => {
+  const value = readRecordValue(
+    staffMember,
+    "studentId",
+    "student_id",
+    "rollNo",
+    "roll_no",
+    "admissionNo",
+    "admission_no",
+    "employeeId",
+    "employee_id",
+    "personCode",
+    "person_code",
+    "empCode",
+    "employeeCode",
+    "code",
+    "empId",
+  );
+
+  const text = String(value ?? "").trim();
+  return text || "—";
+};
+
+const countApprovedLeaveDays = (
+  staffMember: AttendanceStaff,
+  dates: string[],
+  leaveRecords: LeaveRequest[],
+): number => {
+  const staffId = String(staffMember.id);
+  const staffLeaves = leaveRecords.filter((leave) => {
+    if (String(leave.status ?? "").toLowerCase() !== "approved") return false;
+    const leaveStaffId = String(
+      leave.staffId ?? leave.staff_id ?? leave.userId ?? leave.user_id ?? "",
+    );
+    return leaveStaffId === staffId;
+  });
+  if (staffLeaves.length === 0) return 0;
+
+  return dates.filter((date) =>
+    staffLeaves.some(
+      (leave) =>
+        date >= (leave.startDate ?? leave.start_date ?? "") &&
+        date <= (leave.endDate ?? leave.end_date ?? ""),
+    ),
+  ).length;
+};
+
+const getStaffDesignation = (staffMember: AttendanceStaff): string =>
+  String(
+    (staffMember as any).designation ??
+      (staffMember as any).position ??
+      (staffMember as any).role ??
+      (staffMember as any).jobTitle ??
+      "-",
+  );
+
+const getAttendanceGroupValue = (staffMember: AttendanceStaff): string =>
+  String(
+    (staffMember as any).className ??
+      (staffMember as any).class_name ??
+      (staffMember as any).groupName ??
+      (staffMember as any).group_name ??
+      (staffMember as any).department ??
+      (staffMember as any).dept ??
+      "Unassigned",
+  );
+
+const getAttendanceSubgroupValue = (staffMember: AttendanceStaff): string =>
+  String(
+    (staffMember as any).sectionName ??
+      (staffMember as any).section_name ??
+      (staffMember as any).subgroupName ??
+      (staffMember as any).subgroup_name ??
+      (staffMember as any).section ??
+      (staffMember as any).designation ??
+      (staffMember as any).position ??
+      (staffMember as any).role ??
+      "Unassigned",
+  );
+
+type AttendanceTemplateColumn = TemplateColumn<Record<string, unknown>>;
+
+const ATTENDANCE_TABLE_HIDDEN_COLUMNS = new Set([
+  "department",
+  "designation",
+  "notes",
+]);
+
+type AttendanceCellContext = {
+  member: AttendanceStaff;
+  record?: {
+    id?: string | number;
+    date?: string; // add this line
+    inTime?: string;
+    outTime?: string;
+    workDuration?: string;
+    status?: string;
+    arrivalStatus?: string;
+    notes?: string | null;
+    isPresent?: boolean;
+    isLate?: boolean;
+  };
+  getBranchName: (branchId: number) => string;
+  branches: BranchLike[];
+};
+
+/**
+ * Uncommitted values for one row's edit session. Populated from the row's
+ * current record when Edit is clicked, mutated locally as the admin types,
+ * and only sent to the backend as a single combined PATCH when Save is
+ * clicked -- see saveRowEdit. checkIn/checkOut are held as datetime-local
+ * strings (branch wall-clock time, matching toDatetimeLocalValue) since
+ * that's the native input format; they're converted back to UTC ISO via
+ * fromDatetimeLocalValue only at save time.
+ */
+interface AttendanceRowDraft {
+  checkIn: string;
+  checkOut: string;
+  arrivalStatus: string;
+  notes: string;
+}
+
+// getTimezoneOffsetMinutes / toDatetimeLocalValue / fromDatetimeLocalValue
+// now live in ./utils/attendanceDisplay (imported above).
+
+function formatTimeForDisplay(
+  value: string | null | undefined,
+  timeZone: string,
+): string {
+  if (!value) return "—";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone,
+    }).format(parsed);
+  } catch {
+    // Defends only against a genuinely invalid IANA name reaching here
+    // (e.g. stale frontend build); a missing/blank value is already
+    // handled by getBranchTimezone() below, never by this catch.
+    return String(value);
+  }
+}
+
+function formatAttendanceArrivalStatus(
+  record: {
+    isPresent?: boolean;
+    isLate?: boolean;
+    inTime?: string | null;
+    notes?: string | null;
+  },
+  timeZone: string,
+  graceMinutes: number | null,
+): string {
+  if (!record.isPresent) return "Absent";
+  if (!record.isLate) return "Present / On-Time";
+
+  const shiftStart = record.notes?.match(
+    /after the\s+(\d{1,2}):(\d{2})(?::\d{2})?\s+shift start/i,
+  );
+  if (!shiftStart || !record.inTime || graceMinutes === null) return "Late";
+
+  const timeOnly = record.inTime.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  const localTime = timeOnly
+    ? null
+    : toDatetimeLocalValue(record.inTime, timeZone).match(/T(\d{2}):(\d{2})$/);
+  const actualMinutes = timeOnly
+    ? Number(timeOnly[1]) * 60 + Number(timeOnly[2])
+    : localTime
+      ? Number(localTime[1]) * 60 + Number(localTime[2])
+      : null;
+  if (actualMinutes === null) return "Late";
+
+  const scheduledMinutes = Number(shiftStart[1]) * 60 + Number(shiftStart[2]);
+  let lateMinutes = actualMinutes - scheduledMinutes - graceMinutes;
+  if (lateMinutes < 0) lateMinutes += 24 * 60;
+  if (lateMinutes <= 0) return "Late";
+  if (lateMinutes === 0) return "Late";
+
+  if (lateMinutes < 60) return `Late / ${lateMinutes} min`;
+  const hours = Math.floor(lateMinutes / 60);
+  const minutes = lateMinutes % 60;
+  return minutes > 0
+    ? `Late / ${hours} hr ${minutes} min`
+    : `Late / ${hours} hr`;
+}
+
+// FALLBACK_TIMEZONE now lives in ./utils/attendanceDisplay (imported
+// above) -- see that module's header comment.
+
+/**
+ * Duration is derived entirely on the client from inTime/outTime — neither
+ * app.py nor support_db.py ever compute or persist a work_duration value
+ * (checked: no such column/field exists anywhere in the attendance write
+ * path), so a record's backend-supplied `workDuration` is always empty.
+ * Previously that meant the Duration column showed "Counting..." forever,
+ * even hours after checkout, because nothing ever replaced the fallback
+ * string. This is the single source of truth for that calculation — both
+ * the Daily Attendance table (attendanceColumnText) and the monthly rollup
+ * (dateRecords → totalWorkDuration) read the same value.
+ *
+ * Returns null (not "Counting...") when there is no checkout yet, so the
+ * caller decides the in-progress copy; null is also returned for a missing/
+ * invalid checkIn or a checkOut that is not after checkIn (defensive against
+ * clock skew or bad data — never render a negative duration).
+ */
+function isTimeOnly(value: string | null | undefined): boolean {
+  const text = String(value ?? "").trim();
+  return /^\\d{1,2}:\\d{2}(?::\\d{2})?$/.test(text);
+}
+
+function parseAttendanceTimestamp(
+  value: string | null | undefined,
+): Date | null {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const normalized = isTimeOnly(raw)
+    ? `1970-01-01T${raw}`
+    : raw.replace(/ /g, "T");
+  const parsed = new Date(normalized);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function calculateWorkDuration(
+  checkIn: string | null | undefined,
+  checkOut: string | null | undefined,
+): string | null {
+  if (!checkIn || !checkOut) return null;
+
+  const start = parseAttendanceTimestamp(checkIn);
+  const end = parseAttendanceTimestamp(checkOut);
+  if (!start || !end) return null;
+
+  let diffMs = end.getTime() - start.getTime();
+  if (diffMs <= 0 && isTimeOnly(checkIn) && isTimeOnly(checkOut)) {
+    diffMs += 24 * 60 * 60 * 1000;
+  }
+  if (diffMs <= 0) return null;
+
+  const totalMinutes = Math.floor(diffMs / 60000);
+  if (totalMinutes <= 0) return null;
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours <= 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+// getBranchTimezone now lives in ./utils/attendanceDisplay (imported
+// above) -- see that module's header comment.
+
+function attendanceColumnText(
+  column: AttendanceTemplateColumn,
+  context: AttendanceCellContext,
+): string {
+  const { member, record, getBranchName } = context;
+  const branchId = Number((member as any).branchId);
+  const branchTimezone = getBranchTimezone(branchId, context.branches ?? []);
+
+  if (column.key === "code") return getStaffCode(member);
+  if (column.key === "name") return String(member.name ?? "—");
+  if (column.key === "branch") return getBranchName(branchId);
+  if (column.key === "class" || column.key === "department") {
+    return getAttendanceGroupValue(member) || "—";
+  }
+  if (column.key === "section" || column.key === "designation") {
+    return getAttendanceSubgroupValue(member) || "—";
+  }
+  if (column.key === "checkIn")
+    return formatTimeForDisplay(record?.inTime, branchTimezone);
+  if (column.key === "checkOut")
+    return formatTimeForDisplay(record?.outTime, branchTimezone);
+  if (column.key === "duration") {
+    if (!record?.isPresent) return "—";
+    return (
+      calculateWorkDuration(record?.inTime, record?.outTime) ??
+      record?.workDuration ??
+      "Counting..."
+    );
+  }
+  if (column.key === "arrival") return record?.arrivalStatus || "—";
+  if (column.key === "notes") return record?.notes || "—";
+
+  const value = readColumnValue(member as Record<string, unknown>, column);
+  return value === undefined || value === null || value === ""
+    ? "—"
+    : String(value);
+}
+
+function primitiveCellValue(
+  row: Record<string, unknown>,
+  key: string,
+): string | number | boolean | null | undefined {
+  const value = row[key];
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null ||
+    value === undefined
+  ) {
+    return value;
+  }
+
+  return String(value);
+}
+
+function attendanceExportColumnValue(
+  row: Record<string, unknown>,
+  column: AttendanceTemplateColumn,
+): string | number | boolean | null | undefined {
+  if (column.key === "class" || column.key === "department")
+    return primitiveCellValue(row, "department");
+  if (column.key === "section" || column.key === "designation")
+    return primitiveCellValue(row, "designation");
+  if (column.key === "branch") return primitiveCellValue(row, "branch");
+  if (column.key === "checkIn") return primitiveCellValue(row, "firstCheckIn");
+  if (column.key === "checkOut") return primitiveCellValue(row, "lastCheckOut");
+  if (column.key === "duration")
+    return primitiveCellValue(row, "totalWorkDuration");
+  if (column.key === "arrival") return primitiveCellValue(row, "arrival");
+  return readColumnValue(row, column);
+}
+
+function buildAttendancePeopleModel(
+  config: Record<string, unknown>,
+  selectedPeopleType?: string | null,
+  restrictToPeopleTypes?: string[],
+) {
+  const model = resolveTemplateRenderingModel(
+    config,
+    selectedPeopleType,
+    restrictToPeopleTypes,
+  );
+  return {
+    ...model,
+    peopleType: model.selectedPeopleType,
+    personPlural: model.labels.plural,
+    personSingular: model.labels.singular,
+    personCodeLabel: model.labels.code,
+    branchLabel: model.labels.branch,
+    groupLabel: model.labels.group,
+    subgroupLabel: model.isStudentScope
+      ? model.labels.subGroup
+      : model.labels.designation,
+    groupFilterAllLabel: `${model.labels.groupPlural}`,
+    subgroupFilterAllLabel: model.isStudentScope
+      ? `${model.labels.subGroupPlural}`
+      : `${model.labels.designationPlural}`,
+    statsTotalLabel: `Total ${model.labels.plural}`,
+    searchPlaceholder:
+      model.filters.find((filter) => filter.key === "search")?.placeholder ??
+      `Search ${model.labels.singular.toLowerCase()} name...`,
+  };
+}
+
+function resolveStaffUiBranchId(
+  member: Record<string, unknown>,
+  branches: BranchLike[],
+): number {
+  const directUiBranchId = readIdValue(
+    member,
+    "branch_ui_id",
+    "branchUiId",
+    "ui_branch_id",
+    "uiBranchId",
+  );
+
+  if (directUiBranchId !== undefined) {
+    const numeric = Number(directUiBranchId);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+
+  const rawBranchId = readIdValue(
+    member,
+    "branchId",
+    "branch_id",
+    "backend_branch_id",
+    "backendBranchId",
+    "branch_uuid",
+    "branchUuid",
+    "branch",
+  );
+
+  return resolveUiBranchIdFromBackend(branches, rawBranchId) ?? 0;
+}
+
+const normalizeStaffForAttendance = (
+  member: any,
+  branches: BranchLike[] = [],
+): AttendanceStaff => {
+  const record =
+    member && typeof member === "object"
+      ? (member as Record<string, unknown>)
+      : {};
+  const backendId = readIdValue(
+    record,
+    "id",
+    "userId",
+    "user_id",
+    "staffId",
+    "staff_id",
+  );
+  const externalCode = getStaffCode(record as AttendanceStaff);
+  const resolvedBranchId = resolveStaffUiBranchId(record, branches);
+  const groupValue = String(
+    member.className ??
+      member.class_name ??
+      member.groupName ??
+      member.group_name ??
+      member.department ??
+      member.dept ??
+      "",
+  );
+
+  const subgroupValue = String(
+    member.sectionName ??
+      member.section_name ??
+      member.subGroupName ??
+      member.sub_group_name ??
+      member.section ??
+      member.designationName ??
+      member.designation_name ??
+      member.designation ??
+      member.position ??
+      member.role ??
+      "",
+  );
+
+  return {
+    ...member,
+    id: String(backendId ?? externalCode ?? ""),
+    employeeId: externalCode,
+    studentId:
+      readNullableText(record, "studentId", "student_id") ?? externalCode,
+    rollNo: readNullableText(record, "rollNo", "roll_no") ?? undefined,
+    code: externalCode,
+    name: String(
+      member.name ?? member.staffName ?? member.fullName ?? "Unknown",
+    ),
+    branchId: resolvedBranchId,
+    branchName: String(member.branchName ?? member.branch_name ?? ""),
+    department: groupValue || "Unassigned",
+    className: groupValue,
+    sectionName: subgroupValue,
+    peopleType: String(
+      member.peopleType ??
+        member.people_type ??
+        member.personType ??
+        member.person_type ??
+        "staff",
+    ),
+    role:
+      subgroupValue ||
+      String(member.role ?? member.position ?? member.designation ?? "Staff"),
+    designation:
+      subgroupValue ||
+      String(
+        member.designation ??
+          member.position ??
+          member.role ??
+          member.jobTitle ??
+          "Staff",
+      ),
+    jobTitle: member.jobTitle ?? member.position ?? member.designation,
+    empId: externalCode,
+    userId:
+      member.userId ??
+      member.user_id ??
+      member.id ??
+      member.staffId ??
+      member.staff_id,
+    shiftStart: String(
+      member.shiftStart ?? member.shift_start ?? member.duty_start ?? "09:00",
+    ),
+    shiftEnd: String(
+      member.shiftEnd ?? member.shift_end ?? member.duty_end ?? "17:00",
+    ),
+    shiftIdRef: member.shiftIdRef ?? member.shift_id_ref ?? null,
+    checkInGraceOverride:
+      member.checkInGraceOverride ?? member.check_in_grace_override ?? null,
+  };
+};
+
+/**
+ * [Fix-5] normalizeApiStaffForAttendance has been removed.
+ *
+ * It was: `(member: ApiUser) => normalizeStaffForAttendance(member as any)`
+ * — a zero-value wrapper that only obscured what was happening. All callers
+ * now use normalizeStaffForAttendance directly. The cast is at the call site
+ * (apiStaff.map(normalizeStaffForAttendance)) where it is visible and honest.
+ */
+
+/**
+ * Derives the "Late" / "On-Time" display label from the real, timing-aware
+ * classification (check_in_status) when available, falling back to the old
+ * status-literal guess only for rows that predate the timing engine.
+ * Extracted to its own function (rather than inlined as a nested ternary)
+ * to avoid mixing `??` with `?:` — that combination is easy to get wrong,
+ * since `??` binds tighter than `?:` and silently produces the wrong value.
+ */
+function deriveArrivalStatus(record: {
+  arrival_status?: string;
+  arrivalStatus?: string;
+  check_in_status?: string | null;
+  checkInStatus?: string | null;
+  status?: string;
+}): string | undefined {
+  if (record.arrival_status) return record.arrival_status;
+  if (record.arrivalStatus) return record.arrivalStatus;
+
+  const timingStatus = record.check_in_status ?? record.checkInStatus;
+  if (timingStatus) return timingStatus === "late" ? "Late" : "On-Time";
+
+  const legacyStatus = String(record.status ?? "").toLowerCase();
+  if (legacyStatus === "late") return "Late";
+  if (legacyStatus === "present") return "On-Time";
+  return undefined;
+}
+
+const TIMING_STATUS_LABELS: Record<
+  "on_time" | "late",
+  { label: string; className: string }
+> = {
+  on_time: {
+    label: "On Time",
+    className: "bg-teal-50 text-teal-700 border-teal-100",
+  },
+  late: {
+    label: "Late",
+    className: "bg-orange-50 text-orange-600 border-orange-100",
+  },
+};
+
+/**
+ * Unified Day Status badge for a row, sourced from two different backend
+ * fields depending on which pipeline wrote it:
+ *  - day_status ('half_day' | 'short_leave' | 'late' | 'overtime') — an
+ *    explicit operator classification, from either the local-node hold
+ *    resolution actions or resolve_attendance_exception. Always wins when
+ *    present, since it's a deliberate decision, not a computed guess.
+ *  - check_in_status ('on_time' | 'late' | 'early' | 'unscheduled') — the
+ *    timing-engine classification, used as a fallback for the (majority)
+ *    case of an ordinary day with no operator override.
+ * A row that's absent for the day has neither and returns null; the caller
+ * renders the same "—" every other empty cell in this table uses.
+ */
+function deriveDayStatusBadge(record: {
+  isPresent?: boolean;
+  dayStatus?: string | null;
+  checkInStatus?: string | null;
+}): { label: string; className: string } | null {
+  if (!record.isPresent) return null;
+
+  const dayStatus = (record.dayStatus ?? "").toLowerCase();
+  if (dayStatus && dayStatus !== "present") {
+    const known =
+      DAY_STATUS_LABELS[dayStatus as keyof typeof DAY_STATUS_LABELS];
+    if (known) return known;
+  }
+
+  const timingStatus = (record.checkInStatus ?? "on_time").toLowerCase();
+  return (
+    TIMING_STATUS_LABELS[timingStatus as keyof typeof TIMING_STATUS_LABELS] ??
+    TIMING_STATUS_LABELS.on_time
+  );
+}
+
+/**
+ * Display label + badge color for the capture_channel column. Kept as a
+ * plain lookup (not a switch) so an unrecognized/future value falls
+ * through to the same "—" the rest of this table already uses for
+ * missing data, rather than throwing or rendering "undefined".
+ */
+const CAPTURE_CHANNEL_LABELS: Record<
+  "local_node" | "cloud" | "mobile_app" | "manual",
+  { label: string; className: string }
+> = {
+  local_node: {
+    label: "On-Site",
+    className: "bg-indigo-50 text-indigo-600 border-indigo-100",
+  },
+  cloud: {
+    label: "Cloud",
+    className: "bg-sky-50 text-sky-600 border-sky-100",
+  },
+  mobile_app: {
+    label: "Mobile App",
+    className: "bg-teal-50 text-teal-700 border-teal-100",
+  },
+  manual: {
+    label: "Manual",
+    className: "bg-slate-50 text-slate-600 border-slate-200",
+  },
+};
+
+function captureChannelBadge(
+  value: string | null | undefined,
+): { label: string; className: string } | null {
+  if (!value) return null;
+  return (
+    CAPTURE_CHANNEL_LABELS[value as keyof typeof CAPTURE_CHANNEL_LABELS] ?? null
+  );
+}
+
+/**
+ * Resolves a raw camera_id to its human name via cfg.cameras (already
+ * hydrated org-wide). Falls back to the raw id if not found, rather than
+ * hiding a real value behind "—".
+ */
+function resolveCameraLabel(
+  cameraId: string | number | null | undefined,
+  camerasById: Map<string, string>,
+): string | null {
+  if (cameraId === null || cameraId === undefined || cameraId === "") {
+    return null;
+  }
+  return camerasById.get(normalizeKey(cameraId)) ?? null;
+}
+
+const normalizeAttendanceForView = (
+  record: any,
+  branches: BranchLike[] = [],
+): ApiAttendance => ({
+  ...record,
+  id: record.id ?? record.attendance_id ?? record.log_id,
+  user_id:
+    record.user_id ??
+    record.userId ??
+    record.staff_id ??
+    record.staffId ??
+    record.id,
+  user_name: String(
+    record.user_name ??
+      record.staffName ??
+      record.name ??
+      record.fullName ??
+      "",
+  ),
+  date: normalizeDateString(
+    record.date ??
+      record.attendanceDate ??
+      record.logDate ??
+      record.log_date ??
+      record.created_at?.slice?.(0, 10) ??
+      record.checkIn ??
+      record.check_in ??
+      record.time ??
+      record.check_out ??
+      record.outTime ??
+      record.checkOut,
+  ),
+  time:
+    record.time ??
+    record.inTime ??
+    record.check_in ??
+    record.created_at ??
+    null,
+  outTime: record.outTime ?? record.check_out ?? null,
+  check_in: record.check_in ?? record.inTime ?? record.time ?? null,
+  check_out: record.check_out ?? record.outTime ?? null,
+  workDuration: record.workDuration ?? record.work_duration ?? null,
+  status: String(record.status || "").toUpperCase(),
+  check_in_status: record.check_in_status ?? record.checkInStatus ?? null,
+  check_out_status: record.check_out_status ?? record.checkOutStatus ?? null,
+  notes: record.notes ?? null,
+  capture_channel: record.capture_channel ?? record.captureChannel ?? null,
+  camera_id: record.camera_id ?? record.cameraId ?? null,
+  day_status: record.day_status ?? record.dayStatus ?? null,
+  dayStatus: record.day_status ?? record.dayStatus ?? null,
+  check_out_payroll_decision:
+    record.check_out_payroll_decision ?? record.checkOutPayrollDecision ?? null,
+  checkOutPayrollDecision:
+    record.check_out_payroll_decision ?? record.checkOutPayrollDecision ?? null,
+  // Same normalization as check_out_payroll_decision above, for the
+  // check-IN-side decision column ('late' rows only -- see
+  // resolvePayrollDecision in dayStatusLabels.ts). Without this, a record
+  // shape that only carries one casing variant would silently lose the
+  // decision the same way check_out_payroll_decision did before this
+  // pairing existed for it.
+  check_in_payroll_decision:
+    record.check_in_payroll_decision ?? record.checkInPayrollDecision ?? null,
+  checkInPayrollDecision:
+    record.check_in_payroll_decision ?? record.checkInPayrollDecision ?? null,
+  arrival_status: deriveArrivalStatus(record),
+  branchId:
+    resolveUiBranchIdFromBackend(
+      branches,
+      record.branchId ??
+        record.branch_id ??
+        record.backend_branch_id ??
+        record.backendBranchId ??
+        record.branch_uuid ??
+        record.branchUuid,
+    ) ?? undefined,
+  branch_id:
+    resolveUiBranchIdFromBackend(
+      branches,
+      record.branch_id ?? record.branchId ?? record.backend_branch_id,
+    ) ?? undefined,
+  staffId: record.staffId ?? record.staff_id ?? record.user_id ?? record.userId,
+  staffName:
+    record.staffName ??
+    record.staff_name ??
+    record.user_name ??
+    record.userName,
+});
+
+const toMonthName = (date: string): string => {
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+        month: "long",
+        timeZone: "UTC",
+      }).format(parsed);
+};
+
+const toYearNumber = (date: string): number => {
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getFullYear();
+};
+
+// ─── Single source boundary ──────────────────────────────────────────────────
+
+/**
+ * [Fix-1] useOrg() is now used without a cast.
+ * [Fix-2] masterData.branches is used directly — no cfg fallback.
+ * [Fix-3] Branch summaries are computed via useAttendanceBranchSummaries hook.
+ */
+function useAttendanceSources(args: {
+  branchIdParam?: string;
+  apiStaff: AttendanceStaff[];
+  apiAttendance: ApiAttendance[];
+  useRealApi: boolean;
+  selectedPeopleType?: string | null;
+}) {
+  const {
+    branchIdParam,
+    apiStaff,
+    apiAttendance,
+    useRealApi,
+    selectedPeopleType,
+  } = args;
+  const moduleCtx = useModule();
+
+  // [Fix-1] No `as any` cast — useOrg() is fully typed.
+  const { cfg, masterData } = useOrg();
+
+  // [Fix-2] masterData.branches is the authoritative list.
+  // We do NOT fall back to cfg.branches — masterData IS derived from cfg,
+  // so the two are always identical. The previous fallback was misleading.
+  const branches: BranchLike[] = masterData.branches;
+
+  // Branch scope must be known BEFORE the people model is built, since
+  // Attendance's people-type options are now gated per-branch via
+  // modulePeopleTypesByBranch instead of the org-wide list.
+  const routeBranchId = branchIdParam ? Number(branchIdParam) : undefined;
+  const scopedBranchId = Number.isFinite(routeBranchId)
+    ? routeBranchId
+    : undefined;
+  const isGlobal = scopedBranchId === undefined;
+
+  const attendancePeopleTypeRestriction = resolveModulePeopleTypes(
+    cfg as unknown as Record<string, unknown>,
+    "attendance",
+    isGlobal ? null : scopedBranchId,
+  );
+
+  const peopleModel = buildAttendancePeopleModel(
+    cfg as unknown as Record<string, unknown>,
+    selectedPeopleType ?? readPeopleType(cfg),
+    attendancePeopleTypeRestriction,
+  );
+  const peopleType = selectedPeopleType === "all" ? "" : peopleModel.peopleType;
+  const entityLabel =
+    selectedPeopleType === "all" ? "People" : peopleModel.personPlural;
+
+  const getBranchName = useCallback(
+    (branchId: number): string => masterData.getBranchName(branchId),
+    [masterData],
+  );
+
+  const visibleBranches = useMemo(
+    () =>
+      isGlobal
+        ? branches
+        : branches.filter(
+            (branch) => Number(branch.id) === Number(scopedBranchId),
+          ),
+    [branches, isGlobal, scopedBranchId],
+  );
+
+  const moduleStaff = moduleCtx.staff.allItems ?? moduleCtx.staff.items ?? [];
+  const moduleAttendance =
+    moduleCtx.attendance.allItems ?? moduleCtx.attendance.items ?? [];
+
+  // [Fix-5] normalizeApiStaffForAttendance removed — call normalizeStaffForAttendance directly.
+  const staff = useMemo<AttendanceStaff[]>(
+    () =>
+      useRealApi
+        ? apiStaff.map((member) =>
+            normalizeStaffForAttendance(member, branches),
+          )
+        : moduleStaff.map((member) =>
+            normalizeStaffForAttendance(member, branches),
+          ),
+    [apiStaff, branches, moduleStaff, useRealApi],
+  );
+
+  const attendance = useMemo<ApiAttendance[]>(
+    () =>
+      useRealApi
+        ? apiAttendance.map((record) =>
+            normalizeAttendanceForView(record, branches),
+          )
+        : moduleAttendance.map((record) =>
+            normalizeAttendanceForView(record, branches),
+          ),
+    [apiAttendance, branches, moduleAttendance, useRealApi],
+  );
+
+  // [Fix-3] Aggregation delegated to the extracted shared hook.
+  const branchSummaries = useAttendanceBranchSummaries(
+    branches,
+    staff,
+    attendance as unknown as Parameters<typeof useAttendanceBranchSummaries>[2],
+  );
+
+  return {
+    masterData,
+    branches,
+    visibleBranches,
+    currentBranch: visibleBranches[0],
+    isGlobal,
+    scopedBranchId,
+    peopleType,
+    entityLabel,
+    peopleModel,
+    staff,
+    attendance,
+    data: { branches: branchSummaries },
+    getBranchName,
+  };
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export default function AttendanceView() {
+  const navigate = useNavigate();
+  const { branchId: branchIdParam } = useParams<{ branchId?: string }>();
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status") as AttendanceStatusFilter | null;
+  // Support-created organizations have UUID ids and live Supabase attendance.
+  // Always use the real API for them, even if VITE_USE_REAL_API was left false.
+  //
+  // organizationId comes from OrgConfigContext, not localStorage: it is the
+  // one value hydrateFromBackend() clears to null when the backend hasn't
+  // confirmed a tenant for this account (e.g. onboarding incomplete, or a
+  // 404/400 from /api/client/bootstrap). Reading localStorage directly here
+  // would silently ignore that guard and risk showing stale/other-tenant data.
+  const {
+    organizationId,
+    cfg,
+    setSelectedPeopleType: setOrgSelectedPeopleType,
+  } = useOrg();
+  const moduleCtx = useModule();
+  const leaveRecords = moduleCtx.leave.allItems ?? moduleCtx.leave.items ?? [];
+  const leaveModuleEnabled = isModuleEnabled(cfg.modules, "leave");
+  const organizationIdForApi = organizationId ? cleanId(organizationId) : null;
+  const useRealApi =
+    Boolean(organizationIdForApi) ||
+    (import.meta as any).env?.VITE_USE_REAL_API === "true";
+
+  const [apiStaff, setApiStaff] = useState<AttendanceStaff[]>([]);
+  const [apiAttendance, setApiAttendance] = useState<ApiAttendance[]>([]);
+  const [checkInGraceByStaffId, setCheckInGraceByStaffId] = useState<
+    Map<string, number>
+  >(() => new Map());
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [selectedAbsentStaffIds, setSelectedAbsentStaffIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [bulkMarkingAbsent, setBulkMarkingAbsent] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [loadingRefresh, setLoadingRefresh] = useState(false);
+  const [loadingAttendanceData, setLoadingAttendanceData] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeBranchId, setActiveBranchId] = useState<number | null>(null);
+  const [activeDept, setActiveDept] = useState<string | null>(null);
+  const [activeSubgroup, setActiveSubgroup] = useState<string | null>(null);
+  const [activeStatus, setActiveStatus] =
+    useState<AttendanceStatusFilter>(
+      (initialStatus && ["present", "absent", "late", "onTime"].includes(initialStatus))
+        ? initialStatus
+        : "all"
+    );
+  const attendanceTableRef = useRef<HTMLDivElement>(null);
+  const showAttendanceStatus = useCallback(
+    (status: AttendanceStatusFilter) => {
+      setActiveStatus(status);
+      attendanceTableRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    },
+    [],
+  );
+  // Default is "staff" per product requirement: the "All Attendance People"
+  // option has been removed from this dropdown entirely, so there is no
+  // valid "null/all" state to fall back to here anymore.
+  const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
+    "staff",
+  );
+
+  const filter = useDateFilter("daily", {
+    completedPeriodsOnly: true,
+    allowCurrentDailyPeriod: true,
+  });
+  const dateFilterMaxDate =
+    filter.mode === "daily"
+      ? formatDate(new Date())
+      : getPreviousCompletedPeriodRange(filter.mode).endDate;
+
+  const sources = useAttendanceSources({
+    branchIdParam,
+    apiStaff,
+    apiAttendance,
+    useRealApi,
+    selectedPeopleType,
+  });
+
+  const {
+    branches,
+    visibleBranches,
+    currentBranch,
+    isGlobal,
+    scopedBranchId,
+    peopleType,
+    entityLabel,
+    peopleModel,
+    staff,
+    attendance,
+    data,
+    getBranchName,
+  } = sources;
+
+  const departmentApiBranchIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          visibleBranches
+            .filter(
+              (branch) =>
+                !isGlobal ||
+                activeBranchId === null ||
+                Number(branch.id) === activeBranchId,
+            )
+            .map((branch) => getBackendBranchId(branch) ?? String(branch.id)),
+        ),
+      ),
+    [activeBranchId, isGlobal, visibleBranches],
+  );
+  const [configuredDepartments, setConfiguredDepartments] = useState<
+    DepartmentRecord[]
+  >([]);
+  const [configuredDesignations, setConfiguredDesignations] = useState<
+    string[]
+  >([]);
+
+  useEffect(() => {
+    if (
+      peopleModel.isStudentScope ||
+      !organizationIdForApi ||
+      departmentApiBranchIds.length === 0
+    ) {
+      setConfiguredDepartments([]);
+      return;
+    }
+    setConfiguredDepartments([]);
+    let cancelled = false;
+    Promise.all(
+      departmentApiBranchIds.map((branchId) =>
+        listBranchDepartments(branchId, organizationIdForApi),
+      ),
+    )
+      .then((departmentsByBranch) => {
+        if (!cancelled) setConfiguredDepartments(departmentsByBranch.flat());
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to load configured departments: ${error.message}`
+            : "Unable to load configured departments.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    departmentApiBranchIds,
+    organizationIdForApi,
+    peopleModel.isStudentScope,
+  ]);
+
+  useEffect(() => {
+    if (
+      peopleModel.isStudentScope ||
+      !organizationIdForApi ||
+      configuredDepartments.length === 0
+    ) {
+      setConfiguredDesignations([]);
+      return;
+    }
+    setConfiguredDesignations([]);
+    let cancelled = false;
+    Promise.all(
+      configuredDepartments.map((department) =>
+        listDesignations(department.id, organizationIdForApi, true),
+      ),
+    )
+      .then((designationsByDepartment) => {
+        if (cancelled) return;
+        setConfiguredDesignations(
+          Array.from(
+            new Set(
+              designationsByDepartment
+                .flat()
+                .map((designation) => designation.name.trim())
+                .filter(Boolean),
+            ),
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? `Unable to load configured designations: ${error.message}`
+            : "Unable to load configured designations.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    configuredDepartments,
+    organizationIdForApi,
+    peopleModel.isStudentScope,
+  ]);
+
+  // The "All Attendance People" entry is an aggregate view, not a real
+  // person type — this dropdown should only ever offer concrete types
+  // (Staff, Worker, etc). Filtered here rather than in the shared
+  // peopleTypeOptions builder so other consumers of that model are unaffected.
+  const peopleTypeSelectorOptions = useMemo<PeopleTypeOption[]>(
+    () =>
+      (peopleModel.peopleTypeOptions ?? []).filter(
+        (option) => option.value !== "all",
+      ),
+    [peopleModel.peopleTypeOptions],
+  );
+
+  // Safety net: the initial "staff" default may not exist for every org's
+  // configured people types (e.g. school verticals). If so, fall back to
+  // the first available option rather than leaving the selector empty.
+  useEffect(() => {
+    if (!peopleTypeSelectorOptions.length) return;
+    const isValidSelection = peopleTypeSelectorOptions.some(
+      (option) => option.value === selectedPeopleType,
+    );
+    if (!isValidSelection) {
+      setSelectedPeopleType(peopleTypeSelectorOptions[0].value);
+    }
+  }, [peopleTypeSelectorOptions, selectedPeopleType]);
+
+  const attendanceTemplateColumns = useMemo(
+    () =>
+      peopleModel.attendanceColumns.map(
+        (column) => column as AttendanceTemplateColumn,
+      ),
+    [peopleModel.attendanceColumns],
+  );
+  const showBranchColumn = visibleBranches.length > 1;
+
+  const attendanceTemplateFilters = useMemo(
+    () => peopleModel.filters,
+    [peopleModel.filters],
+  );
+
+  const attendanceFilterByKey = useMemo(() => {
+    const entries = attendanceTemplateFilters.map(
+      (filter) => [filter.key, filter] as const,
+    );
+    return new Map(entries);
+  }, [attendanceTemplateFilters]);
+
+  const attendanceGroupFilter =
+    attendanceFilterByKey.get("class") ??
+    attendanceFilterByKey.get("department");
+  const attendanceSubgroupFilter =
+    attendanceFilterByKey.get("section") ??
+    attendanceFilterByKey.get("designation");
+
+  const dailyAttendanceColumns = useMemo(
+    () => attendanceTemplateColumns,
+    [attendanceTemplateColumns],
+  );
+
+  // Action (Edit/Save/Mark Absent) is rendered as its own fixed last column
+  // instead of wherever it happens to sit in attendanceTemplateColumns, so
+  // this excludes it from the config-driven pass and it's appended manually
+  // after Notes/Channel in the table markup below.
+  const visibleDailyAttendanceColumns = useMemo(
+    () =>
+      dailyAttendanceColumns.filter(
+        (column) =>
+          column.key !== "action" &&
+          !ATTENDANCE_TABLE_HIDDEN_COLUMNS.has(column.key) &&
+          (column.key !== "branch" || showBranchColumn),
+      ),
+    [dailyAttendanceColumns, showBranchColumn],
+  );
+
+  // Payroll decisions only exist when the org purchased the Payroll module
+  // AND for payroll-eligible people (staff, workers, ...) -- never students.
+  // The whole column is dropped when the module is missing or the scope is
+  // student-only; in a mixed scope ("all") it stays for the non-student rows
+  // and student rows render an empty cell (see isPayrollApplicable below).
+  // Backend enforces the same rules.
+  const showPayrollDecisionColumn =
+    isModuleEnabled(cfg.modules, "payroll") && !peopleModel.isStudentScope;
+  const isPayrollApplicable = (member: unknown): boolean =>
+    !isStudentPeopleType(
+      (member as any)?.peopleType ?? (member as any)?.people_type,
+    );
+
+  const [liveCameraNamesById, setLiveCameraNamesById] = useState<
+    Map<string, string>
+  >(() => new Map());
+
+  useEffect(() => {
+    if (!organizationIdForApi) {
+      setLiveCameraNamesById(new Map());
+      return;
+    }
+
+    const controller = new AbortController();
+    setLiveCameraNamesById(new Map());
+    void fetchLiveCameras(
+      { organizationId: organizationIdForApi },
+      controller.signal,
+    )
+      .then((cameras) => {
+        if (controller.signal.aborted) return;
+        setLiveCameraNamesById(
+          new Map(
+            cameras.map((camera) => [normalizeKey(camera.id), camera.name]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLiveCameraNamesById(new Map());
+      });
+
+    return () => controller.abort();
+  }, [organizationIdForApi]);
+
+  // Prefer canonical branch_cameras names, while retaining hydrated config
+  // names as a fallback during API errors or initial loading.
+  const camerasById = useMemo(() => {
+    const map = new Map<string, string>();
+    Object.values(cfg.cameras).forEach((branchCameras) => {
+      branchCameras.forEach((camera) => {
+        map.set(normalizeKey(camera.id), camera.name);
+      });
+    });
+    liveCameraNamesById.forEach((name, id) => map.set(id, name));
+    return map;
+  }, [cfg.cameras, liveCameraNamesById]);
+
+  const rangeAttendanceColumns = useMemo(
+    () =>
+      attendanceTemplateColumns.filter(
+        (column) =>
+          !["checkIn", "checkOut", "duration", "arrival", "action"].includes(
+            column.key,
+          ) &&
+          !ATTENDANCE_TABLE_HIDDEN_COLUMNS.has(column.key) &&
+          (column.key !== "branch" || showBranchColumn),
+      ),
+    [attendanceTemplateColumns, showBranchColumn],
+  );
+
+  const attendanceDateParams = useMemo(() => {
+    if (filter.mode === "daily") {
+      return { date: filter.selectedDate };
+    }
+    const firstDate = filter.dates[0] ?? filter.selectedDate;
+    const lastDate = filter.dates[filter.dates.length - 1] ?? firstDate;
+    return {
+      start: firstDate,
+      end: lastDate,
+    };
+  }, [filter.mode, filter.dates, filter.selectedDate]);
+
+  const fetchAttendance = useCallback(async () => {
+    try {
+      if (!organizationIdForApi) {
+        // No confirmed tenant yet (OrgConfigContext still hydrating, or this
+        // account hasn't launched an org). Show nothing rather than fetching
+        // an unscoped/legacy-fallback result — never guess the tenant.
+        setApiAttendance([]);
+        return;
+      }
+
+      const selectedUiBranchId = scopedBranchId ?? activeBranchId ?? null;
+      const backendBranchId = backendBranchIdForUi(
+        branches,
+        selectedUiBranchId,
+      );
+
+      const nodeAttendance = await getTodayNodeAttendance({
+        organizationId: organizationIdForApi,
+        branchId: backendBranchId,
+        peopleType,
+        ...attendanceDateParams,
+      });
+
+      setApiAttendance(
+        nodeAttendance.records
+          .map((record) => nodeAttendanceToView(record, branches))
+          .map((record) => normalizeAttendanceForView(record, branches)),
+      );
+    } catch (error) {
+      setApiError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load attendance records.",
+      );
+      setApiAttendance([]);
+    }
+  }, [
+    activeBranchId,
+    branches,
+    attendanceDateParams,
+    organizationIdForApi,
+    peopleType,
+    scopedBranchId,
+  ]);
+
+  useEffect(() => {
+    if (!useRealApi) {
+      setLoadingAttendanceData(false);
+      return;
+    }
+
+    const loadInitialData = async () => {
+      setLoadingAttendanceData(true);
+      try {
+        if (!organizationIdForApi) {
+          setApiStaff([]);
+          setApiAttendance([]);
+          return;
+        }
+
+        const selectedUiBranchId = scopedBranchId ?? activeBranchId ?? null;
+        const backendBranchId = backendBranchIdForUi(
+          branches,
+          selectedUiBranchId,
+        );
+
+        const [staffPage, nodeAttendance] = await Promise.all([
+          listStaffPage({
+            organizationId: organizationIdForApi,
+            branchId: backendBranchId ?? undefined,
+            role: "staff",
+            peopleType,
+            page: 1,
+            pageSize: 500,
+            sortBy: "name",
+            sortDir: "asc",
+          }),
+          getTodayNodeAttendance({
+            organizationId: organizationIdForApi,
+            branchId: backendBranchId,
+            peopleType,
+            ...attendanceDateParams,
+          }),
+        ]);
+
+        setApiStaff(
+          (staffPage.rows as any[]).map((row) =>
+            normalizeStaffForAttendance(row, branches),
+          ),
+        );
+
+        setApiAttendance(
+          (nodeAttendance.records ?? [])
+            .map((record) => nodeAttendanceToView(record, branches))
+            .map((record) => normalizeAttendanceForView(record, branches)),
+        );
+        setApiError(null);
+      } catch (error) {
+        setApiError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load attendance module data.",
+        );
+        setApiStaff([]);
+        setApiAttendance([]);
+      } finally {
+        setLoadingAttendanceData(false);
+      }
+    };
+
+    loadInitialData();
+    const interval = window.setInterval(fetchAttendance, 30000);
+    return () => window.clearInterval(interval);
+  }, [fetchAttendance, useRealApi]);
+
+  // Shared "YYYY-MM-DD" -> "12 Aug 2026" formatter. Single source of truth
+  // for this so markAsAbsent's confirm/toast copy and formatExportPeriod
+  // (further below) can't drift into two slightly different date formats.
+  const formatDateForDisplay = (date?: string | null): string | null => {
+    if (!date) return null;
+    const parsed = parseLocalDate(date);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  // `targetDate` is the specific day being viewed (e.g. `todayRecord.date`
+  // for the row the button was clicked on), NOT necessarily today. Without
+  // it, markAttendanceAbsent silently falls back to the server's current
+  // UTC date (see _dashboard_day_window_utc's default), so marking a staff
+  // member absent while looking at a previous date would clear/record
+  // *today's* attendance instead of the date on screen -- the row you were
+  // looking at never changes, and a different (often uninvolved) day does.
+  // Always pass the row's own date explicitly so the mutation and the view
+  // agree on which day is being edited.
+  const markAttendanceAbsentForStaff = async (
+    staffMember: AttendanceStaff,
+    targetDate: string,
+  ) => {
+    const staffName = staffMember.name;
+    const staffId = String(staffMember.id);
+    const record = attendance.find(
+      (item) =>
+        item.date === targetDate &&
+        (String(item.user_id ?? "") === staffId ||
+          item.user_name?.toLowerCase().trim() ===
+            staffName.toLowerCase().trim()),
+    );
+    const userId =
+      record?.user_id ||
+      staff.find(
+        (item) =>
+          String(item.id) === staffId ||
+          item.name?.toLowerCase().trim() === staffName.toLowerCase().trim(),
+      )?.id;
+    if (!userId) {
+      throw new Error(`Could not find a matching user for ${staffName}.`);
+    }
+    await markAttendanceAbsent(userId, {
+      organizationId: organizationIdForApi ?? undefined,
+      branchId:
+        backendBranchIdForUi(
+          branches,
+          scopedBranchId ?? activeBranchId ?? null,
+        ) ?? undefined,
+      peopleType,
+      date: targetDate,
+    });
+  };
+
+  const markAsAbsent = async (staffMember: AttendanceStaff, targetDate: string) => {
+    const staffName = staffMember.name;
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
+      );
+      return;
+    }
+    if (!targetDate) {
+      toastError("Could not determine which date to mark absent.");
+      return;
+    }
+    const hasRecord = attendance.some(
+      (item) =>
+        item.user_name?.toLowerCase().trim() ===
+          staffName.toLowerCase().trim() && item.date === targetDate,
+    );
+    const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: `Mark "${staffName}" as absent on ${formattedDate}?`,
+      text: hasRecord
+        ? `Their existing check-in for ${formattedDate} will be cleared and the day recorded as absent.`
+        : `${formattedDate} will be recorded as absent for this person.`,
+      showCancelButton: true,
+      confirmButtonText: "Mark Absent",
+      cancelButtonText: "Cancel",
+      focusCancel: true,
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    setLoadingAction(staffName);
+    try {
+      await markAttendanceAbsentForStaff(staffMember, targetDate);
+      toastSuccess(
+        `${staffName} has been marked as absent on ${formattedDate}.`,
+      );
+      await fetchAttendance();
+    } catch (error) {
+      toastError(
+        error instanceof Error
+          ? error.message
+          : "Server error. Please check your connection.",
+      );
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  // Row-level edit mode. `editingRowId` is the staff member's id (unique per
+  // row) currently in edit mode; `rowDraft` holds the uncommitted check-in,
+  // check-out, arrival status, and notes values for that row while the
+  // admin edits them. Replaces the old per-cell click-to-edit pattern
+  // (single field, saved on blur) with an explicit Edit button that reveals
+  // all four editable fields at once, and a Save button that commits them
+  // together as one PATCH — so a row can never end up half-saved because
+  // the admin tabbed away mid-edit.
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [rowDraft, setRowDraft] = useState<AttendanceRowDraft | null>(null);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+
+  const startRowEdit = (
+    member: AttendanceStaff,
+    todayRecord: AttendanceCellContext["record"] | undefined,
+    branchTimezone: string,
+  ) => {
+    if (!useRealApi) {
+      alert(
+        "Demo attendance is generated from module store data. Use the real API mode to edit attendance records.",
+      );
+      return;
+    }
+    if (!todayRecord?.id) {
+      alert(
+        "❌ There's no attendance record for this day yet — nothing to edit.",
+      );
+      return;
+    }
+
+    setEditingRowId(String(member.id));
+    setRowDraft({
+      checkIn: toDatetimeLocalValue(todayRecord.inTime, branchTimezone),
+      checkOut: toDatetimeLocalValue(todayRecord.outTime, branchTimezone),
+      arrivalStatus: normalizeEditableArrivalStatus(
+        (todayRecord as any)?.checkInStatus ?? null,
+      ),
+      notes: todayRecord.notes ?? "",
+    });
+  };
+
+  const cancelRowEdit = () => {
+    setEditingRowId(null);
+    setRowDraft(null);
+  };
+
+  const saveRowEdit = async (
+    recordId: string | number | undefined,
+    staffId: string,
+    branchTimezone: string,
+  ) => {
+    if (!recordId || !rowDraft) return;
+
+    setSavingRowId(staffId);
+    try {
+      const edit: AttendanceRecordEdit = {
+        checkIn: fromDatetimeLocalValue(rowDraft.checkIn, branchTimezone),
+        checkOut: fromDatetimeLocalValue(rowDraft.checkOut, branchTimezone),
+        arrivalStatus: rowDraft.arrivalStatus,
+        notes: rowDraft.notes,
+      };
+      await updateAttendanceRecord(recordId, edit, {
+        organizationId: organizationIdForApi ?? undefined,
+        branchId:
+          backendBranchIdForUi(
+            branches,
+            scopedBranchId ?? activeBranchId ?? null,
+          ) ?? undefined,
+        peopleType,
+      });
+      await fetchAttendance();
+      toastSuccess("Attendance record updated.");
+      setEditingRowId(null);
+      setRowDraft(null);
+    } catch (error) {
+      toastError(
+        error instanceof Error
+          ? error.message
+          : "Server error. Please check your connection.",
+      );
+    } finally {
+      setSavingRowId(null);
+    }
+  };
+
+  // ─── Manual "Add Attendance" / Edit modal ─────────────────────────────
+  // Separate from the inline row edit above: this is the form that lets
+  // an admin hand-enter a day's attendance for an employee CCTV never
+  // captured a check-in for at all (so there's no existing row for the
+  // inline edit to attach to), and it's also what the Edit button now
+  // opens for a row that DOES exist -- one shared form for both cases,
+  // per how the dashboard's Add/Edit UX works everywhere else (see
+  // StaffModal for the same add/edit-shares-a-form pattern).
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualModalMode, setManualModalMode] = useState<"add" | "edit">("add");
+  const [manualModalRecord, setManualModalRecord] =
+    useState<ManualAttendanceRecordSeed | null>(null);
+  const [manualModalStaffId, setManualModalStaffId] = useState<
+    string | number | null
+  >(null);
+  const [manualModalSaving, setManualModalSaving] = useState(false);
+  const [manualModalError, setManualModalError] = useState<string | null>(null);
+
+  const openAddAttendanceModal = (presetStaffId?: string | number | null) => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to add attendance records.",
+      );
+      return;
+    }
+    setManualModalMode("add");
+    setManualModalRecord(null);
+    setManualModalStaffId(presetStaffId ?? null);
+    setManualModalError(null);
+    setManualModalOpen(true);
+  };
+
+  const openEditAttendanceModal = (
+    member: AttendanceStaff,
+    todayRecord: AttendanceCellContext["record"] | undefined,
+  ) => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to edit attendance records.",
+      );
+      return;
+    }
+    if (!todayRecord?.id) {
+      openAddAttendanceModal(member.id);
+      return;
+    }
+    setManualModalMode("edit");
+    setManualModalRecord({
+      id: todayRecord.id,
+      staffId: member.id,
+      staffName: member.name,
+      date: todayRecord.date ?? filter.selectedDate,
+      inTime: todayRecord.inTime || null,
+      outTime: todayRecord.outTime || null,
+      checkInStatus: (todayRecord as any)?.checkInStatus ?? "on_time",
+      notes: todayRecord.notes ?? null,
+    });
+    setManualModalStaffId(null);
+    setManualModalError(null);
+    setManualModalOpen(true);
+  };
+
+  const closeAttendanceModal = () => {
+    if (manualModalSaving) return;
+    setManualModalOpen(false);
+    setManualModalRecord(null);
+    setManualModalError(null);
+  };
+
+  const manualModalStaffOptions: ManualAttendanceStaffOption[] = useMemo(
+    () =>
+      staff.map((member) => ({
+        id: member.id,
+        name: member.name,
+        code: getStaffCode(member) || null,
+        branchId: (member as any).branchId ?? null,
+      })),
+    [staff],
+  );
+
+  const getBranchTimezoneForModalStaff = (
+    staffId: string | number | undefined,
+  ): string => {
+    const member = staff.find(
+      (item) => String(item.id) === String(staffId ?? ""),
+    );
+    return getBranchTimezone(Number((member as any)?.branchId), branches);
+  };
+
+  const submitManualAttendance = async (
+    values: ManualAttendanceSubmitValues,
+  ) => {
+    setManualModalSaving(true);
+    setManualModalError(null);
+    try {
+      const commonParams = {
+        organizationId: organizationIdForApi ?? undefined,
+        branchId:
+          backendBranchIdForUi(
+            branches,
+            scopedBranchId ?? activeBranchId ?? null,
+          ) ?? undefined,
+        peopleType,
+      };
+      if (manualModalMode === "edit" && manualModalRecord) {
+        await updateManualAttendanceRecord(
+          manualModalRecord.id,
+          {
+            checkIn: values.checkIn,
+            checkOut: values.checkOut,
+            arrivalStatus: values.arrivalStatus,
+            notes: values.notes,
+          },
+          commonParams,
+        );
+        toastSuccess("Attendance record updated.");
+      } else {
+        await createManualAttendanceRecord(
+          {
+            staffId: values.staffId,
+            checkIn: values.checkIn,
+            checkOut: values.checkOut,
+            arrivalStatus: values.arrivalStatus,
+            notes: values.notes,
+          },
+          commonParams,
+        );
+        toastSuccess("Attendance record added.");
+      }
+      await fetchAttendance();
+      setManualModalOpen(false);
+      setManualModalRecord(null);
+    } catch (error) {
+      setManualModalError(
+        error instanceof Error
+          ? error.message
+          : "Server error. Please check your connection.",
+      );
+    } finally {
+      setManualModalSaving(false);
+    }
+  };
+
+  const scopedStaff = useMemo(() => {
+    return staff.filter((member) => {
+      const memberPeopleType = normalizeKey(
+        (member as any).peopleType ??
+          (member as any).people_type ??
+          (member as any).personType ??
+          (member as any).person_type,
+      );
+      if (
+        peopleType &&
+        memberPeopleType &&
+        memberPeopleType !== normalizeKey(peopleType)
+      ) {
+        return false;
+      }
+
+      const staffBranchId = Number((member as any).branchId);
+      if (!isGlobal && scopedBranchId) return staffBranchId === scopedBranchId;
+      if (isGlobal && activeBranchId) return staffBranchId === activeBranchId;
+      return true;
+    });
+  }, [activeBranchId, isGlobal, peopleType, scopedBranchId, staff]);
+
+  useEffect(() => {
+    if (!useRealApi || !organizationIdForApi || staff.length === 0) {
+      setCheckInGraceByStaffId(new Map());
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCheckInGrace = async () => {
+      const uiBranchIds = Array.from(
+        new Set(
+          staff
+            .map((member) => Number(member.branchId))
+            .filter((branchId) => Number.isFinite(branchId) && branchId > 0),
+        ),
+      );
+      const timingByBranch = new Map<
+        number,
+        { shifts: ShiftRecord[]; settings: CaptureSettings | null }
+      >();
+
+      await Promise.all(
+        uiBranchIds.map(async (uiBranchId) => {
+          const backendBranchId = backendBranchIdForUi(branches, uiBranchId);
+          if (!backendBranchId) return;
+
+          const [shifts, settings] = await Promise.all([
+            listBranchShifts(
+              backendBranchId,
+              organizationIdForApi,
+              peopleType,
+            ).catch(() => []),
+            getCaptureSettings(
+              backendBranchId,
+              peopleType,
+              organizationIdForApi,
+            ).catch(() => null),
+          ]);
+          timingByBranch.set(uiBranchId, { shifts, settings });
+        }),
+      );
+
+      if (cancelled) return;
+
+      const graceByStaffId = new Map<string, number>();
+      staff.forEach((member) => {
+        const branchTiming = timingByBranch.get(Number(member.branchId));
+        if (!branchTiming) return;
+
+        const assignedShift = branchTiming.shifts.find(
+          (shift) => String(shift.id) === String(member.shiftIdRef ?? ""),
+        );
+        const staffOverride = member.checkInGraceOverride;
+        let rawGrace: unknown;
+
+        if (assignedShift) {
+          rawGrace =
+            staffOverride !== null &&
+            staffOverride !== undefined &&
+            staffOverride !== ""
+              ? staffOverride
+              : (assignedShift.grace_minutes ?? 0);
+        } else if (branchTiming.settings?.mode === "simple") {
+          rawGrace = branchTiming.settings.check_in_grace_minutes ?? 0;
+        } else if (
+          branchTiming.settings?.mode === "shift" &&
+          branchTiming.settings.default_shift_id
+        ) {
+          const defaultShift = branchTiming.shifts.find(
+            (shift) => shift.id === branchTiming.settings?.default_shift_id,
+          );
+          if (defaultShift) {
+            rawGrace =
+              branchTiming.settings.default_check_in_grace_override ??
+              defaultShift.grace_minutes ??
+              0;
+          }
+        }
+
+        const graceMinutes = Number(rawGrace);
+        if (Number.isFinite(graceMinutes) && graceMinutes >= 0) {
+          graceByStaffId.set(String(member.id), graceMinutes);
+        }
+      });
+
+      setCheckInGraceByStaffId(graceByStaffId);
+    };
+
+    void loadCheckInGrace();
+    return () => {
+      cancelled = true;
+    };
+  }, [branches, organizationIdForApi, peopleType, staff, useRealApi]);
+
+  const groupCounts = useMemo(
+    () => countByName(scopedStaff, getAttendanceGroupValue),
+    [scopedStaff],
+  );
+
+  const subgroupCounts = useMemo(
+    () => countByName(scopedStaff, getAttendanceSubgroupValue),
+    [scopedStaff],
+  );
+
+  const attendanceRows = useMemo(() => {
+    if (!scopedStaff.length) return [];
+    const normalizedSearch = searchQuery.toLowerCase().trim();
+
+    const rows = scopedStaff
+      .filter((member) => {
+        if (!normalizedSearch) return true;
+        const haystack = [
+          member.name,
+          getStaffCode(member),
+          getAttendanceGroupValue(member),
+          getAttendanceSubgroupValue(member),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(normalizedSearch);
+      })
+      .filter(
+        (member) =>
+          !activeDept || getAttendanceGroupValue(member) === activeDept,
+      )
+      .filter(
+        (member) =>
+          !activeSubgroup ||
+          getAttendanceSubgroupValue(member) === activeSubgroup,
+      )
+      .map((staffMember) => {
+        const staffBranchId = Number((staffMember as any).branchId);
+        const branchTimezone = getBranchTimezone(staffBranchId, branches);
+        const dateRecords = filter.dates.map((date) => {
+          const realRecord = attendance.find((record) => {
+            const sameName =
+              record.user_name?.toLowerCase().trim() ===
+              staffMember.name?.toLowerCase().trim();
+            const sameId =
+              String((record as any).staffId ?? record.user_id ?? "") ===
+              String(staffMember.id);
+            const sameDate = record.date === date;
+            return (sameName || sameId) && sameDate;
+          });
+
+          if (realRecord) {
+            const normalizedStatus = String(realRecord.status).toUpperCase();
+            // _attendance_row_for_dashboard (support_db.py) only ever sends
+            // 'CHECKED_IN' | 'CHECKED_OUT' | 'HALF_DAY' as the top-level
+            // status — 'PRESENT'/'COMPLETED'/'LATE' were a prior contract
+            // that no longer exists on the backend. Comparing against the
+            // old enum meant isPresent was always false for every real row,
+            // which silently zeroed out both the Duration column (short-
+            // circuited below) and every present-count stat card, even
+            // though the person genuinely checked in. Half-day still counts
+            // as present for the day (matches status_label's own treatment
+            // of day_status='half_day' elsewhere in this codebase, not
+            // absent).
+            const isPresent = [
+              "CHECKED_IN",
+              "CHECKED_OUT",
+              "HALF_DAY",
+            ].includes(normalizedStatus);
+            const isLate =
+              normalizeKey(realRecord.arrival_status).includes("late") ||
+              normalizeKey(realRecord.check_in_status) === "late" ||
+              normalizedStatus === "LATE";
+            return {
+              id: realRecord.id,
+              date,
+              status: normalizedStatus,
+              arrivalStatus: formatAttendanceArrivalStatus(
+                {
+                  isPresent,
+                  isLate,
+                  inTime: realRecord.time ?? realRecord.check_in,
+                  notes: realRecord.notes,
+                },
+                branchTimezone,
+                checkInGraceByStaffId.get(String(staffMember.id)) ?? null,
+              ),
+              checkInStatus: realRecord.check_in_status ?? null,
+              inTime: realRecord.time ?? realRecord.check_in ?? "",
+              outTime: realRecord.outTime ?? realRecord.check_out ?? "",
+              workDuration:
+                calculateWorkDuration(
+                  realRecord.time ?? realRecord.check_in,
+                  realRecord.outTime ?? realRecord.check_out,
+                ) ??
+                realRecord.workDuration ??
+                "",
+              notes: realRecord.notes ?? null,
+              captureChannel: realRecord.capture_channel ?? null,
+              cameraId: realRecord.camera_id ?? null,
+              dayStatus: realRecord.day_status ?? null,
+              // Which column holds the decision depends on BOTH day_status
+              // and capture_channel -- only a mobile-sourced 'late' row is
+              // decided on check_in_payroll_decision; every other case
+              // (including a local_node 'late') uses
+              // check_out_payroll_decision. See resolvePayrollDecision's
+              // doc comment for the full rationale and why checking
+              // day_status alone would misroute local_node 'late' rows.
+              payrollDecision: resolvePayrollDecision({
+                dayStatus: realRecord.day_status,
+                captureChannel: realRecord.capture_channel,
+                checkInPayrollDecision: realRecord.check_in_payroll_decision,
+                checkOutPayrollDecision: realRecord.check_out_payroll_decision,
+              }),
+              isPresent,
+              isLate,
+            };
+          }
+
+          return {
+            id: undefined,
+            date,
+            status: "ABSENT",
+            arrivalStatus: "Absent",
+            checkInStatus: null,
+            inTime: "",
+            outTime: "",
+            workDuration: "",
+            notes: null,
+            captureChannel: null,
+            cameraId: null,
+            dayStatus: null,
+            payrollDecision: null,
+            isPresent: false,
+            isLate: false,
+          };
+        });
+
+        const presentDays = dateRecords.filter(
+          (record) => record.isPresent,
+        ).length;
+        const lateDays = dateRecords.filter((record) => record.isLate).length;
+        const absentDays = dateRecords.length - presentDays;
+
+        return {
+          staff: staffMember,
+          records: dateRecords,
+          summary: {
+            totalDays: dateRecords.length,
+            presentDays,
+            lateDays,
+            absentDays,
+            attendanceRate:
+              dateRecords.length > 0
+                ? Math.round((presentDays / dateRecords.length) * 100)
+                : 0,
+          },
+        };
+      });
+
+    if (activeStatus === "all") return rows;
+
+    return rows.filter(({ records, summary }) => {
+      const firstRecord = records[0];
+      const presentDays = summary.presentDays;
+      const lateDays = summary.lateDays;
+      const onTimeDays = Math.max(0, presentDays - lateDays);
+
+      if (activeStatus === "present") return presentDays > 0;
+      if (activeStatus === "absent") {
+        return filter.mode === "daily"
+          ? !firstRecord?.isPresent
+          : summary.absentDays > 0;
+      }
+      if (activeStatus === "late") return lateDays > 0;
+      if (activeStatus === "onTime") return onTimeDays > 0;
+      return true;
+    });
+  }, [
+    scopedStaff,
+    attendance,
+    branches,
+    checkInGraceByStaffId,
+    searchQuery,
+    activeDept,
+    activeSubgroup,
+    activeStatus,
+    filter.dates,
+    filter.mode,
+  ]);
+
+  const exportDateRange = useMemo(() => {
+    const firstDate = filter.dates[0] ?? filter.selectedDate;
+    const lastDate = filter.dates[filter.dates.length - 1] ?? firstDate;
+    return { from: firstDate, to: lastDate };
+  }, [filter.dates, filter.selectedDate]);
+
+  const attendanceExportRows = useMemo<AttendanceExportRow[]>(() => {
+    return attendanceRows.map(({ staff: member, records, summary }) => {
+      const branchId = Number((member as any).branchId);
+      const selectedDayRecord = records[0];
+      const onTimeDays = records.filter(
+        (record) => record.isPresent && !record.isLate,
+      ).length;
+      const leaveDays = countApprovedLeaveDays(
+        member,
+        records.map((record) => record.date),
+        leaveRecords,
+      );
+
+      const branchTimezone = getBranchTimezone(branchId, branches);
+      return {
+        code: getStaffCode(member),
+        name: member.name ?? "-",
+        designation: getAttendanceSubgroupValue(member),
+        branch: getBranchName(branchId),
+        department: getAttendanceGroupValue(member),
+        arrival: selectedDayRecord?.arrivalStatus || "—",
+        month: toMonthName(exportDateRange.from),
+        year: toYearNumber(exportDateRange.from),
+        totalDays: summary.totalDays,
+        present: summary.presentDays,
+        onTime: onTimeDays,
+        late: summary.lateDays,
+        leaves: leaveDays,
+        absents: summary.absentDays,
+        attendanceRate: `${summary.attendanceRate}%`,
+        firstCheckIn: selectedDayRecord?.inTime
+          ? formatTimeForDisplay(selectedDayRecord.inTime, branchTimezone)
+          : "",
+        lastCheckOut: selectedDayRecord?.outTime
+          ? formatTimeForDisplay(selectedDayRecord.outTime, branchTimezone)
+          : "",
+        totalWorkDuration: selectedDayRecord?.workDuration || "",
+      };
+    });
+  }, [attendanceRows, exportDateRange.from, getBranchName]);
+
+  const shouldHideTimeColumns = useMemo(
+    () => filter.mode !== "daily",
+    [filter.mode],
+  );
+
+  const attendanceExportColumns = useMemo<
+    ExportExcelColumn<AttendanceExportRow>[]
+  >(
+    () => [
+      ...attendanceTemplateColumns
+        .filter((column) => {
+          const isDetailTimingColumn =
+            column.key === "checkIn" ||
+            column.key === "checkOut" ||
+            column.key === "duration";
+          return (
+            column.exportable !== false &&
+            column.key !== "action" &&
+            column.key !== "branch" &&
+            column.key !== "department" &&
+            column.key !== "uuid" &&
+            !(shouldHideTimeColumns && isDetailTimingColumn)
+          );
+        })
+        .map((column) => ({
+          header: column.label,
+          accessor: (row: AttendanceExportRow) =>
+            attendanceExportColumnValue(
+              row as unknown as Record<string, unknown>,
+              column,
+            ),
+        })),
+      ...(shouldHideTimeColumns
+        ? [
+            { header: "Month", key: "month" as keyof AttendanceExportRow },
+            { header: "Year", key: "year" as keyof AttendanceExportRow },
+            {
+              header: "Total Days",
+              key: "totalDays" as keyof AttendanceExportRow,
+            },
+            { header: "Present", key: "present" as keyof AttendanceExportRow },
+            { header: "On-Time", key: "onTime" as keyof AttendanceExportRow },
+            { header: "Late", key: "late" as keyof AttendanceExportRow },
+            ...(leaveModuleEnabled
+              ? [
+                  {
+                    header: "Leaves",
+                    key: "leaves" as keyof AttendanceExportRow,
+                  },
+                ]
+              : []),
+            { header: "Absents", key: "absents" as keyof AttendanceExportRow },
+            {
+              header: "Attendance Rate",
+              key: "attendanceRate" as keyof AttendanceExportRow,
+            },
+          ]
+        : []),
+    ],
+    [attendanceTemplateColumns, shouldHideTimeColumns, leaveModuleEnabled],
+  );
+
+  const formatExportPeriod = (date?: string | null): string =>
+    formatDateForDisplay(date) ?? "";
+
+  const attendanceExportFilters = useMemo(
+    () => ({
+      Period:
+        exportDateRange.from === exportDateRange.to
+          ? formatExportPeriod(exportDateRange.from)
+          : `${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
+              exportDateRange.to,
+            )}`,
+    }),
+    [exportDateRange.from, exportDateRange.to],
+  );
+
+  const isRangeMode =
+    filter.mode === "weekly" ||
+    filter.mode === "monthly" ||
+    filter.mode === "custom";
+
+  const totalStaff = scopedStaff.length;
+  const rawPresentDays = attendanceRows.reduce(
+    (sum, row) => sum + row.summary.presentDays,
+    0,
+  );
+  const rawLateDays = attendanceRows.reduce(
+    (sum, row) => sum + row.summary.lateDays,
+    0,
+  );
+  const rawAbsentDays = attendanceRows.reduce(
+    (sum, row) => sum + row.summary.absentDays,
+    0,
+  );
+
+  // Pagination for attendance rows (client-side). Page size default is 25
+  // with options to switch to 50/100 etc. useStatefulPagination manages
+  // the page state and slices items efficiently.
+  const [pageSize, setPageSize] = useState<number>(25);
+  const attendancePager = useStatefulPagination({
+    items: attendanceRows,
+    itemsPerPage: pageSize,
+  });
+  const paginatedAttendanceRows = attendancePager.paginatedItems;
+  useEffect(() => {
+    setSelectedAbsentStaffIds(new Set());
+  }, [attendanceRows]);
+
+  const selectedAbsentStaff = attendanceRows
+    .filter(({ staff: member }) =>
+      selectedAbsentStaffIds.has(String(member.id)),
+    )
+    .map(({ staff: member }) => member);
+  const allAttendanceRowsSelected =
+    attendanceRows.length > 0 &&
+    attendanceRows.every(({ staff: member }) =>
+      selectedAbsentStaffIds.has(String(member.id)),
+    );
+
+  const markSelectedAsAbsent = async () => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
+      );
+      return;
+    }
+    if (selectedAbsentStaff.length === 0 || bulkMarkingAbsent) return;
+
+    const targetDate = filter.selectedDate;
+    const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: `Mark ${selectedAbsentStaff.length} selected people absent?`,
+      text: `Their attendance for ${formattedDate} will be recorded as absent. Existing check-ins for that date will be cleared.`,
+      showCancelButton: true,
+      confirmButtonText: "Mark Absent",
+      cancelButtonText: "Cancel",
+      focusCancel: true,
+    });
+    if (!confirm.isConfirmed) return;
+
+    setBulkMarkingAbsent(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedAbsentStaff.map((member) =>
+          markAttendanceAbsentForStaff(member, targetDate),
+        ),
+      );
+      const succeeded = results.filter(
+        (result) => result.status === "fulfilled",
+      ).length;
+      const failed = results
+        .map((result, index) =>
+          result.status === "rejected"
+            ? `${selectedAbsentStaff[index].name}: ${
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : "Server error"
+              }`
+            : null,
+        )
+        .filter((message): message is string => message !== null);
+
+      if (succeeded > 0) {
+        setSelectedAbsentStaffIds(new Set());
+        await fetchAttendance();
+      }
+      if (failed.length > 0) {
+        toastError(
+          `${succeeded} marked absent; ${failed.length} failed. ${failed.join("; ")}`,
+        );
+      } else {
+        toastSuccess(
+          `${succeeded} people marked absent on ${formattedDate}.`,
+        );
+      }
+    } finally {
+      setBulkMarkingAbsent(false);
+    }
+  };
+  const daysInRange = Math.max(filter.dates.length, 1);
+
+  const presentCount = isRangeMode
+    ? Math.round(rawPresentDays / daysInRange)
+    : rawPresentDays;
+  const lateCount = isRangeMode
+    ? Math.round(rawLateDays / daysInRange)
+    : rawLateDays;
+  const absentCount = isRangeMode
+    ? Math.round(rawAbsentDays / daysInRange)
+    : rawAbsentDays;
+  const presentPct =
+    totalStaff > 0 ? Math.round((presentCount / totalStaff) * 100) : 0;
+  const latePct =
+    totalStaff > 0 ? Math.round((lateCount / totalStaff) * 100) : 0;
+  const absentPct =
+    totalStaff > 0 ? Math.round((absentCount / totalStaff) * 100) : 0;
+
+  const kpiPresentLabel = isRangeMode ? "Avg Present / Day" : "Present Today";
+  const kpiAbsentLabel = isRangeMode ? "Avg Absent / Day" : "Absent Today";
+  const kpiLateLabel = isRangeMode ? "Avg Late / Day" : "Late Today";
+  const kpiPresentSub = isRangeMode
+    ? `${presentPct}% avg rate · ${daysInRange} days`
+    : `${presentPct}% of total`;
+  const kpiAbsentSub = isRangeMode
+    ? `${absentPct}% avg rate`
+    : `${absentPct}% of total`;
+  const kpiLateSub = isRangeMode
+    ? `${latePct}% avg rate · ${daysInRange} days`
+    : `${latePct}% of total`;
+
+  const branchFilterOptions = useMemo(() => {
+    const countForBranch = (branchId: number): number =>
+      staff.filter((member) => {
+        const memberPeopleType = normalizeKey(
+          (member as any).peopleType ??
+            (member as any).people_type ??
+            (member as any).personType ??
+            (member as any).person_type,
+        );
+        if (
+          peopleType &&
+          memberPeopleType &&
+          memberPeopleType !== normalizeKey(peopleType)
+        ) {
+          return false;
+        }
+        return Number((member as any).branchId) === Number(branchId);
+      }).length;
+
+    const totalCount = visibleBranches.reduce(
+      (sum, branch) => sum + countForBranch(Number(branch.id)),
+      0,
+    );
+
+    return [
+      {
+        value: "all",
+        label: "All Branches",
+        description: `${totalCount.toLocaleString()} ${entityLabel.toLowerCase()}`,
+      },
+      ...visibleBranches.map((branch) => {
+        const count = countForBranch(Number(branch.id));
+        const summary = data.branches.find(
+          (item) => Number(item.branchId) === Number(branch.id),
+        );
+        return {
+          value: String(branch.id),
+          label: branch.name,
+          description: `${count.toLocaleString()} ${entityLabel.toLowerCase()} · ${summary?.attendanceRate ?? 0}% rate`,
+        };
+      }),
+    ];
+  }, [data.branches, entityLabel, peopleType, staff, visibleBranches]);
+
+  const groupFilterOptions = useMemo(() => {
+    const countsByName = new Map(
+      groupCounts.map(({ name, count }) => [name, count]),
+    );
+    const configuredNames = peopleModel.isStudentScope
+      ? []
+      : configuredDepartments.map((department) => department.name.trim());
+    const groupNames = Array.from(
+      new Set([
+        ...configuredNames.filter(Boolean),
+        ...groupCounts.map(({ name }) => name),
+      ]),
+    ).sort((a, b) => a.localeCompare(b));
+
+    return [
+      {
+        value: "all",
+        label: peopleModel.groupFilterAllLabel,
+        description: `${totalStaff.toLocaleString()} ${entityLabel.toLowerCase()}`,
+      },
+      ...groupNames.map((name) => ({
+        value: name,
+        label: name,
+        description: `${(countsByName.get(name) ?? 0).toLocaleString()} ${entityLabel.toLowerCase()}`,
+      })),
+    ];
+  }, [
+    configuredDepartments,
+    entityLabel,
+    groupCounts,
+    peopleModel.groupFilterAllLabel,
+    peopleModel.isStudentScope,
+    totalStaff,
+  ]);
+
+  const subgroupFilterOptions = useMemo(
+    () => {
+      const countsByName = new Map(
+        subgroupCounts.map(({ name, count }) => [name, count]),
+      );
+      const subgroupNames = Array.from(
+        new Set([
+          ...(peopleModel.isStudentScope ? [] : configuredDesignations),
+          ...subgroupCounts.map((item) => item.name),
+        ]),
+      ).sort((a, b) => a.localeCompare(b));
+
+      return [
+        {
+          value: "all",
+          label: peopleModel.subgroupFilterAllLabel,
+          description: `${totalStaff.toLocaleString()} ${entityLabel.toLowerCase()}`,
+        },
+        ...subgroupNames.map((name) => ({
+          value: name,
+          label: name,
+          description: `${(countsByName.get(name) ?? 0).toLocaleString()} ${entityLabel.toLowerCase()}`,
+        })),
+      ];
+    },
+    [
+      configuredDesignations,
+      entityLabel,
+      peopleModel.isStudentScope,
+      peopleModel.subgroupFilterAllLabel,
+      subgroupCounts,
+      totalStaff,
+    ],
+  );
+
+  const statusFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "Statuses", description: "Show every record" },
+      {
+        value: "present",
+        label: "Present",
+        description: "Present in selected range",
+      },
+      {
+        value: "onTime",
+        label: "On-Time",
+        description: "Present without late mark",
+      },
+      { value: "late", label: "Late", description: "Late arrival records" },
+      {
+        value: "absent",
+        label: "Absent",
+        description: "Absent in selected range",
+      },
+    ],
+    [],
+  );
+
+  const resetAttendanceFilters = useCallback(() => {
+    setSearchQuery("");
+    if (isGlobal) setActiveBranchId(null);
+    setActiveDept(null);
+    setActiveSubgroup(null);
+    setActiveStatus("all");
+    filter.setMode("daily");
+  }, [filter, isGlobal]);
+
+  const attendanceFilterSections = useMemo<DynamicFilterSection[]>(
+    () => [
+      {
+        id: "branch",
+        type: "select",
+        label:
+          attendanceFilterByKey.get("branchId")?.label ??
+          peopleModel.branchLabel,
+        value: activeBranchId ? String(activeBranchId) : "all",
+        options: branchFilterOptions,
+        onChange: (value: string) => {
+          setActiveBranchId(value === "all" ? null : Number(value));
+          setActiveDept(null);
+          setActiveSubgroup(null);
+        },
+        hidden: !isGlobal,
+        minWidth: 190,
+      },
+      ...(attendanceFilterByKey.has("peopleType")
+        ? ([
+            {
+              id: "peopleType",
+              type: "custom",
+              render: (
+                <PeopleTypeSelector
+                  options={peopleTypeSelectorOptions}
+                  value={selectedPeopleType ?? peopleType}
+                  onChange={(nextValue) => {
+                    setSelectedPeopleType(nextValue);
+                    setActiveDept(null);
+                    setActiveSubgroup(null);
+                  }}
+                  ariaLabel={
+                    attendanceFilterByKey.get("peopleType")?.label ??
+                    "Attendance Scope"
+                  }
+                  minWidth={210}
+                />
+              ),
+            },
+          ] as DynamicFilterSection[])
+        : []),
+      {
+        id: "date",
+        type: "custom",
+        render: (
+          <DateFilterBar
+            filter={filter}
+            compact
+            maxDate={dateFilterMaxDate}
+          />
+        ),
+      },
+      {
+        id: "group",
+        type: "select",
+        label: attendanceGroupFilter?.label ?? peopleModel.groupLabel,
+        hidden: !attendanceGroupFilter,
+        value: activeDept ?? "all",
+        options: groupFilterOptions,
+        onChange: (value: string) => {
+          setActiveDept(value === "all" ? null : value);
+          setActiveSubgroup(null);
+        },
+        minWidth: 220,
+      },
+      {
+        id: "subgroup",
+        type: "select",
+        label: attendanceSubgroupFilter?.label ?? peopleModel.subgroupLabel,
+        hidden: !attendanceSubgroupFilter,
+        value: activeSubgroup ?? "all",
+        options: subgroupFilterOptions,
+        onChange: (value: string) =>
+          setActiveSubgroup(value === "all" ? null : value),
+        minWidth: 190,
+      },
+      {
+        id: "status",
+        type: "select",
+        label: attendanceFilterByKey.get("status")?.label ?? "Status",
+        value: activeStatus,
+        options: statusFilterOptions,
+        onChange: (value: string) =>
+          setActiveStatus(value as AttendanceStatusFilter),
+        minWidth: 170,
+      },
+      {
+        id: "search",
+        type: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder:
+          attendanceFilterByKey.get("search")?.placeholder ??
+          peopleModel.searchPlaceholder,
+        grow: true,
+        minWidth: 260,
+      },
+      {
+        id: "reset",
+        type: "reset",
+        label: "Clear",
+        onClick: resetAttendanceFilters,
+      },
+    ],
+    [
+      activeBranchId,
+      activeDept,
+      activeSubgroup,
+      activeStatus,
+      branchFilterOptions,
+      attendanceFilterByKey,
+      attendanceGroupFilter,
+      attendanceSubgroupFilter,
+      groupFilterOptions,
+      peopleModel.branchLabel,
+      peopleModel.groupLabel,
+      peopleTypeSelectorOptions,
+      peopleType,
+      selectedPeopleType,
+      peopleModel.searchPlaceholder,
+      peopleModel.subgroupLabel,
+      filter,
+      isGlobal,
+      resetAttendanceFilters,
+      searchQuery,
+      statusFilterOptions,
+      subgroupFilterOptions,
+    ],
+  );
+
+  return (
+    <div
+      style={{ fontFamily: "'DM Sans', 'Inter', sans-serif" }}
+      className="min-h-screen bg-[#f5f6fa] p-6"
+    >
+      <header
+        className="module-shell-header mb-6"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 22,
+              fontWeight: 800,
+              color: "#0F172A",
+              letterSpacing: "-0.5px",
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <ClipboardCheck
+              size={22}
+              color={T.teal600}
+            />
+            Attendance
+          </h1>
+          <p style={{ margin: "4px 0 0 0", fontSize: 12, fontWeight: 500, color: "#64748B", fontFamily: "'DM Sans', 'Inter', sans-serif" }}>
+            {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "short", day: "numeric" })}
+          </p>
+        </div>
+        <div
+          className="module-shell-actions"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <DateFilterBar filter={filter} compact maxDate={dateFilterMaxDate} />
+          <DynamicFilterToolbar
+            sections={attendanceFilterSections}
+            mobileOnly
+            className="staff-management-mobile-filter attendance-action-filter"
+          />
+          <div className="staff-management-export-action">
+            <ExportButton
+              data={attendanceExportRows}
+              filename={`Attendance_${filter.mode}_${exportDateRange.from}_${exportDateRange.to}`}
+              organization={{
+                name: cfg.orgName || undefined,
+                logoUrl: cfg.logo || undefined,
+              }}
+              excel={{
+                columns: attendanceExportColumns,
+              }}
+              pdf={{
+                title: "Attendance Report",
+                reportPeriod:
+                  exportDateRange.from === exportDateRange.to
+                    ? `Period: ${formatExportPeriod(exportDateRange.from)}`
+                    : `Period: ${formatExportPeriod(exportDateRange.from)} – ${formatExportPeriod(
+                        exportDateRange.to,
+                      )}`,
+                columns: attendanceExportColumns,
+              }}
+              label="Export"
+            />
+          </div>
+          <RefreshButton
+            size="md"
+            loading={loadingRefresh}
+            onClick={async () => {
+              if (loadingRefresh) return;
+              setLoadingRefresh(true);
+              try {
+                await fetchAttendance();
+              } finally {
+                setLoadingRefresh(false);
+              }
+            }}
+            ariaLabel="Refresh attendance"
+            className="staff-management-refresh-button staff-management-mobile-icon-button attendance-action-refresh"
+          />
+          <button
+            type="button"
+            onClick={() => openAddAttendanceModal()}
+            disabled={!useRealApi}
+            title={
+              !useRealApi
+                ? "Demo mode uses ModuleContext attendance"
+                : "Hand-enter attendance for an employee CCTV missed"
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed staff-management-mobile-icon-button attendance-action-add"
+            style={{ background: T.teal600 }}
+          >
+            <Plus className="w-4 h-4" strokeWidth={2.5} />
+            Add Attendance
+          </button>
+        </div>
+      </header>
+
+      {apiError && (
+        <div
+          className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          role="alert"
+        >
+          {apiError}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-4">
+        <KPICard
+          label={peopleModel.statsTotalLabel}
+          value={totalStaff}
+          sub="registered"
+          onClick={() => {
+            setOrgSelectedPeopleType(peopleModel.peopleType);
+            navigate(
+              branchIdParam
+                ? getBranchModulePath("employees", Number(branchIdParam))
+                : getModulePath("employees"),
+            );
+          }}
+        />
+        <KPICard
+          label={kpiPresentLabel}
+          value={presentCount}
+          sub={kpiPresentSub}
+          onClick={() => showAttendanceStatus("present")}
+        />
+        <KPICard
+          label={kpiAbsentLabel}
+          value={absentCount}
+          sub={kpiAbsentSub}
+          onClick={() => showAttendanceStatus("absent")}
+        />
+        <KPICard
+          label={kpiLateLabel}
+          value={lateCount}
+          sub={kpiLateSub}
+          onClick={() => showAttendanceStatus("late")}
+        />
+      </div>
+
+      <DynamicFilterToolbar
+        sections={attendanceFilterSections}
+        desktopOnly
+        bordered
+        style={{ marginBottom: 24 }}
+      />
+
+      {filter.mode === "daily" && (
+        <>
+          <div
+            ref={attendanceTableRef}
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3
+                className="text-sm font-semibold"
+                style={{ color: "#1a699f" }}
+              >
+                Daily Attendance
+              </h3>
+              <div className="flex items-center gap-2">
+                {selectedAbsentStaff.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    {selectedAbsentStaff.length} selected
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedAbsentStaffIds(
+                      allAttendanceRowsSelected
+                        ? new Set()
+                        : new Set(
+                            attendanceRows.map(({ staff: member }) =>
+                              String(member.id),
+                            ),
+                          ),
+                    )
+                  }
+                  disabled={attendanceRows.length === 0 || bulkMarkingAbsent}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {allAttendanceRowsSelected ? "Deselect all" : "Select all"}
+                </button>
+                {selectedAbsentStaff.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={markSelectedAsAbsent}
+                    disabled={bulkMarkingAbsent}
+                    className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {bulkMarkingAbsent
+                      ? "Marking absent..."
+                      : "Mark selected absent"}
+                  </button>
+                )}
+                <span className="text-xs text-gray-400">
+                  {filter.selectedDate}
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-[#d2dce4] bg-white shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-[#f8fafc] border-b border-[#e2e8f0]">
+                    <th className="w-12 px-4 py-3.5 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all attendance rows"
+                        checked={allAttendanceRowsSelected}
+                        ref={(element) => {
+                          if (element) {
+                            element.indeterminate =
+                              selectedAbsentStaff.length > 0 &&
+                              !allAttendanceRowsSelected;
+                          }
+                        }}
+                        onChange={(event) =>
+                          setSelectedAbsentStaffIds(
+                            event.target.checked
+                              ? new Set(
+                                  attendanceRows.map(({ staff: member }) =>
+                                    String(member.id),
+                                  ),
+                                )
+                              : new Set(),
+                          )
+                        }
+                        disabled={
+                          attendanceRows.length === 0 || bulkMarkingAbsent
+                        }
+                        className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                      />
+                    </th>
+                    {visibleDailyAttendanceColumns.map((column) => (
+                      <th
+                        key={column.key}
+                        className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                    {/* Fixed column, not driven by peopleModel.attendanceColumns
+                     * (see attendanceColumnText's "notes" case for why a
+                     * config-driven entry alone wouldn't be enough) — appended
+                     * here so it renders regardless of that external column
+                     * config until "notes" is added there directly. */}
+                    {/* Temporarily hidden:
+                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                      Notes
+                    </th>
+                    */}
+                    {/* Same "fixed column" reasoning as Notes above. Shows the
+                     * day-level outcome (Late / Short Leave / Half Day /
+                     * Overtime, falling back to On Time / Early / Unscheduled
+                     * for an unclassified day) — see deriveDayStatusBadge.
+                     * Applies identically to local-node and mobile-app rows,
+                     * since day_status is written by both pipelines. */}
+                    {/* Temporarily hidden:
+                    <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                      Day Status
+                    </th>
+                    */}
+                    {/* Fixed column — the admin payroll include/exclude call
+                     * on an already-classified day, distinct from Day Status
+                     * itself. See derivePayrollDecisionBadge; currently only
+                     * ever populated for local-node rows. */}
+                    {/* Temporarily hidden:
+                    {showPayrollDecisionColumn && (
+                      <th className="px-6 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                        Decision
+                      </th>
+                    )}
+                    */}
+                    {/* Same "fixed column" reasoning as Notes just above --
+                     * capture_channel isn't part of peopleModel.attendanceColumns
+                     * either. Shows which surface (local node / cloud / mobile
+                     * app) actually captured this row. */}
+                    <th className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                      Attendance Method
+                    </th>
+                    {/* Same "fixed column" reasoning as Notes above --
+                     * camera_id isn't part of peopleModel.attendanceColumns
+                     * either. Shows the specific camera that recognized
+                     * this person, resolved to a name via camerasById. */}
+                    <th className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                      Camera
+                    </th>
+                    {/* Action (Edit/Save/Mark Absent) is intentionally last —
+                     * see visibleDailyAttendanceColumns above. */}
+                    <th className="px-6 py-3.5 text-center text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f1f5f9]">
+                  {paginatedAttendanceRows.map(({ staff: member, records }) => {
+                    const todayRecord = records[0];
+                    const isPresent = todayRecord?.isPresent;
+                    const isLate = todayRecord?.isLate;
+                    const arrivalStatus = todayRecord?.arrivalStatus;
+
+                    // Built once per row and reused for every column below.
+                    // Previously each column call site built its own inline
+                    // context object, and it was easy (and happened) for one
+                    // of them to forget `branches` — which is exactly how the
+                    // checkOut column ended up silently rendering UTC instead
+                    // of the branch's local time. One shared object removes
+                    // that failure mode structurally instead of relying on
+                    // every future column author remembering to pass it.
+                    const cellContext: AttendanceCellContext = {
+                      member,
+                      record: todayRecord,
+                      getBranchName,
+                      branches,
+                    };
+
+                    // Shared with startRowEdit/saveRowEdit and the notes cell
+                    // below, in addition to the checkIn/checkOut cells — see
+                    // cellContext's comment for why this now lives at row
+                    // scope instead of being recomputed per-column.
+                    const branchTimezone = getBranchTimezone(
+                      Number((member as any).branchId),
+                      branches,
+                    );
+                    const isEditingRow = editingRowId === String(member.id);
+                    const isSavingRow = savingRowId === String(member.id);
+
+                    return (
+                      <tr
+                        key={String(member.id)}
+                        className="hover:bg-[#f8fafc] transition-colors"
+                      >
+                        <td className="px-4 py-3.5 text-center">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${member.name}`}
+                            checked={selectedAbsentStaffIds.has(
+                              String(member.id),
+                            )}
+                            onChange={(event) =>
+                              setSelectedAbsentStaffIds((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) {
+                                  next.add(String(member.id));
+                                } else {
+                                  next.delete(String(member.id));
+                                }
+                                return next;
+                              })
+                            }
+                            disabled={bulkMarkingAbsent}
+                            className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                          />
+                        </td>
+                        {visibleDailyAttendanceColumns.map((column) => {
+                          if (column.key === "name") {
+                            const initial = member.name.charAt(0).toUpperCase();
+                            return (
+                              <td key={column.key} className="px-6 py-3.5">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+                                    {initial}
+                                  </div>
+                                  <p className="text-[13px] font-bold text-[#102a3f] whitespace-nowrap">
+                                    {member.name}
+                                  </p>
+                                </div>
+                              </td>
+                            );
+                          }
+
+                          if (column.key === "arrival") {
+                            if (isEditingRow && rowDraft) {
+                              return (
+                                <td
+                                  key={column.key}
+                                  className="px-6 py-4 text-center"
+                                >
+                                  <ModernSelect
+                                    value={rowDraft.arrivalStatus}
+                                    options={ARRIVAL_STATUS_OPTIONS}
+                                    onChange={(value) => {
+                                      setRowDraft((draft) =>
+                                        draft
+                                          ? { ...draft, arrivalStatus: value }
+                                          : draft,
+                                      );
+                                    }}
+                                    ariaLabel="Arrival Status"
+                                    width="100%"
+                                    minWidth={0}
+                                    disabled={isSavingRow}
+                                  />
+                                </td>
+                              );
+                            }
+
+                            return (
+                              <td
+                                key={column.key}
+                                className="px-6 py-3.5 text-center"
+                              >
+                                {arrivalStatus ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border ${
+                                      isLate
+                                        ? "bg-amber-50 text-amber-700 border-amber-200"
+                                        : isPresent
+                                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                          : "bg-rose-50 text-rose-700 border-rose-200"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        isLate
+                                          ? "bg-amber-500"
+                                          : isPresent
+                                            ? "bg-emerald-500"
+                                            : "bg-rose-500"
+                                      }`}
+                                    />
+                                    {arrivalStatus}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-300 text-sm">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          }
+
+                          if (
+                            column.key === "checkIn" ||
+                            column.key === "checkOut"
+                          ) {
+                            const field = column.key as "checkIn" | "checkOut";
+
+                            if (isEditingRow && rowDraft) {
+                              return (
+                                <td key={column.key} className="px-6 py-4">
+                                  <input
+                                    type="datetime-local"
+                                    disabled={isSavingRow}
+                                    title={`Time is in the branch's timezone (${branchTimezone})`}
+                                    value={rowDraft[field]}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      setRowDraft((draft) =>
+                                        draft
+                                          ? { ...draft, [field]: value }
+                                          : draft,
+                                      );
+                                    }}
+                                    className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                                  />
+                                </td>
+                              );
+                            }
+
+                            return (
+                              <td key={column.key} className="px-6 py-4">
+                                {field === "checkIn" && isPresent ? (
+                                  <div className="flex items-center gap-2 text-sm font-semibold text-teal-700">
+                                    <Clock className="w-3.5 h-3.5" />
+                                    {attendanceColumnText(column, cellContext)}
+                                  </div>
+                                ) : (
+                                  <span className="text-sm text-gray-600">
+                                    {attendanceColumnText(column, cellContext)}
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td
+                              key={column.key}
+                              className="px-6 py-4 text-sm text-gray-600"
+                            >
+                              {attendanceColumnText(column, cellContext)}
+                            </td>
+                          );
+                        })}
+                        {/* Temporarily hidden Notes cell:
+                        {(() => {
+                          if (isEditingRow && rowDraft) {
+                            return (
+                              <td className="px-6 py-4 max-w-xs">
+                                <input
+                                  type="text"
+                                  disabled={isSavingRow}
+                                  value={rowDraft.notes}
+                                  placeholder="Add a note..."
+                                  maxLength={300}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    setRowDraft((draft) =>
+                                      draft
+                                        ? { ...draft, notes: value }
+                                        : draft,
+                                    );
+                                  }}
+                                  className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-teal-200"
+                                />
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td className="px-6 py-4 text-sm text-gray-600 max-w-xs whitespace-normal wrap-break-word">
+                              {todayRecord?.notes || (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </td>
+                          );
+                        })()}
+                        */}
+                        {/* Temporarily hidden Day Status cell:
+                        <td className="px-6 py-4 text-center">
+                          {(() => {
+                            const badge = deriveDayStatusBadge({
+                              isPresent,
+                              dayStatus: todayRecord?.dayStatus,
+                              checkInStatus: todayRecord?.checkInStatus,
+                            });
+                            return badge ? (
+                              <span
+                                className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
+                              >
+                                {badge.label}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300 text-sm">—</span>
+                            );
+                          })()}
+                        </td>
+                        */}
+                        {/* Temporarily hidden Decision cell:
+                        {showPayrollDecisionColumn && (
+                          <td className="px-6 py-4 text-center">
+                            {(() => {
+                              const badge = isPayrollApplicable(member)
+                                ? derivePayrollDecisionBadge({
+                                    dayStatus: todayRecord?.dayStatus,
+                                    payrollDecision:
+                                      todayRecord?.payrollDecision,
+                                  })
+                                : null;
+                              return badge ? (
+                                <span
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
+                                >
+                                  {badge.label}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              );
+                            })()}
+                          </td>
+                        )}
+                          */}
+                        <td className="px-6 py-4 text-center">
+                          {(() => {
+                            const badge = captureChannelBadge(
+                              todayRecord?.captureChannel,
+                            );
+                            return badge ? (
+                              <span
+                                className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold border ${badge.className}`}
+                              >
+                                {badge.label}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300 text-sm">—</span>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          {(() => {
+                            const cameraLabel = resolveCameraLabel(
+                              todayRecord?.cameraId,
+                              camerasById,
+                            );
+                            return cameraLabel ? (
+                              <span className="text-sm text-gray-700">
+                                {cameraLabel}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300 text-sm">—</span>
+                            );
+                          })()}
+                        </td>
+                        {/* Action (Edit/Save/Mark Absent) is the fixed last
+                         * column — see visibleDailyAttendanceColumns above. */}
+                        <td className="px-6 py-4 text-center">
+                          <div className="inline-flex items-center gap-2">
+                            {isEditingRow ? (
+                              <>
+                                <button
+                                  onClick={() =>
+                                    saveRowEdit(
+                                      todayRecord?.id,
+                                      String(member.id),
+                                      branchTimezone,
+                                    )
+                                  }
+                                  disabled={isSavingRow}
+                                  title="Save"
+                                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-teal-100"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={cancelRowEdit}
+                                  disabled={isSavingRow}
+                                  title="Cancel"
+                                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                {todayRecord?.id ? (
+                                  <button
+                                    onClick={() =>
+                                      openEditAttendanceModal(
+                                        member,
+                                        todayRecord,
+                                      )
+                                    }
+                                    disabled={!useRealApi}
+                                    title={
+                                      !useRealApi
+                                        ? "Demo mode uses ModuleContext attendance"
+                                        : "Edit"
+                                    }
+                                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-sky-100"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      openAddAttendanceModal(member.id)
+                                    }
+                                    disabled={!useRealApi}
+                                    title={
+                                      !useRealApi
+                                        ? "Demo mode uses ModuleContext attendance"
+                                        : "Add attendance for this day — use this when CCTV missed the check-in"
+                                    }
+                                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-teal-100"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() =>
+                                    markAsAbsent(
+                                      member,
+                                      todayRecord?.date ?? filter.selectedDate,
+                                    )
+                                  }
+                                  disabled={
+                                    !useRealApi ||
+                                    bulkMarkingAbsent ||
+                                    loadingAction === member.name
+                                  }
+                                  title={
+                                    !useRealApi
+                                      ? "Demo mode uses ModuleContext attendance"
+                                      : loadingAction === member.name
+                                        ? "Processing..."
+                                        : useRealApi
+                                          ? "Mark Absent"
+                                          : "Demo Data"
+                                  }
+                                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-rose-100"
+                                >
+                                  <UserX className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {attendanceRows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={visibleDailyAttendanceColumns.length + 4}
+                        className="px-6 py-16 text-center"
+                      >
+                        <div className="flex flex-col items-center gap-3 text-gray-400">
+                          <Users className="w-10 h-10 opacity-30" />
+                          <p className="text-sm font-medium">
+                            {loadingAttendanceData || loadingRefresh ? (
+                              <span
+                                className="inline-flex items-center gap-2"
+                                role="status"
+                                aria-live="polite"
+                              >
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading attendance data…
+                              </span>
+                            ) : (
+                              "No data found for the selected filters."
+                            )}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div style={{ padding: "12px 20px" }} className="mt-3">
+            <FastPagination
+              page={attendancePager.page}
+              pageSize={pageSize}
+              total={attendancePager.totalItems}
+              onPageChange={attendancePager.goToPage}
+              onPageSizeChange={(s) => setPageSize(s)}
+              disabled={loadingRefresh}
+            />
+          </div>
+        </>
+      )}
+
+      {(filter.mode === "weekly" ||
+        filter.mode === "monthly" ||
+        filter.mode === "custom") && (
+        <>
+          <div
+            ref={attendanceTableRef}
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3
+                className="text-sm font-semibold"
+                style={{ color: "#1a699f" }}
+              >
+                {filter.mode === "monthly"
+                  ? "Monthly Attendance"
+                  : filter.mode === "weekly"
+                    ? "Weekly Attendance"
+                    : "Custom Date Attendance"}
+              </h3>
+              <span className="text-xs text-gray-400">
+                {filter.label} &nbsp;·&nbsp; {filter.dates.length} day
+                {filter.dates.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-[#d2dce4] bg-white shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-[#f8fafc] border-b border-[#e2e8f0]">
+                    {[
+                      ...rangeAttendanceColumns.map((column) => ({
+                        key: column.key,
+                        label: column.label,
+                        align: "left",
+                      })),
+                      { key: "month", label: "Month", align: "left" },
+                      { key: "year", label: "Year", align: "left" },
+                      { key: "totalDays", label: "Total Days", align: "center" },
+                      { key: "present", label: "Present", align: "center" },
+                      { key: "late", label: "Late", align: "center" },
+                      ...(leaveModuleEnabled
+                        ? [{ key: "leaves", label: "Leaves", align: "center" }]
+                        : []),
+                      { key: "absents", label: "Absents", align: "center" },
+                      { key: "attendanceRate", label: "Attendance Rate", align: "center" },
+                    ].map((column) => (
+                      <th
+                        key={column.key}
+                        className={`px-5 py-3.5 text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none ${
+                          column.align === "center" ? "text-center" : "text-left"
+                        }`}
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f1f5f9]">
+                  {paginatedAttendanceRows.map(
+                    ({ staff: member, records, summary }) => {
+                      const leaveDays = countApprovedLeaveDays(
+                        member,
+                        records.map((record) => record.date),
+                        leaveRecords,
+                      );
+                      const initial = member.name.charAt(0).toUpperCase();
+
+                      return (
+                        <tr
+                          key={String(member.id)}
+                          className="hover:bg-[#f8fafc] transition-colors"
+                        >
+                          {rangeAttendanceColumns.map((column) => {
+                            const rawVal = attendanceColumnText(column, {
+                              member,
+                              getBranchName,
+                              branches,
+                            });
+
+                            if (column.key === "id" || column.key === "code" || column.key === "employeeId") {
+                              return (
+                                <td key={column.key} className="px-5 py-3.5">
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-[#f1f5f9] border border-[#e2e8f0] text-[#334155] font-mono text-[11px] font-bold">
+                                    {rawVal || "—"}
+                                  </span>
+                                </td>
+                              );
+                            }
+
+                            if (column.key === "name") {
+                              return (
+                                <td key={column.key} className="px-5 py-3.5">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+                                      {initial}
+                                    </div>
+                                    <p className="text-[13px] font-bold text-[#102a3f] whitespace-nowrap">
+                                      {member.name}
+                                    </p>
+                                  </div>
+                                </td>
+                              );
+                            }
+
+                            return (
+                              <td
+                                key={column.key}
+                                className="px-5 py-3.5 text-[13px] text-gray-700"
+                              >
+                                {rawVal}
+                              </td>
+                            );
+                          })}
+                          <td className="px-5 py-3.5 text-[13px] font-medium text-gray-700">
+                            {toMonthName(exportDateRange.from)}
+                          </td>
+                          <td className="px-5 py-3.5 text-[13px] font-medium text-gray-500 font-mono">
+                            {toYearNumber(exportDateRange.from)}
+                          </td>
+                          <td className="px-5 py-3.5 text-center text-[13px] font-bold text-gray-800">
+                            {summary.totalDays}
+                          </td>
+                          <td className="px-5 py-3.5 text-center">
+                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              {summary.presentDays}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 text-center">
+                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              {summary.lateDays}
+                            </span>
+                          </td>
+                          {leaveModuleEnabled && (
+                            <td className="px-5 py-3.5 text-center">
+                              <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                                {leaveDays}
+                              </span>
+                            </td>
+                          )}
+                          <td className="px-5 py-3.5 text-center">
+                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              {summary.absentDays}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 text-center">
+                            <span
+                              className={`inline-flex items-center justify-center min-w-[48px] px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                                summary.attendanceRate >= 75
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : summary.attendanceRate >= 50
+                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                    : "bg-rose-50 text-rose-700 border-rose-200"
+                              }`}
+                            >
+                              {summary.attendanceRate}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    },
+                  )}
+                  {attendanceRows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={
+                          rangeAttendanceColumns.length +
+                          7 +
+                          (leaveModuleEnabled ? 1 : 0)
+                        }
+                        className="px-6 py-16 text-center"
+                      >
+                        <div className="flex flex-col items-center gap-3 text-gray-400">
+                          <Users className="w-10 h-10 opacity-30" />
+                          <p className="text-sm font-medium">
+                            {loadingAttendanceData || loadingRefresh ? (
+                              <span
+                                className="inline-flex items-center gap-2"
+                                role="status"
+                                aria-live="polite"
+                              >
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading attendance data…
+                              </span>
+                            ) : (
+                              "No data found for the selected filters."
+                            )}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div style={{ padding: "12px 20px" }} className="mt-3">
+            <FastPagination
+              page={attendancePager.page}
+              pageSize={pageSize}
+              total={attendancePager.totalItems}
+              onPageChange={attendancePager.goToPage}
+              onPageSizeChange={(s) => setPageSize(s)}
+              disabled={loadingRefresh}
+            />
+          </div>
+        </>
+      )}
+
+      <ManualAttendanceModal
+        open={manualModalOpen}
+        mode={manualModalMode}
+        staffOptions={manualModalStaffOptions}
+        initialStaffId={manualModalStaffId}
+        initialDate={filter.selectedDate}
+        record={manualModalRecord}
+        getBranchTimezoneForStaff={getBranchTimezoneForModalStaff}
+        saving={manualModalSaving}
+        errorMessage={manualModalError}
+        onClose={closeAttendanceModal}
+        onSubmit={submitManualAttendance}
+      />
+    </div>
+  );
+}

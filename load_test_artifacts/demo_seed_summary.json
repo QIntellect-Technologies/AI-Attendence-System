@@ -1,0 +1,133 @@
+{
+  "org_id": "e6ae8b7a-48a1-418e-b405-99cd2b5e2a4a",
+  "org_name": "AI Attendance Load Test e6ae8b7a",
+  "window": {
+    "start": "2026-09-01",
+    "end": "2026-10-31",
+    "days": 61
+  },
+  "headcount": {
+    "Main Campus": 60,
+    "City Campus": 60
+  },
+  "public_holidays": {},
+  "row_counts": {
+    "staff": 120,
+    "attendance": 4655,
+    "leave_requests": 0,
+    "leave_balances": 0,
+    "overtime_requests": 0,
+    "payroll_payments": 240,
+    "salary_configs": 120,
+    "notifications": 2
+  },
+  "leave": {
+    "approved_days_by_type": {},
+    "pending_requests": 0,
+    "rejected_requests": 0
+  },
+  "overtime": {
+    "requests": 0,
+    "approved_hours": 0,
+    "pending_hours": 0
+  },
+  "payroll_periods": [
+    {
+      "period": "2026-09-01 .. 2026-09-30",
+      "status": "paid",
+      "payslips": 120,
+      "present_days": 2218,
+      "absent_days": 422,
+      "late_days": 204,
+      "gross": 10015500.0,
+      "overtime_pay": 0.0,
+      "deductions": 2058678.11,
+      "income_tax": 116041.67,
+      "taxed_payslips": 110,
+      "net": 7956821.89,
+      "late_count": 204
+    },
+    {
+      "period": "2026-10-01 .. 2026-10-31",
+      "status": "paid",
+      "payslips": 120,
+      "present_days": 2227,
+      "absent_days": 413,
+      "late_days": 224,
+      "gross": 10015500.0,
+      "overtime_pay": 0.0,
+      "deductions": 2015837.23,
+      "income_tax": 116041.67,
+      "taxed_payslips": 110,
+      "net": 7999662.77,
+      "late_count": 224
+    }
+  ],
+  "load_test": {
+    "staff_count": 120,
+    "income_tax_enabled": true,
+    "income_tax_slabs": [
+      {
+        "lowerLimit": 0,
+        "upperLimit": 600000,
+        "baseTax": 0,
+        "rate": 0
+      },
+      {
+        "lowerLimit": 600000,
+        "upperLimit": 1200000,
+        "baseTax": 0,
+        "rate": 1
+      },
+      {
+        "lowerLimit": 1200000,
+        "upperLimit": 2200000,
+        "baseTax": 6000,
+        "rate": 11
+      },
+      {
+        "lowerLimit": 2200000,
+        "upperLimit": 3200000,
+        "baseTax": 116000,
+        "rate": 20
+      },
+      {
+        "lowerLimit": 3200000,
+        "upperLimit": 4100000,
+        "baseTax": 316000,
+        "rate": 25
+      },
+      {
+        "lowerLimit": 4100000,
+        "upperLimit": 5600000,
+        "baseTax": 541000,
+        "rate": 29
+      },
+      {
+        "lowerLimit": 5600000,
+        "upperLimit": 7000000,
+        "baseTax": 976000,
+        "rate": 32
+      },
+      {
+        "lowerLimit": 7000000,
+        "upperLimit": null,
+        "baseTax": 1424000,
+        "rate": 35
+      }
+    ],
+    "working_weekdays": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "leave_generated": false,
+    "overtime_generated": false,
+    "current_day": {
+      "date": "2026-11-03",
+      "attendance_rows": 108
+    }
+  }
+}

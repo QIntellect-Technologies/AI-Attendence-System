@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Laptop Camera Detection - QIntellect</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+    <style>
+      :root {
+        --bg-primary: #f4f6fb;
+        --bg-secondary: #f8f9fc;
+        --bg-card: #ffffff;
+        --border-color: #e5e9f2;
+        --text-primary: #1a1d2e;
+        --text-secondary: #6b7280;
+        --accent-primary: #3aafa9;
+        --accent-secondary: #2e9e98;
+        --accent-success: #22c55e;
+        --accent-danger: #ef4444;
+        --accent-warning: #f59e0b;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Outfit", sans-serif;
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container-main {
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      .header {
+        margin-bottom: 40px;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 2.5em;
+        font-weight: 800;
+        margin-bottom: 10px;
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .header p {
+        color: var(--text-secondary);
+        font-size: 1.1em;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 30px;
+        margin-bottom: 30px;
+      }
+
+      @media (max-width: 1024px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card-wrapper {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+      }
+
+      .card-title {
+        font-size: 1.3em;
+        font-weight: 700;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .video-container {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #000;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 20px;
+        border: 2px solid var(--border-color);
+      }
+
+      #cameraVideo {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        background: #000;
+      }
+
+      .video-badge {
+        position: absolute;
+        top: 15px;
+        left: 15px;
+        background: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(5px);
+        color: var(--accent-success);
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 0.85em;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        z-index: 10;
+      }
+
+      .badge-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background-color: var(--accent-success);
+        border-radius: 50%;
+        animation: pulse 1.5s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .controls {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .btn-custom {
+        flex: 1;
+        padding: 12px 20px;
+        border: none;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: 1em;
+      }
+
+      .btn-start {
+        background: linear-gradient(
+          135deg,
+          var(--accent-success) 0%,
+          #059669 100%
+        );
+        color: white;
+      }
+
+      .btn-start:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(16, 185, 129, 0.3);
+      }
+
+      .btn-stop {
+        background: linear-gradient(
+          135deg,
+          var(--accent-danger) 0%,
+          #dc2626 100%
+        );
+        color: white;
+      }
+
+      .btn-stop:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(239, 68, 68, 0.3);
+      }
+
+      .message {
+        padding: 12px 16px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+        display: none;
+        animation: slideIn 0.3s ease;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .message.show {
+        display: block;
+      }
+
+      .message.success {
+        background-color: rgba(16, 185, 129, 0.1);
+        border: 1px solid var(--accent-success);
+        color: var(--accent-success);
+      }
+
+      .message.error {
+        background-color: rgba(239, 68, 68, 0.1);
+        border: 1px solid var(--accent-danger);
+        color: var(--accent-danger);
+      }
+
+      .message.info {
+        background-color: rgba(99, 102, 241, 0.1);
+        border: 1px solid var(--accent-primary);
+        color: var(--accent-primary);
+      }
+
+      .detections-list {
+        max-height: 400px;
+        overflow-y: auto;
+      }
+
+      .detection-item {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        transition: all 0.3s ease;
+      }
+
+      .detection-item:hover {
+        border-color: var(--accent-primary);
+        background-color: rgba(99, 102, 241, 0.05);
+      }
+
+      .detection-avatar {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5em;
+        font-weight: 700;
+        color: white;
+        flex-shrink: 0;
+      }
+
+      .detection-avatar.matched {
+        background: linear-gradient(
+          135deg,
+          var(--accent-success) 0%,
+          #059669 100%
+        );
+      }
+
+      .detection-avatar.unknown {
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+      }
+
+      .detection-info {
+        flex: 1;
+      }
+
+      .detection-name {
+        font-weight: 700;
+        font-size: 1.05em;
+        margin-bottom: 4px;
+      }
+
+      .detection-confidence {
+        font-size: 0.9em;
+        color: var(--text-secondary);
+      }
+
+      .detection-badge {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8em;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .badge-match {
+        background-color: rgba(16, 185, 129, 0.2);
+        color: var(--accent-success);
+        border: 1px solid var(--accent-success);
+      }
+
+      .badge-unknown {
+        background-color: rgba(99, 102, 241, 0.2);
+        color: var(--accent-primary);
+        border: 1px solid var(--accent-primary);
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 15px;
+      }
+
+      .stat-box {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+        transition: all 0.3s ease;
+      }
+
+      .stat-box:hover {
+        border-color: var(--accent-primary);
+        transform: translateY(-2px);
+      }
+
+      .stat-value {
+        font-size: 2em;
+        font-weight: 800;
+        color: var(--accent-primary);
+        margin-bottom: 8px;
+      }
+
+      .stat-label {
+        font-size: 0.9em;
+        color: var(--text-secondary);
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-secondary);
+      }
+
+      .empty-state i {
+        font-size: 3em;
+        margin-bottom: 15px;
+        opacity: 0.5;
+      }
+
+      canvas {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container-main">
+      <!-- Header -->
+      <div class="header">
+        <h1>📷 Laptop Camera Detection</h1>
+        <p>Real-time face detection and recognition using your laptop camera</p>
+      </div>
+
+      <!-- Main Layout -->
+      <div class="layout">
+        <!-- Left: Camera Feed -->
+        <div class="card-wrapper">
+          <div class="card-title">
+            <i class="fa-solid fa-video"></i>
+            Live Camera Feed
+          </div>
+
+          <div class="video-container">
+            <video id="cameraVideo" autoplay playsinline muted></video>
+            <div class="video-badge" id="videoBadge" style="display: none">
+              <span class="badge-dot"></span>
+              <span>LIVE</span>
+            </div>
+          </div>
+
+          <div class="controls">
+            <button
+              class="btn-custom btn-start"
+              id="btnStart"
+              onclick="startCamera()"
+            >
+              <i class="fa-solid fa-play"></i>
+              Start Camera
+            </button>
+            <button
+              class="btn-custom btn-stop"
+              id="btnStop"
+              onclick="stopCamera()"
+              style="display: none"
+            >
+              <i class="fa-solid fa-stop"></i>
+              Stop Camera
+            </button>
+          </div>
+
+          <div id="message" class="message"></div>
+        </div>
+
+        <!-- Right: Detection Results & Stats -->
+        <div class="card-wrapper">
+          <div class="card-title">
+            <i class="fa-solid fa-chart-bar"></i>
+            Detection Results
+          </div>
+
+          <div id="detectionResults" class="detections-list">
+            <div class="empty-state">
+              <i class="fa-solid fa-camera-slash"></i>
+              <p>Camera is off. Start camera to begin detection.</p>
+            </div>
+          </div>
+
+          <hr style="margin: 20px 0; border-color: var(--border-color)" />
+
+          <div class="card-title" style="margin-bottom: 15px">
+            <i class="fa-solid fa-bar-chart"></i>
+            Detection Statistics
+          </div>
+
+          <div id="statsGrid" class="stats-grid">
+            <div class="stat-box">
+              <div class="stat-value">0</div>
+              <div class="stat-label">Total Detections</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden Canvas for Frame Processing -->
+    <canvas id="cameraCanvas" width="1280" height="720"></canvas>
+
+    <script>
+      const API_BASE = window.location.origin + "/api";
+      let cameraStream = null;
+      let processingInterval = null;
+      let detectionStats = {};
+      let enrolledUsers = [];
+      let totalDetections = 0;
+
+      // Load enrolled users on page load
+      window.addEventListener("load", () => {
+        loadEnrolledUsers();
+      });
+
+      async function loadEnrolledUsers() {
+        try {
+          const resp = await fetch(`${API_BASE}/users`);
+          const data = await resp.json();
+          enrolledUsers = data.users || [];
+
+          // Initialize stats
+          detectionStats = {};
+          enrolledUsers.forEach((user) => {
+            detectionStats[user.name] = 0;
+          });
+          detectionStats["unknown"] = 0;
+
+          updateStatsDisplay();
+          console.log("Loaded enrolled users:", enrolledUsers);
+        } catch (e) {
+          console.error("Failed to load users:", e);
+        }
+      }
+
+      async function startCamera() {
+        try {
+          showMessage("⏳ Requesting camera access...", "info");
+
+          const constraints = {
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "user",
+            },
+            audio: false,
+          };
+
+          cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+          const video = document.getElementById("cameraVideo");
+          video.srcObject = cameraStream;
+
+          // Ensure video plays
+          video.onloadedmetadata = () => {
+            console.log("Video metadata loaded");
+            video
+              .play()
+              .then(() => {
+                console.log("Video playing");
+                showMessage("✓ Camera started successfully", "success");
+                document.getElementById("btnStart").style.display = "none";
+                document.getElementById("btnStop").style.display = "flex";
+                document.getElementById("videoBadge").style.display = "flex";
+                startProcessing();
+              })
+              .catch((e) => {
+                console.error("Play error:", e);
+                showMessage(`✗ Error playing video: ${e.message}`, "error");
+              });
+          };
+
+          // Fallback: try to play immediately
+          video.play().catch((e) => {
+            console.log("Immediate play failed, waiting for metadata");
+          });
+        } catch (error) {
+          showMessage(`✗ Camera access denied: ${error.message}`, "error");
+          console.error("Camera error:", error);
+        }
+      }
+
+      function stopCamera() {
+        try {
+          if (cameraStream) {
+            cameraStream.getTracks().forEach((track) => track.stop());
+            cameraStream = null;
+          }
+
+          if (processingInterval) {
+            clearInterval(processingInterval);
+            processingInterval = null;
+          }
+
+          const video = document.getElementById("cameraVideo");
+          video.srcObject = null;
+
+          document.getElementById("btnStart").style.display = "flex";
+          document.getElementById("btnStop").style.display = "none";
+          document.getElementById("videoBadge").style.display = "none";
+
+          showMessage("✓ Camera stopped", "success");
+
+          // Reset detection results
+          document.getElementById("detectionResults").innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa-solid fa-camera-slash"></i>
+                        <p>Camera is off. Start camera to begin detection.</p>
+                    </div>
+                `;
+        } catch (error) {
+          showMessage(`✗ Error stopping camera: ${error.message}`, "error");
+        }
+      }
+
+      function startProcessing() {
+        // Process frames every 500ms (2 FPS)
+        processingInterval = setInterval(async () => {
+          try {
+            const video = document.getElementById("cameraVideo");
+            const canvas = document.getElementById("cameraCanvas");
+
+            if (
+              !video ||
+              !canvas ||
+              video.readyState !== video.HAVE_ENOUGH_DATA
+            ) {
+              return;
+            }
+
+            // Draw video frame to canvas
+            const ctx = canvas.getContext("2d");
+            canvas.width = 1280;
+            canvas.height = 720;
+            ctx.drawImage(video, 0, 0, 1280, 720);
+
+            // Convert canvas to blob
+            canvas.toBlob(
+              async (blob) => {
+                try {
+                  const formData = new FormData();
+                  formData.append("image", blob, "frame.jpg");
+
+                  const resp = await fetch(`${API_BASE}/recognize/frame`, {
+                    method: "POST",
+                    body: formData,
+                  });
+
+                  const data = await resp.json();
+
+                  if (
+                    resp.ok &&
+                    data.detections &&
+                    data.detections.length > 0
+                  ) {
+                    updateDetections(data.detections);
+                  }
+                } catch (e) {
+                  console.error("Frame processing error:", e);
+                }
+              },
+              "image/jpeg",
+              0.95,
+            );
+          } catch (error) {
+            console.error("Processing error:", error);
+          }
+        }, 500);
+      }
+
+      function updateDetections(detections) {
+        let html = "";
+
+        detections.forEach((detection) => {
+          const name = detection.matched_user || "Unknown";
+          const similarity = (detection.similarity * 100).toFixed(1);
+          const isMatch = detection.is_match;
+
+          // Update stats
+          if (isMatch && name !== "Unknown") {
+            if (detectionStats[name] !== undefined) {
+              detectionStats[name]++;
+            }
+          } else {
+            detectionStats["unknown"]++;
+          }
+          totalDetections++;
+
+          const avatarClass = isMatch ? "matched" : "unknown";
+          const badgeClass = isMatch ? "badge-match" : "badge-unknown";
+          const badgeText = isMatch ? "MATCH" : "UNKNOWN";
+          const icon = isMatch ? "✓" : "?";
+
+          html += `
+                    <div class="detection-item">
+                        <div class="detection-avatar ${avatarClass}">${icon}</div>
+                        <div class="detection-info">
+                            <div class="detection-name">${name}</div>
+                            <div class="detection-confidence">Confidence: ${similarity}%</div>
+                        </div>
+                        <div class="detection-badge ${badgeClass}">${badgeText}</div>
+                    </div>
+                `;
+        });
+
+        document.getElementById("detectionResults").innerHTML = html;
+        updateStatsDisplay();
+      }
+
+      function updateStatsDisplay() {
+        let html = `
+                <div class="stat-box">
+                    <div class="stat-value">${totalDetections}</div>
+                    <div class="stat-label">Total Detections</div>
+                </div>
+            `;
+
+        // Add stats for each enrolled user
+        enrolledUsers.forEach((user) => {
+          const count = detectionStats[user.name] || 0;
+          html += `
+                    <div class="stat-box">
+                        <div class="stat-value">${count}</div>
+                        <div class="stat-label">${user.name}</div>
+                    </div>
+                `;
+        });
+
+        // Add unknown stats
+        const unknownCount = detectionStats["unknown"] || 0;
+        html += `
+                <div class="stat-box">
+                    <div class="stat-value">${unknownCount}</div>
+                    <div class="stat-label">Unknown</div>
+                </div>
+            `;
+
+        document.getElementById("statsGrid").innerHTML = html;
+      }
+
+      function showMessage(text, type) {
+        const msgEl = document.getElementById("message");
+        msgEl.textContent = text;
+        msgEl.className = `message show ${type}`;
+
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+          msgEl.classList.remove("show");
+        }, 5000);
+      }
+    </script>
+  </body>
+</html>

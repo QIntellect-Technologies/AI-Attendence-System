@@ -1,0 +1,82 @@
+# Virtual environments
+venv/
+venv-node/
+ENV/
+env/
+.venv
+
+*.pyc
+logs/
+lib/
+org_databases/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node / frontend
+node_modules/
+.vite/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project-specific
+*.db
+uploads/
+models/
+local_node/_bundled_models/
+*.mp4
+*.avi
+*.mov
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Temporary
+.env
+.env.local
+.env.docker
+temp/
+tmp/
+
+# Local history / editor snapshots
+.history/
+
+# Stray archives
+*.zip
+
+# Crash dumps
+nuitka-crash-report.xml
+
+# Employee photos - do not commit
+static/staff_profile_photos/
+
+
+.pytest_cache/
+qintellect-e2e/node_modules/
+qintellect-e2e/playwright-report/
+qintellect-e2e/test-results/

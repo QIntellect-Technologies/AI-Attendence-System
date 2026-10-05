@@ -1,0 +1,22 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://attendancepro.qintellecttechnologies.com",
+      "localStorage": [
+        {
+          "name": "dashboardAuthToken",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0YTBlYWQwYS0wNDgwLTRiNGMtODJkOC1hOGE1ZTVlZGQxMDQiLCJhY2NvdW50X3R5cGUiOiJjbGllbnRfdXNlciIsIm9yZ19pZCI6ImI1MGMwMGE2LWM0ZTgtNGUxZi1hZjY4LWQzY2JkNzY3ZTI5NyIsImJyYW5jaF9pZCI6bnVsbCwiYWNjZXNzX21vZHVsZXMiOlsiZW1wbG95ZWVzIiwiYXR0ZW5kYW5jZSIsImxlYXZlIiwicGF5cm9sbCIsIm92ZXJ0aW1lIiwicmVwb3J0cyIsImNjdHYiLCJsaXZlYXR0ZW5kYW5jZSJdLCJkYXNoYm9hcmRfc2NvcGUiOiJicmFuY2giLCJtYW5hZ2VyX2lkIjpudWxsLCJpc19hZG1pbiI6dHJ1ZSwic2lkIjoiYTViYTViNjctMmYxZC00MTFjLWE5MDQtZjJiZTA3MjJmNDMwIiwiaWF0IjoxNzg4MTc3MTU4LCJleHAiOjE3ODgyMjAzNTh9.jq1c-8uP9Aqt5fpwt1UrLtEu8X-QMFMYl9exAsagVo8"
+        },
+        {
+          "name": "currentUser",
+          "value": "{\"accessModules\":[\"employees\",\"attendance\",\"leave\",\"payroll\",\"overtime\",\"reports\",\"cctv\",\"liveattendance\"],\"access_modules\":[\"employees\",\"attendance\",\"leave\",\"payroll\",\"overtime\",\"reports\",\"cctv\",\"liveattendance\"],\"allowedBranchIds\":[\"4ee54799-8b51-49de-bba7-3780630d09ff\",\"0e5defde-b55e-49f8-8f18-fcd58bed18ce\"],\"allowedModules\":[\"employees\",\"attendance\",\"leave\",\"payroll\",\"overtime\",\"reports\",\"cctv\",\"liveattendance\"],\"avatarUrl\":\"/client_profile_photos/client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"branchId\":null,\"branch_id\":null,\"client_role\":\"admin\",\"dashboardReady\":true,\"dashboard_ready\":true,\"email\":\"fatimafertilizers@gmail.com\",\"full_name\":\"Fatima Fertilizers Admin\",\"id\":\"4a0ead0a-0480-4b4c-82d8-a8a5e5edd104\",\"moduleAccess\":[\"employees\",\"attendance\",\"leave\",\"payroll\",\"overtime\",\"reports\",\"cctv\",\"liveattendance\"],\"mustChangePassword\":false,\"must_change_password\":false,\"name\":\"Fatima Fertilizers Admin\",\"onboardingCompletedAt\":\"2026-08-27T07:12:48.171697+00:00\",\"onboarding_completed_at\":\"2026-08-27T07:12:48.171697+00:00\",\"organizationId\":\"b50c00a6-c4e8-4e1f-af68-d3cbd767e297\",\"organizationName\":\"Fatima Fertilizers\",\"organizationStatus\":\"active\",\"organization_id\":\"b50c00a6-c4e8-4e1f-af68-d3cbd767e297\",\"organization_name\":\"Fatima Fertilizers\",\"organization_status\":\"active\",\"passwordChangedAt\":\"2026-08-15T09:14:42.526854+00:00\",\"password_changed_at\":\"2026-08-15T09:14:42.526854+00:00\",\"phone\":\"\",\"photo_url\":\"/client_profile_photos/client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"portalAccess\":{\"desktopDashboard\":true,\"flutterStaffPortal\":false},\"profileImageName\":\"client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"profileImageUrl\":\"/client_profile_photos/client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"profile_image_name\":\"client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"profile_image_url\":\"/client_profile_photos/client_4a0ead0a_0480_4b4c_82d8_a8a5e5edd104.jpg\",\"requiresOnboarding\":false,\"requires_onboarding\":false,\"role\":\"admin\",\"source\":\"client_users\",\"branchName\":\"\",\"branch_name\":\"\",\"dashboardScope\":\"global\"}"
+        },
+        {
+          "name": "isAuthenticated",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}

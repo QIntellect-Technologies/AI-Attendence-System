@@ -1,0 +1,89 @@
+{
+  "org_id": "c2a986b2-4b3f-4865-a9c3-1c1a50a9c1f4",
+  "org_name": "Greenwood Academy (Demo)",
+  "window": {
+    "start": "2026-05-01",
+    "end": "2026-08-11",
+    "days": 103
+  },
+  "headcount": {
+    "Main Campus": 30,
+    "City Campus": 25
+  },
+  "public_holidays": {
+    "2026-05-01": "Labour Day"
+  },
+  "row_counts": {
+    "staff": 55,
+    "attendance": 3592,
+    "leave_requests": 225,
+    "leave_balances": 306,
+    "overtime_requests": 153,
+    "payroll_payments": 220,
+    "salary_configs": 55,
+    "notifications": 11
+  },
+  "leave": {
+    "approved_days_by_type": {
+      "Annual": 67.0,
+      "Casual": 50.0,
+      "Compensatory": 6.0,
+      "Emergency": 15.5,
+      "Leave Without Pay": 86.5,
+      "Sick": 45.0
+    },
+    "pending_requests": 28,
+    "rejected_requests": 23
+  },
+  "overtime": {
+    "requests": 153,
+    "approved_hours": 236.18,
+    "pending_hours": 17.77
+  },
+  "payroll_periods": [
+    {
+      "period": "2026-05-01 .. 2026-05-31",
+      "status": "paid",
+      "payslips": 55,
+      "gross": 4783947.72,
+      "overtime_pay": 53947.72,
+      "deductions": 538825.83,
+      "net": 4245121.89,
+      "unpaid_leave_days": 24.0,
+      "late_count": 109
+    },
+    {
+      "period": "2026-06-01 .. 2026-06-30",
+      "status": "paid",
+      "payslips": 55,
+      "gross": 4758546.89,
+      "overtime_pay": 28546.89,
+      "deductions": 508263.44,
+      "net": 4250283.45,
+      "unpaid_leave_days": 25.0,
+      "late_count": 95
+    },
+    {
+      "period": "2026-07-01 .. 2026-07-31",
+      "status": "paid",
+      "payslips": 55,
+      "gross": 4780333.36,
+      "overtime_pay": 50333.36,
+      "deductions": 522067.68,
+      "net": 4258265.68,
+      "unpaid_leave_days": 34.5,
+      "late_count": 109
+    },
+    {
+      "period": "2026-08-01 .. 2026-08-31",
+      "status": "in_progress",
+      "payslips": 55,
+      "gross": 4733328.13,
+      "overtime_pay": 3328.13,
+      "deductions": 342370.47,
+      "net": 4390957.66,
+      "unpaid_leave_days": 3.0,
+      "late_count": 39
+    }
+  ]
+}

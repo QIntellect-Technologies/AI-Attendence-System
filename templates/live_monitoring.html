@@ -1,0 +1,1405 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QIntellect – Live Stream - QIntellect AI Attendance System</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <style>
+      :root {
+        --teal: #3aafa9;
+        --teal2: #2e9e98;
+        --teal3: #1d8a84;
+        --green: #22c55e;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --bg: #f0f4f8;
+        --card: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --muted: #64748b;
+        --light: #f8fafc;
+      }
+
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Outfit", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── TOPBAR ── */
+      .topbar {
+        height: 58px;
+        background: #fff;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 20px;
+        flex-shrink: 0;
+        position: relative;
+        z-index: 20;
+      }
+      .topbar::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: linear-gradient(
+          90deg,
+          var(--teal) 0%,
+          #2ee8c0 50%,
+          var(--teal) 100%
+        );
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 1.1em;
+        font-weight: 800;
+        color: var(--text);
+      }
+      .brand-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: linear-gradient(135deg, var(--teal), var(--teal3));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 1em;
+      }
+      .brand em {
+        font-style: normal;
+        color: var(--teal);
+      }
+      .topbar-center {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.83em;
+        font-weight: 700;
+        color: var(--muted);
+      }
+      .topbar-center i {
+        color: var(--teal);
+      }
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .pulse-chip {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        color: #15803d;
+        padding: 5px 13px;
+        border-radius: 20px;
+        font-size: 0.75em;
+        font-weight: 700;
+      }
+      .pulse-dot {
+        width: 7px;
+        height: 7px;
+        background: var(--green);
+        border-radius: 50%;
+        animation: ring 1.5s infinite;
+      }
+      @keyframes ring {
+        0% {
+          box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+        }
+        70% {
+          box-shadow: 0 0 0 7px rgba(34, 197, 94, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+        }
+      }
+      .clock {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.8em;
+        font-weight: 500;
+        color: var(--muted);
+        background: var(--light);
+        border: 1px solid var(--border);
+        padding: 5px 12px;
+        border-radius: 8px;
+        min-width: 78px;
+        text-align: center;
+      }
+
+      /* ── LAYOUT ── */
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 520px;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* ── LEFT VIDEO ZONE ── */
+      .video-zone {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        padding: 16px 14px 16px 16px;
+        gap: 12px;
+        overflow: hidden;
+      }
+      .cam-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .cam-tab {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 16px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 0.81em;
+        font-weight: 600;
+        border: 1.5px solid var(--border);
+        background: var(--card);
+        color: var(--muted);
+        transition: all 0.2s;
+      }
+      .cam-tab:hover {
+        border-color: var(--teal);
+        color: var(--teal);
+      }
+      .cam-tab.active {
+        background: #f0fdfc;
+        border-color: var(--teal);
+        color: var(--teal);
+        box-shadow: 0 2px 12px rgba(58, 175, 169, 0.15);
+      }
+      .cam-tab-dot {
+        width: 6px;
+        height: 6px;
+        background: var(--green);
+        border-radius: 50%;
+        animation: ring 1.5s infinite;
+      }
+      #statusMsg {
+        margin-left: auto;
+        font-size: 0.76em;
+        color: var(--muted);
+      }
+      .screen-wrap {
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #080d14;
+        border: 1px solid #1e293b;
+        box-shadow:
+          0 0 0 1px rgba(58, 175, 169, 0.12),
+          0 20px 60px rgba(0, 0, 0, 0.25);
+      }
+      #videoImg {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: none;
+      }
+      .screen-placeholder {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: radial-gradient(
+          ellipse at center,
+          #0d1520 0%,
+          #080d14 100%
+        );
+      }
+      .screen-placeholder .big-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        border: 1.5px solid #1e293b;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.6em;
+        color: #334155;
+      }
+      .screen-placeholder p {
+        font-size: 0.82em;
+        color: #475569;
+      }
+      .scan-line {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(58, 175, 169, 0.7),
+          transparent
+        );
+        animation: scan 3s linear infinite;
+        display: none;
+        z-index: 5;
+      }
+      @keyframes scan {
+        0% {
+          top: 0;
+        }
+        100% {
+          top: 100%;
+        }
+      }
+      .corner {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        z-index: 4;
+      }
+      .corner-tl {
+        top: 12px;
+        left: 12px;
+        border-top: 2px solid var(--teal);
+        border-left: 2px solid var(--teal);
+        border-radius: 3px 0 0 0;
+      }
+      .corner-tr {
+        top: 12px;
+        right: 12px;
+        border-top: 2px solid var(--teal);
+        border-right: 2px solid var(--teal);
+        border-radius: 0 3px 0 0;
+      }
+      .corner-bl {
+        bottom: 44px;
+        left: 12px;
+        border-bottom: 2px solid var(--teal);
+        border-left: 2px solid var(--teal);
+        border-radius: 0 0 0 3px;
+      }
+      .corner-br {
+        bottom: 44px;
+        right: 12px;
+        border-bottom: 2px solid var(--teal);
+        border-right: 2px solid var(--teal);
+        border-radius: 0 0 3px 0;
+      }
+      .live-overlay {
+        position: absolute;
+        top: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 6px;
+        background: rgba(8, 13, 20, 0.75);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(34, 197, 94, 0.35);
+        color: #22c55e;
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 0.72em;
+        font-weight: 800;
+        letter-spacing: 1.5px;
+        z-index: 6;
+      }
+      .screen-footer {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(
+          to top,
+          rgba(4, 6, 10, 0.97) 0%,
+          transparent 100%
+        );
+        padding: 18px 16px 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        z-index: 4;
+      }
+      .feed-label {
+        font-size: 0.68em;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+      }
+      .feed-name {
+        font-size: 0.88em;
+        color: #e2e8f0;
+        font-weight: 600;
+        margin-top: 2px;
+      }
+      .screen-counters {
+        display: flex;
+        gap: 6px;
+      }
+      .scnt {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 6px 11px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+      }
+      .scnt-val {
+        font-size: 0.9em;
+        font-weight: 700;
+        color: var(--teal);
+      }
+      .scnt-lbl {
+        font-size: 0.6em;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 1px;
+      }
+      .controls-row {
+        display: flex;
+        gap: 10px;
+      }
+      .btn-go {
+        flex: 1;
+        padding: 11px 20px;
+        background: linear-gradient(135deg, var(--teal) 0%, var(--teal3) 100%);
+        color: #fff;
+        border: none;
+        border-radius: 11px;
+        font-weight: 700;
+        font-size: 0.88em;
+        font-family: "Outfit", sans-serif;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        box-shadow: 0 4px 18px rgba(58, 175, 169, 0.3);
+        transition: all 0.2s;
+      }
+      .btn-go:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 24px rgba(58, 175, 169, 0.4);
+      }
+      .btn-dc {
+        padding: 11px 18px;
+        background: #fff5f5;
+        border: 1.5px solid #fecaca;
+        color: #dc2626;
+        border-radius: 11px;
+        font-weight: 700;
+        font-size: 0.88em;
+        font-family: "Outfit", sans-serif;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        transition: all 0.2s;
+      }
+      .btn-dc:hover {
+        background: #fee2e2;
+        border-color: var(--red);
+      }
+
+      /* ── Right panel shell ── */
+      .right {
+        border-left: 1px solid var(--border);
+        background: #f8fafc;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ── Panel Header ── */
+      .panel-header {
+        padding: 0;
+        background: #fff;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+
+      /* Top gradient strip */
+      .panel-header-strip {
+        height: 3px;
+        background: linear-gradient(
+          90deg,
+          var(--teal) 0%,
+          #2ee8c0 60%,
+          var(--teal) 100%
+        );
+      }
+
+      /* Title row */
+      .panel-header-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px 0;
+      }
+      .panel-title {
+        font-size: 0.82em;
+        font-weight: 800;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        letter-spacing: 0.2px;
+      }
+      .panel-title i {
+        color: var(--teal);
+      }
+
+      .panel-live-badge {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        color: #15803d;
+        font-size: 0.62em;
+        font-weight: 800;
+        padding: 3px 9px;
+        border-radius: 20px;
+        letter-spacing: 0.8px;
+      }
+
+      /* ── Summary stats strip ── */
+      .panel-stats-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0;
+        padding: 12px 14px 14px;
+      }
+      .pstat {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        position: relative;
+      }
+      .pstat + .pstat::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 20%;
+        height: 60%;
+        width: 1px;
+        background: var(--border);
+      }
+      .pstat-val {
+        font-size: 1.45em;
+        font-weight: 800;
+        line-height: 1;
+        color: var(--text);
+      }
+      .pstat-val.teal {
+        color: var(--teal);
+      }
+      .pstat-val.green {
+        color: var(--green);
+      }
+      .pstat-val.amber {
+        color: var(--amber);
+      }
+      .pstat-val.red {
+        color: var(--red);
+      }
+      .pstat-lbl {
+        font-size: 0.57em;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      /* ── Feed toolbar ── */
+      .feed-toolbar {
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        background: #fff;
+      }
+      .feed-toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .feed-toolbar-title {
+        font-size: 0.75em;
+        font-weight: 800;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+      .count-pill {
+        background: var(--teal);
+        color: #fff;
+        font-size: 0.62em;
+        font-weight: 800;
+        padding: 2px 8px;
+        border-radius: 20px;
+        min-width: 22px;
+        text-align: center;
+      }
+      .view-toggle {
+        display: flex;
+        gap: 3px;
+        background: #f1f5f9;
+        padding: 3px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+      }
+      .view-btn {
+        width: 26px;
+        height: 26px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75em;
+        transition: all 0.18s;
+      }
+      .view-btn.active {
+        background: #fff;
+        color: var(--teal);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+      }
+      .refresh-btn2 {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: #fff;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75em;
+        transition: all 0.3s;
+      }
+      .refresh-btn2:hover {
+        background: var(--teal);
+        color: #fff;
+        border-color: var(--teal);
+        transform: rotate(180deg);
+      }
+
+      /* ── Feed list ── */
+      .feed-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 7px;
+      }
+
+      /* ── Employee Card ── */
+      .emp-card {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        transition:
+          box-shadow 0.2s,
+          border-color 0.2s,
+          transform 0.2s;
+        animation: empIn 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+        cursor: default;
+      }
+      .emp-card:hover {
+        border-color: var(--teal);
+        box-shadow: 0 4px 18px rgba(58, 175, 169, 0.12);
+        transform: translateY(-1px);
+      }
+      @keyframes empIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      /* Left accent bar */
+      .emp-card-inner {
+        display: flex;
+        align-items: stretch;
+      }
+      .emp-accent {
+        width: 4px;
+        background: var(--teal);
+        flex-shrink: 0;
+        border-radius: 0;
+      }
+      .emp-accent.amber {
+        background: var(--amber);
+      }
+      .emp-accent.red {
+        background: var(--red);
+      }
+      .emp-accent.gray {
+        background: #94a3b8;
+      }
+
+      .emp-body {
+        flex: 1;
+        padding: 10px 12px 10px 11px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      /* Top row: photo + info + conf */
+      .emp-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      /* Photo */
+      .emp-photo-wrap {
+        position: relative;
+        flex-shrink: 0;
+      }
+      .emp-photo {
+        width: 46px;
+        height: 46px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, var(--teal), var(--teal3));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 1em;
+        color: #fff;
+        overflow: hidden;
+        border: 2px solid #e2e8f0;
+      }
+      .emp-photo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .emp-photo.unknown-bg {
+        background: linear-gradient(135deg, #94a3b8, #64748b);
+      }
+      .emp-status-dot {
+        position: absolute;
+        bottom: -2px;
+        right: -2px;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        border: 2px solid #fff;
+        background: var(--green);
+      }
+      .emp-status-dot.unknown {
+        background: #94a3b8;
+      }
+
+      /* Info */
+      .emp-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .emp-name {
+        font-size: 0.86em;
+        font-weight: 800;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .emp-dept {
+        font-size: 0.67em;
+        color: var(--teal);
+        font-weight: 700;
+        margin-top: 1px;
+      }
+      .emp-id {
+        font-size: 0.62em;
+        color: var(--muted);
+        font-family: "JetBrains Mono", monospace;
+        margin-top: 2px;
+      }
+
+      /* Confidence badge (replaces ring — cleaner) */
+      .emp-conf {
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+      }
+      .emp-conf-val {
+        font-size: 1.1em;
+        font-weight: 800;
+        font-family: "JetBrains Mono", monospace;
+        line-height: 1;
+      }
+      .emp-conf-val.green {
+        color: #16a34a;
+      }
+      .emp-conf-val.amber {
+        color: #b45309;
+      }
+      .emp-conf-val.red {
+        color: #dc2626;
+      }
+      .emp-conf-lbl {
+        font-size: 0.54em;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+
+      /* Thin divider */
+      .emp-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 0;
+      }
+
+      /* Bottom row: time + source + stamp */
+      .emp-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .emp-meta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .emp-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.63em;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .emp-meta-item i {
+        color: var(--teal);
+        font-size: 0.9em;
+      }
+
+      /* Attendance stamp */
+      .att-stamp {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.62em;
+        font-weight: 800;
+        padding: 3px 9px;
+        border-radius: 6px;
+      }
+      .att-stamp.present {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        color: #15803d;
+      }
+      .att-stamp.unknown {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #dc2626;
+      }
+
+      /* ── Grid view ── */
+      .feed-list.grid-view {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 7px;
+        align-content: start;
+      }
+      .feed-list.grid-view .emp-card {
+        border-radius: 11px;
+      }
+      .feed-list.grid-view .emp-accent {
+        width: 3px;
+      }
+      .feed-list.grid-view .emp-body {
+        padding: 9px 10px 9px 10px;
+        gap: 7px;
+      }
+      .feed-list.grid-view .emp-top {
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .feed-list.grid-view .emp-photo {
+        width: 40px;
+        height: 40px;
+        border-radius: 9px;
+      }
+      .feed-list.grid-view .emp-info {
+        text-align: center;
+        width: 100%;
+      }
+      .feed-list.grid-view .emp-conf {
+        flex-direction: row;
+        gap: 3px;
+      }
+      .feed-list.grid-view .emp-conf-lbl {
+        display: none;
+      }
+      .feed-list.grid-view .emp-bottom {
+        flex-direction: column;
+        gap: 5px;
+        align-items: center;
+      }
+      .feed-list.grid-view .emp-meta {
+        justify-content: center;
+      }
+
+      /* ── Empty state ── */
+      .empty-feed {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 30px 20px;
+        text-align: center;
+      }
+      .empty-feed-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: #f0fdfc;
+        border: 1.5px solid rgba(58, 175, 169, 0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4em;
+        color: var(--teal);
+        opacity: 0.6;
+      }
+      .empty-feed p {
+        font-size: 0.78em;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .empty-feed strong {
+        display: block;
+        color: var(--text);
+        font-weight: 700;
+        font-size: 1.05em;
+        margin-bottom: 3px;
+      }
+
+      /* ── Footer ── */
+      .right-footer {
+        padding: 8px 16px;
+        border-top: 1px solid var(--border);
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #fff;
+      }
+      .right-footer-label {
+        font-size: 0.64em;
+        color: var(--muted);
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .right-footer-label i {
+        color: var(--teal);
+      }
+      .right-footer-val {
+        font-size: 0.68em;
+        font-weight: 700;
+        color: var(--teal);
+        font-family: "JetBrains Mono", monospace;
+      }
+
+      /* ── Scrollbar ── */
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--teal);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-icon"><i class="fa-solid fa-circle-nodes"></i></div>
+        <span>Q<em>Intellect</em> AI</span>
+      </div>
+      <div class="topbar-center">
+        <i class="fa-solid fa-shield-halved"></i>
+        Live Stream - QIntellect AI Attendance System
+      </div>
+      <div class="topbar-right">
+        <div class="pulse-chip">
+          <span class="pulse-dot"></span>SYSTEM ONLINE
+        </div>
+        <div class="clock" id="clock">--:--:--</div>
+      </div>
+    </div>
+
+    <!-- LAYOUT -->
+    <div class="layout">
+      <!-- LEFT: VIDEO ZONE -->
+      <div class="video-zone">
+        <div class="cam-row">
+          <div
+            class="cam-tab active"
+            onclick="switchCam(this, 'nvr_office', 'NVR Office — Channel 3')"
+          >
+            <span class="cam-tab-dot"></span>
+            <i class="fa-solid fa-building-user"></i>NVR Office (Ch 3)
+          </div>
+          <div
+            class="cam-tab"
+            onclick="switchCam(this, 'dvr_office', 'DVR Corridor — Channel 2')"
+          >
+            <span class="cam-tab-dot"></span>
+            <i class="fa-solid fa-door-open"></i>DVR Corridor (Ch 2)
+          </div>
+          <span id="statusMsg">Ready — select a camera feed above</span>
+        </div>
+
+        <div class="screen-wrap">
+          <div class="corner corner-tl"></div>
+          <div class="corner corner-tr"></div>
+          <div class="corner corner-bl"></div>
+          <div class="corner corner-br"></div>
+          <div class="scan-line" id="scanLine"></div>
+          <div class="live-overlay" id="liveBadge">
+            <span class="pulse-dot"></span>LIVE AI FEED
+          </div>
+          <div class="screen-placeholder" id="placeholder">
+            <div class="big-icon"><i class="fa-solid fa-video-slash"></i></div>
+            <p>Select a camera and press Start Monitoring</p>
+          </div>
+          <img id="videoImg" src="" onerror="onStreamError()" />
+          <div class="screen-footer">
+            <div>
+              <div class="feed-label">Current Feed</div>
+              <div class="feed-name" id="feedName">NVR Office — Channel 3</div>
+            </div>
+            <div class="screen-counters">
+              <div class="scnt">
+                <div class="scnt-val" id="cFaces">0</div>
+                <div class="scnt-lbl">Faces</div>
+              </div>
+              <div class="scnt">
+                <div class="scnt-val" id="cMatch">0</div>
+                <div class="scnt-lbl">Matched</div>
+              </div>
+              <div class="scnt">
+                <div class="scnt-val" id="cToday">0</div>
+                <div class="scnt-lbl">Today</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls-row">
+          <button class="btn-go" onclick="startFeed()">
+            <i class="fa-solid fa-play"></i>Start Monitoring
+          </button>
+          <button class="btn-dc" onclick="stopFeed()">
+            <i class="fa-solid fa-circle-stop"></i>Disconnect
+          </button>
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL — PREMIUM -->
+      <div class="right">
+        <!-- Header -->
+        <div class="panel-header">
+          <div class="panel-header-strip"></div>
+
+          <div class="panel-header-title-row">
+            <div class="panel-title">
+              <i class="fa-solid fa-satellite-dish"></i>
+              Attendance Monitor
+            </div>
+            <div class="panel-live-badge">
+              <span class="pulse-dot" style="width: 5px; height: 5px"></span>
+              LIVE
+            </div>
+          </div>
+
+          <!-- Summary stats -->
+          <div class="panel-stats-row">
+            <div class="pstat">
+              <div class="pstat-val teal" id="sEnrolled">--</div>
+              <div class="pstat-lbl">Enrolled</div>
+            </div>
+            <div class="pstat">
+              <div class="pstat-val green" id="sToday">--</div>
+              <div class="pstat-lbl">Present</div>
+            </div>
+            <div class="pstat">
+              <div class="pstat-val amber" id="sRecords">--</div>
+              <div class="pstat-lbl">Total Logs</div>
+            </div>
+            <div class="pstat">
+              <div class="pstat-val red" id="sLive">0</div>
+              <div class="pstat-lbl">Live Now</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="feed-toolbar">
+          <div class="feed-toolbar-left">
+            <span class="feed-toolbar-title">Detections</span>
+            <span class="count-pill" id="actCount">0</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <div class="view-toggle">
+              <button
+                class="view-btn active"
+                id="btnList"
+                onclick="setView('list')"
+                title="List view"
+              >
+                <i class="fa-solid fa-list"></i>
+              </button>
+              <button
+                class="view-btn"
+                id="btnGrid"
+                onclick="setView('grid')"
+                title="Grid view"
+              >
+                <i class="fa-solid fa-grip"></i>
+              </button>
+            </div>
+            <button class="refresh-btn2" onclick="fetchDets()" title="Refresh">
+              <i class="fa-solid fa-rotate"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Detection Cards -->
+        <div class="feed-list" id="feedList">
+          <div class="empty-feed">
+            <div class="empty-feed-icon">
+              <i class="fa-solid fa-satellite-dish"></i>
+            </div>
+            <p>
+              <strong>No detections yet</strong>Start a camera feed to begin
+              live attendance monitoring.
+            </p>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="right-footer">
+          <span class="right-footer-label">
+            <i class="fa-solid fa-microchip"></i>AI Engine
+          </span>
+          <span class="right-footer-val">YOLOv8 · InsightFace</span>
+        </div>
+      </div>
+      <!-- /right -->
+    </div>
+    <!-- /layout -->
+
+    <script>
+      const API = window.location.origin + "/api";
+      let camId = "nvr_office",
+        streaming = false,
+        pollTimer = null,
+        statsTimer = null;
+      let currentView = "list";
+
+      // Clock
+      const clockEl = document.getElementById("clock");
+      setInterval(() => {
+        clockEl.textContent = new Date().toLocaleTimeString();
+      }, 1000);
+      clockEl.textContent = new Date().toLocaleTimeString();
+
+      function setStatus(msg) {
+        document.getElementById("statusMsg").textContent = msg;
+      }
+
+      function switchCam(el, id, label) {
+        document
+          .querySelectorAll(".cam-tab")
+          .forEach((t) => t.classList.remove("active"));
+        el.classList.add("active");
+        camId = id;
+        document.getElementById("feedName").textContent = label;
+        if (streaming)
+          document.getElementById("videoImg").src = `/api/stream/${id}`;
+      }
+
+      function startFeed() {
+        const img = document.getElementById("videoImg");
+        img.src = `/api/stream/${camId}`;
+        img.style.display = "block";
+        document.getElementById("placeholder").style.display = "none";
+        document.getElementById("liveBadge").style.display = "flex";
+        document.getElementById("scanLine").style.display = "block";
+        streaming = true;
+        setStatus("AI detection active — monitoring in real-time");
+        startPolling();
+      }
+
+      function stopFeed() {
+        const img = document.getElementById("videoImg");
+        img.src = "";
+        img.style.display = "none";
+        document.getElementById("placeholder").style.display = "flex";
+        document.getElementById("liveBadge").style.display = "none";
+        document.getElementById("scanLine").style.display = "none";
+        streaming = false;
+        setStatus("Feed disconnected");
+        stopPolling();
+        document.getElementById("feedList").innerHTML = emptyHTML(
+          "Feed standby.",
+          "Start monitoring to resume.",
+        );
+        ["actCount", "cFaces", "cMatch", "sLive"].forEach(
+          (id) => (document.getElementById(id).textContent = "0"),
+        );
+      }
+
+      function onStreamError() {
+        setStatus("Stream unavailable — check RTSP connection");
+      }
+
+      function startPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+        fetchDets();
+        pollTimer = setInterval(fetchDets, 2500);
+      }
+      function stopPolling() {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+
+      function setView(v) {
+        currentView = v;
+        const list = document.getElementById("feedList");
+        document
+          .getElementById("btnList")
+          .classList.toggle("active", v === "list");
+        document
+          .getElementById("btnGrid")
+          .classList.toggle("active", v === "grid");
+        list.classList.toggle("grid-view", v === "grid");
+      }
+
+      function emptyHTML(title, sub) {
+        return `<div class="empty-feed">
+          <div class="empty-feed-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+          <p><strong>${title}</strong>${sub}</p>
+        </div>`;
+      }
+
+      async function fetchDets() {
+        try {
+          const r = await fetch(`${API}/live-detections`);
+          const d = await r.json();
+          const dets = d.detections || [];
+          renderFeed(dets);
+          document.getElementById("cFaces").textContent = dets.length;
+          document.getElementById("cMatch").textContent = dets.filter(
+            (x) => x.name !== "Unknown",
+          ).length;
+          document.getElementById("sLive").textContent = dets.length;
+          document.getElementById("actCount").textContent = dets.length;
+        } catch (e) {}
+      }
+
+      function renderFeed(dets) {
+        const el = document.getElementById("feedList");
+        if (!dets.length) {
+          el.innerHTML = `<div class="empty-feed">
+            <div class="empty-feed-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+            <p><strong>Awaiting matches…</strong>AI is scanning the feed.</p>
+          </div>`;
+          return;
+        }
+
+        el.innerHTML = dets
+          .map((d) => {
+            const isUnknown = d.name === "Unknown";
+            const initials = d.name
+              .split(" ")
+              .map((n) => n[0] || "?")
+              .join("")
+              .toUpperCase()
+              .slice(0, 2);
+            const pct = Math.round((d.confidence || 0) * 100);
+
+            // Confidence colour
+            let confClass = "green",
+              accentClass = "",
+              stampClass = "present";
+            if (pct < 80 && pct >= 60) {
+              confClass = "amber";
+              accentClass = "amber";
+            }
+            if (pct < 60) {
+              confClass = "red";
+              accentClass = "red";
+            }
+            if (isUnknown) {
+              accentClass = "gray";
+              stampClass = "unknown";
+            }
+
+            const time = d.timestamp
+              ? new Date(d.timestamp).toLocaleTimeString("en-US", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })
+              : "--:--";
+            const source =
+              (d.source || "")
+                .replace("stream_", "")
+                .replace(/_/g, " ")
+                .toUpperCase() || "CAMERA";
+            const userId = d.user_id;
+            const empId = userId
+              ? `EMP-${String(userId).padStart(3, "0")}`
+              : "N/A";
+            const dept = d.department || "";
+
+            // Photo: real image with initials fallback
+            const photoContent = userId
+              ? `<img src="/profile_photos/user_${userId}.jpg" alt="${d.name}"
+                  onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+              <span style="display:none;width:100%;height:100%;align-items:center;justify-content:center;">${initials}</span>`
+              : initials;
+
+            const photoBgClass = isUnknown ? "unknown-bg" : "";
+            const dotClass = isUnknown ? "unknown" : "";
+            const stampIcon = isUnknown
+              ? "fa-circle-exclamation"
+              : "fa-circle-check";
+            const stampLabel = isUnknown ? "Unknown" : "Marked";
+
+            return `
+            <div class="emp-card">
+              <div class="emp-card-inner">
+                <div class="emp-accent ${accentClass}"></div>
+                <div class="emp-body" style="padding:12px 14px;gap:10px;">
+                  <div class="emp-top" style="gap:12px;">
+                    <div class="emp-photo-wrap">
+                      <div class="emp-photo ${photoBgClass}" style="width:62px;height:62px;border-radius:10px;">${photoContent}</div>
+                      <span class="emp-status-dot ${dotClass}"></span>
+                    </div>
+                    <div class="emp-info">
+                      <div class="emp-name" style="font-size:0.95em;">${d.name}</div>
+                      ${dept ? `<div class="emp-dept" style="font-size:0.75em;margin-top:3px;"><i class="fa-solid fa-building" style="margin-right:3px;font-size:0.85em;"></i>${dept}</div>` : '<div style="font-size:0.72em;color:#94a3b8;margin-top:3px;">No department</div>'}
+                      <div class="emp-id" style="font-size:0.7em;margin-top:3px;">${empId}</div>
+                      <div style="font-size:0.7em;color:#94a3b8;margin-top:3px;display:flex;gap:10px;">
+                        <span><i class="fa-solid fa-clock" style="color:#3aafa9;margin-right:2px;"></i>${time}</span>
+                        <span><i class="fa-solid fa-camera" style="color:#3aafa9;margin-right:2px;"></i>${source}</span>
+                      </div>
+                    </div>
+                    <div class="emp-conf">
+                      <div class="emp-conf-val ${confClass}" style="font-size:1.3em;">${pct}%</div>
+                      <div class="emp-conf-lbl">Match</div>
+                    </div>
+                  </div>
+                  <div class="emp-divider"></div>
+                  <div class="emp-bottom">
+                    <div class="emp-meta"></div>
+                    <div class="att-stamp ${stampClass}">
+                      <i class="fa-solid ${stampIcon}"></i>${stampLabel}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+          })
+          .join("");
+      }
+
+      async function fetchStats() {
+        try {
+          const r = await fetch(`${API}/stats`);
+          const d = await r.json();
+          document.getElementById("sEnrolled").textContent =
+            d.total_users ?? "--";
+          document.getElementById("sToday").textContent =
+            d.today_attendance ?? "--";
+          document.getElementById("sRecords").textContent =
+            d.total_logs ?? "--";
+          document.getElementById("cToday").textContent =
+            d.today_attendance ?? "0";
+        } catch (e) {}
+      }
+
+      (async () => {
+        try {
+          await fetch(`${API}/init`, { method: "POST" });
+        } catch (e) {}
+        fetchStats();
+        statsTimer = setInterval(fetchStats, 10000);
+      })();
+    </script>
+  </body>
+</html>
