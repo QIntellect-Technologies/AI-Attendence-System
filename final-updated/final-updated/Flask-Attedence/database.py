@@ -632,14 +632,34 @@ def get_attendance_statistics() -> Dict:
             ''')
             today_count = cursor.fetchone()[0]
 
-            cursor.execute('''
-                SELECT COUNT(DISTINCT user_id) FROM attendance
-                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
-                AND user_id NOT IN (
-                    SELECT user_id FROM manual_absent WHERE date = date('now', 'localtime')
-                )
-            ''')
-            unique_today = cursor.fetchone()[0]
+            try:
+                from support_db_attendance_dashboard import get_client_attendance_today
+                org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                cloud_records = get_client_attendance_today(org_id=org_id, date_value=today_str, people_type="staff")
+                if isinstance(cloud_records, list):
+                    unique_today = sum(
+                        1 for r in cloud_records
+                        if r.get("day_status") in ("present", "late", "on_time") or r.get("status") in ("CHECKED_IN", "on_time", "late")
+                    )
+                else:
+                    cursor.execute('''
+                        SELECT COUNT(DISTINCT user_id) FROM attendance
+                        WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                        AND user_id NOT IN (
+                            SELECT user_id FROM manual_absent WHERE date = date('now', 'localtime')
+                        )
+                    ''')
+                    unique_today = cursor.fetchone()[0]
+            except Exception:
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT user_id) FROM attendance
+                    WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                    AND user_id NOT IN (
+                        SELECT user_id FROM manual_absent WHERE date = date('now', 'localtime')
+                    )
+                ''')
+                unique_today = cursor.fetchone()[0]
             
             cursor.execute('SELECT AVG(confidence) FROM attendance')
             avg_confidence = cursor.fetchone()[0] or 0
