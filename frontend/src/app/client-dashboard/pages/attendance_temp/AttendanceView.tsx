@@ -2750,9 +2750,11 @@ export default function AttendanceView() {
     );
 
   const selectedStatuses = selectedRows.map((row) => {
-    const dayData = row.days.get(filter.selectedDate);
+    const dayData =
+      row.records.find((r) => r.date === filter.selectedDate) ??
+      row.records[0];
     const isPresent = Boolean(
-      dayData?.present || dayData?.late || dayData?.record?.inTime,
+      dayData?.isPresent || dayData?.isLate || dayData?.inTime,
     );
     return isPresent ? "present" : "absent";
   });
