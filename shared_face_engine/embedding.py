@@ -35,7 +35,7 @@ from shared_face_engine.quality import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DET_CONFIDENCE = 0.5
+DEFAULT_DET_CONFIDENCE = 0.42
 
 # InsightFace's FaceAnalysis.get() is not safe to call concurrently — it
 # does non-thread-safe numpy pre/post-processing around the ONNX session,
@@ -51,12 +51,66 @@ def detect_and_extract(
     frame: np.ndarray,
     models_root: Path,
     min_confidence: float = DEFAULT_DET_CONFIDENCE,
+    skip_bboxes: list[tuple[int, int, int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     model = get_face_model(models_root)
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if frame.ndim == 3 else frame
     with _inference_lock:
-        faces = model.get(frame_rgb)
+        if skip_bboxes and hasattr(model, "det_model") and hasattr(model, "models") and "recognition" in model.models:
+            bboxes, kpss = model.det_model.detect(frame_rgb, max_num=0, metric="default")
+            if bboxes.shape[0] == 0:
+                return []
+            rec_model = model.models.get("recognition")
+            results: list[dict[str, Any]] = []
+            from insightface.app.common import Face
+
+            for i in range(bboxes.shape[0]):
+                bbox = bboxes[i, 0:4]
+                det_score = float(bboxes[i, 4])
+                if det_score < min_confidence:
+                    continue
+                kps = kpss[i] if kpss is not None else None
+                face_bbox = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+
+                # Check overlap with confirmed skip_bboxes
+                is_skip = False
+                bcx = (bbox[0] + bbox[2]) / 2.0
+                bcy = (bbox[1] + bbox[3]) / 2.0
+                bw = bbox[2] - bbox[0]
+                bh = bbox[3] - bbox[1]
+                b_size = max(bw, bh)
+                for sb in skip_bboxes:
+                    sx1, sy1, sx2, sy2 = sb
+                    ix1 = max(bbox[0], sx1)
+                    iy1 = max(bbox[1], sy1)
+                    ix2 = min(bbox[2], sx2)
+                    iy2 = min(bbox[3], sy2)
+                    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                    union = (bw * bh) + ((sx2 - sx1) * (sy2 - sy1)) - inter
+                    iou = inter / union if union > 0 else 0.0
+                    scx = (sx1 + sx2) / 2.0
+                    scy = (sy1 + sy2) / 2.0
+                    spatial_d = np.sqrt((bcx - scx) ** 2 + (bcy - scy) ** 2)
+                    if iou > 0.35 or spatial_d < max(28.0, b_size * 0.40):
+                        is_skip = True
+                        break
+
+                face_obj = Face(bbox=bbox, kps=kps, det_score=det_score)
+                if not is_skip:
+                    rec_model.get(frame_rgb, face_obj)
+                else:
+                    face_obj.embedding = None
+
+                results.append({
+                    "bbox": face_bbox,
+                    "conf": det_score,
+                    "embedding": face_obj.embedding,
+                    "kps": None if kps is None else np.asarray(kps, dtype=np.float32),
+                })
+            return results
+        else:
+            faces = model.get(frame_rgb)
 
     results: list[dict[str, Any]] = []
     for face in faces:
@@ -64,12 +118,6 @@ def detect_and_extract(
         if conf < min_confidence:
             continue
         x1, y1, x2, y2 = face.bbox.astype(int)
-        # kps: the detector's 5 keypoints (left eye, right eye, nose tip,
-        # left mouth corner, right mouth corner). det_10g already produces
-        # these in the same forward pass as the embedding, so exposing them
-        # costs nothing and spares liveness.py from needing landmark_3d_68 —
-        # which model_loader.py deliberately excludes via allowed_modules.
-        # None when a detector build omits them, which callers must handle.
         kps = getattr(face, "kps", None)
         results.append({
             "bbox": (int(x1), int(y1), int(x2), int(y2)),
@@ -78,6 +126,7 @@ def detect_and_extract(
             "kps": None if kps is None else np.asarray(kps, dtype=np.float32),
         })
     return results
+
 
 
 def _extract_frames(video_path: str, max_frames: int) -> list[np.ndarray]:

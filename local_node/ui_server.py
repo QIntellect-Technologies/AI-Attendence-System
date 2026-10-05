@@ -252,8 +252,73 @@ def create_app() -> Flask:
             _camera_manager.mjpeg_frames(camera_id),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
-    
-    
+
+    @app.post("/api/enroll/record-nvr")
+    def api_enroll_record_nvr():
+        """Connect to an NVR/RTSP camera stream, record a 20-second enrollment video clip at 6-8 ft distance,
+        and save it to uploads folder for direct biometric extraction."""
+        import cv2
+        data = request.get_json(silent=True) or {}
+        camera_id = data.get("camera_id") or "1"
+        rtsp_url = data.get("rtsp_url")
+        duration_seconds = int(data.get("duration") or 20)
+
+        if not rtsp_url:
+            cams = _camera_manager.list_cameras()
+            target_cam = next((c for c in cams if str(c.get("id")) == str(camera_id)), None)
+            if target_cam:
+                rtsp_url = target_cam.get("rtsp_url")
+
+        if not rtsp_url:
+            return jsonify({"success": False, "message": "No RTSP URL or active camera found for recording"}), 400
+
+        try:
+            uploads_dir = Path("uploads")
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"nvr_enrollment_{int(time.time())}.mp4"
+            filepath = uploads_dir / filename
+
+            is_webcam = isinstance(rtsp_url, int) or (isinstance(rtsp_url, str) and rtsp_url.isdigit())
+            cap = cv2.VideoCapture(int(rtsp_url) if is_webcam else rtsp_url)
+            if not cap.isOpened():
+                return jsonify({"success": False, "message": "Could not open RTSP camera stream"}), 400
+
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 15)
+            if fps < 1 or fps > 60:
+                fps = 15.0
+
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(str(filepath), fourcc, fps, (width, height))
+
+            max_frames = int(fps * duration_seconds)
+            frames_recorded = 0
+            start_time = time.time()
+
+            while frames_recorded < max_frames and (time.time() - start_time) < (duration_seconds + 5):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                out.write(frame)
+                frames_recorded += 1
+
+            cap.release()
+            out.release()
+
+            if frames_recorded < 10:
+                return jsonify({"success": False, "message": "Recording failed: insufficient frames captured"}), 400
+
+            return jsonify({
+                "success": True,
+                "video_filename": filename,
+                "video_path": str(filepath),
+                "frames_recorded": frames_recorded,
+                "duration_seconds": round(time.time() - start_time, 1),
+            })
+        except Exception as exc:
+            return jsonify({"success": False, "message": f"NVR recording error: {exc}"}), 500
+
     @app.get("/api/perf")
     def api_perf():
         """Where this process's CPU actually goes, split by pipeline stage

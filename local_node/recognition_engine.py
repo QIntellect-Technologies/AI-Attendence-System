@@ -83,17 +83,21 @@ def is_gpu_active() -> bool:
     return is_gpu_enabled()
 
 
-def detect_and_extract(frame: np.ndarray) -> list[dict[str, Any]]:
+def detect_and_extract(
+    frame: np.ndarray,
+    skip_bboxes: list[tuple[int, int, int, int]] | None = None,
+) -> list[dict[str, Any]]:
     """Returns [{'bbox': (x1,y1,x2,y2), 'conf': float, 'embedding': np.ndarray}, ...].
     Raises FaceEngineUnavailableError if the model itself failed — callers
     must not treat that the same as a clean empty detection."""
     ensure_app_dirs()
     _ensure_models_staged()
     try:
-        return _shared_detect_and_extract(frame, MODELS_DIR)
+        return _shared_detect_and_extract(frame, MODELS_DIR, skip_bboxes=skip_bboxes)
     except Exception as exc:
         logger.exception("Face detection/extraction failed")
         raise FaceEngineUnavailableError(str(exc)) from exc
+
     
 
 def warmup() -> None:

@@ -2895,9 +2895,16 @@ class CameraStreamManager:
             # scales with camera count rather than with faces seen, the
             # cost is lock contention, not the model itself.
             model_started = perf_stats.now()
-            faces = detect_and_extract(frame)
+            now = time.time()
+            confirmed_bboxes = [
+                t["bbox"]
+                for tid, t in state.tracked_faces.items()
+                if t.get("matched") and t.get("bbox") and (now - t.get("last_seen", 0)) < 1.0
+            ]
+            faces = detect_and_extract(frame, skip_bboxes=confirmed_bboxes if confirmed_bboxes else None)
             perf_stats.record(state.camera_id, "detect.model", model_started)
         except FaceEngineUnavailableError as exc:
+
             # Surface real engine failures to /api/status -> runtime.last_error,
             # which App.tsx already renders as a warning bar — this plumbing
             # existed but was never fed anything, since detect_and_extract used
@@ -3118,31 +3125,81 @@ class CameraStreamManager:
 
     @staticmethod
     def _assign_track(state: _CameraState, bbox, now: float) -> tuple[int, dict[str, Any]]:
-        """Match this frame's bbox to an existing track by IoU, or start a
-        new one. Only spatial continuity — no identity needed yet, which
-        is why this can run before best_match()."""
+        """Match this frame's bbox to an existing track using priority-based association:
+        PRIORITY 1: Match to closest RECOGNIZED / MATCHED active track (prevents flickering).
+        PRIORITY 2: Match to any active track (by IoU or centroid distance).
+        PRIORITY 3: Inherit from recently lost recognized track (<2.0s).
+        PRIORITY 4: Create new track.
+        """
         x1, y1, x2, y2 = bbox
-        best_tid, best_iou = None, 0.0
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        bw, bh = x2 - x1, y2 - y1
+        max_dist = max(35.0, max(bw, bh) * 0.8)
+
+        # PRIORITY 1: Match with closest RECOGNIZED active track
+        best_tid, best_dist = None, float("inf")
         for tid, t in state.tracked_faces.items():
+            if not t.get("matched"):
+                continue
             tx1, ty1, tx2, ty2 = t["bbox"]
+            tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+            dist = np.sqrt((cx - tcx) ** 2 + (cy - tcy) ** 2)
+
             ix1, iy1 = max(x1, tx1), max(y1, ty1)
             ix2, iy2 = min(x2, tx2), min(y2, ty2)
             inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
             union = (x2 - x1) * (y2 - y1) + (tx2 - tx1) * (ty2 - ty1) - inter
             iou = inter / union if union > 0 else 0.0
-            if iou > TRACK_IOU_MATCH_THRESHOLD and iou > best_iou:
-                best_iou, best_tid = iou, tid
+
+            if (iou > 0.1 or dist < max_dist) and dist < best_dist:
+                best_dist = dist
+                best_tid = tid
+
+        # PRIORITY 2: Match with any active track by IoU
+        if best_tid is None:
+            best_iou = 0.0
+            for tid, t in state.tracked_faces.items():
+                tx1, ty1, tx2, ty2 = t["bbox"]
+                ix1, iy1 = max(x1, tx1), max(y1, ty1)
+                ix2, iy2 = min(x2, tx2), min(y2, ty2)
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                union = (x2 - x1) * (y2 - y1) + (tx2 - tx1) * (ty2 - ty1) - inter
+                iou = inter / union if union > 0 else 0.0
+                if iou > TRACK_IOU_MATCH_THRESHOLD and iou > best_iou:
+                    best_iou, best_tid = iou, tid
 
         if best_tid is not None:
             state.tracked_faces[best_tid]["bbox"] = bbox
             state.tracked_faces[best_tid]["last_seen"] = now
             return best_tid, state.tracked_faces[best_tid]
 
+        # PRIORITY 3: Try inheriting from recently lost recognized track
+        best_inherit_tid = None
+        best_inherit_dist = float("inf")
+        for tid, t in state.tracked_faces.items():
+            if not t.get("matched"):
+                continue
+            time_since_seen = now - t["last_seen"]
+            if 0.15 < time_since_seen < TRACK_MAX_UNSEEN_SECONDS:
+                tx1, ty1, tx2, ty2 = t["bbox"]
+                tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+                dist = np.sqrt((cx - tcx) ** 2 + (cy - tcy) ** 2)
+                if dist < max_dist * 1.5 and dist < best_inherit_dist:
+                    best_inherit_dist = dist
+                    best_inherit_tid = tid
+
+        if best_inherit_tid is not None:
+            state.tracked_faces[best_inherit_tid]["bbox"] = bbox
+            state.tracked_faces[best_inherit_tid]["last_seen"] = now
+            return best_inherit_tid, state.tracked_faces[best_inherit_tid]
+
+        # PRIORITY 4: Create new track
         tid = state.next_track_id
         state.next_track_id += 1
         track = {"bbox": bbox, "last_seen": now, "match": None, "matched": False}
         state.tracked_faces[tid] = track
         return tid, track
+
     
     @staticmethod
     def _encode_snapshot(frame, bbox) -> str | None:
