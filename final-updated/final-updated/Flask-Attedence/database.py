@@ -226,7 +226,7 @@ def get_user_by_name(name: str) -> Optional[Dict]:
 
 
 def get_all_users(role: Optional[str] = None) -> List[Dict]:
-    """Get all active users with today's attendance status via optimized join."""
+    """Get all active users with today's attendance status via optimized join and Cloud sync."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
@@ -253,11 +253,33 @@ def get_all_users(role: Optional[str] = None) -> List[Dict]:
             ''')
             rows = cursor.fetchall()
             
-        return [{
+        user_list = [{
             'id': r[0], 'name': r[1], 'email': r[2], 'phone': r[3],
             'department': r[4], 'enrollment_date': r[5], 'created_at': r[6],
             'active': r[7], 'notes': r[8], 'photo_path': r[9], 'status_today': r[10]
         } for r in rows]
+
+        # Cloud Real-Time Sync: Verify status_today against live Supabase attendance
+        try:
+            from support_db_attendance_dashboard import get_client_attendance_today
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            cloud_records = get_client_attendance_today(org_id=org_id, date_value=today_str, people_type="staff")
+            if isinstance(cloud_records, list):
+                present_names = {
+                    str(r.get("name") or r.get("staff_name") or "").strip().lower()
+                    for r in cloud_records
+                    if r.get("day_status") in ("present", "late", "on_time") or r.get("status") in ("CHECKED_IN", "on_time", "late")
+                }
+                for u in user_list:
+                    if str(u.get("name") or "").strip().lower() in present_names:
+                        u["status_today"] = "Present"
+                    else:
+                        u["status_today"] = "Absent"
+        except Exception as cloud_sync_err:
+            logger.warning(f"get_all_users cloud status sync note: {cloud_sync_err}")
+
+        return user_list
     except Exception as e:
         logger.error(f"Failed to get all users: {e}")
         return []
