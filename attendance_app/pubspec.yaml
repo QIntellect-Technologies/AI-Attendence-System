@@ -1,0 +1,29 @@
+name: attendance_app
+description: Attendance Management App
+
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.1.0
+  shared_preferences: ^2.2.2
+  geolocator: ^10.1.0
+  intl: ^0.18.1
+  camera: ^0.10.5+9
+  path_provider: ^2.1.2
+  image: ^4.1.7
+  path: ^1.8.3
+  network_info_plus: ^4.1.0 # WiFi attendance ke liye — naya add kiya
+  toastification: ^3.2.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

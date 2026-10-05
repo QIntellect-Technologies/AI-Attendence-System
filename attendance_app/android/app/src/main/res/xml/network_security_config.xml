@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Production (ai-attendence-system-production-71ea.up.railway.app) is HTTPS,
+  so it's covered by the default base-config below with no exception needed.
+  This block exists only so `flutter run` against a local Flask dev server
+  (http://<lan-ip>:5000) keeps working without disabling cleartext globally.
+  Delete the domain-config block once you no longer need to test against a
+  local backend.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.0.196</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
