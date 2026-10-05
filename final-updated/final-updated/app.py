@@ -1508,7 +1508,8 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"✗ Startup initialization failed: {e}")
     
-    logger.info(f"Starting server on http://localhost:5000")
+    port = int(os.environ.get("CAMERA_ENGINE_PORT", 5001))
+    logger.info(f"Starting camera engine server on http://localhost:{port}")
     logger.info("="*60 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=port, use_reloader=False)
