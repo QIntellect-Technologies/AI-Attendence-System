@@ -2739,16 +2739,128 @@ export default function AttendanceView() {
     setSelectedAbsentStaffIds(new Set());
   }, [attendanceRows]);
 
-  const selectedAbsentStaff = attendanceRows
-    .filter(({ staff: member }) =>
-      selectedAbsentStaffIds.has(String(member.id)),
-    )
-    .map(({ staff: member }) => member);
+  const selectedRows = attendanceRows.filter(({ staff: member }) =>
+    selectedAbsentStaffIds.has(String(member.id)),
+  );
+  const selectedAbsentStaff = selectedRows.map(({ staff: member }) => member);
   const allAttendanceRowsSelected =
     attendanceRows.length > 0 &&
     attendanceRows.every(({ staff: member }) =>
       selectedAbsentStaffIds.has(String(member.id)),
     );
+
+  const selectedStatuses = selectedRows.map((row) => {
+    const dayData = row.days.get(filter.selectedDate);
+    const isPresent = Boolean(
+      dayData?.present || dayData?.late || dayData?.record?.inTime,
+    );
+    return isPresent ? "present" : "absent";
+  });
+
+  const allSelectedAreAbsent =
+    selectedStatuses.length > 0 && selectedStatuses.every((s) => s === "absent");
+  const allSelectedArePresent =
+    selectedStatuses.length > 0 && selectedStatuses.every((s) => s === "present");
+  const isMixedSelection =
+    selectedStatuses.length > 0 && !allSelectedAreAbsent && !allSelectedArePresent;
+
+  const markSelectedAsPresent = async () => {
+    if (!useRealApi) {
+      toastInfo(
+        "Demo attendance is generated from module store data. Use the real API mode to change attendance records.",
+      );
+      return;
+    }
+    if (selectedAbsentStaff.length === 0 || bulkMarkingAbsent) return;
+
+    const targetDate = filter.selectedDate;
+    const formattedDate = formatDateForDisplay(targetDate) ?? targetDate;
+    const confirm = await Swal.fire({
+      icon: "question",
+      title: `Mark ${selectedAbsentStaff.length} selected people present?`,
+      text: `Their attendance for ${formattedDate} will be recorded as present with a standard check-in time (09:00 AM).`,
+      showCancelButton: true,
+      confirmButtonText: "Mark Present",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#059669",
+      focusCancel: true,
+    });
+    if (!confirm.isConfirmed) return;
+
+    setBulkMarkingAbsent(true);
+    try {
+      const commonParams = {
+        organizationId: organizationIdForApi ?? undefined,
+        branchId:
+          backendBranchIdForUi(
+            branches,
+            scopedBranchId ?? activeBranchId ?? null,
+          ) ?? undefined,
+        peopleType,
+      };
+
+      const defaultCheckInIso = `${targetDate}T09:00:00`;
+      const results = await Promise.allSettled(
+        selectedAbsentStaff.map((member) => {
+          const staffIdStr = String(member.id);
+          const staffNameStr = member.name.toLowerCase().trim();
+          const existingRecord = attendance.find(
+            (item) =>
+              item.date === targetDate &&
+              (String(item.user_id ?? "") === staffIdStr ||
+                item.user_name?.toLowerCase().trim() === staffNameStr),
+          );
+          if (existingRecord?.id) {
+            return updateAttendanceRecord(
+              existingRecord.id,
+              { checkIn: defaultCheckInIso, arrivalStatus: "on_time" },
+              commonParams,
+            );
+          } else {
+            return createManualAttendanceRecord(
+              {
+                staffId: member.id,
+                checkIn: defaultCheckInIso,
+                arrivalStatus: "on_time",
+                notes: "Marked present via batch action",
+              },
+              commonParams,
+            );
+          }
+        }),
+      );
+      const succeeded = results.filter(
+        (result) => result.status === "fulfilled",
+      ).length;
+      const failed = results
+        .map((result, index) =>
+          result.status === "rejected"
+            ? `${selectedAbsentStaff[index].name}: ${
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : "Server error"
+              }`
+            : null,
+        )
+        .filter((message): message is string => message !== null);
+
+      if (succeeded > 0) {
+        setSelectedAbsentStaffIds(new Set());
+        await fetchAttendance();
+      }
+      if (failed.length > 0) {
+        toastError(
+          `${succeeded} marked present; ${failed.length} failed. ${failed.join("; ")}`,
+        );
+      } else {
+        toastSuccess(
+          `${succeeded} people marked present on ${formattedDate}.`,
+        );
+      }
+    } finally {
+      setBulkMarkingAbsent(false);
+    }
+  };
 
   const markSelectedAsAbsent = async () => {
     if (!useRealApi) {
@@ -3318,16 +3430,32 @@ export default function AttendanceView() {
                   {allAttendanceRowsSelected ? "Deselect all" : "Select all"}
                 </button>
                 {selectedAbsentStaff.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={markSelectedAsAbsent}
-                    disabled={bulkMarkingAbsent}
-                    className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {bulkMarkingAbsent
-                      ? "Marking absent..."
-                      : "Mark selected absent"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {(allSelectedAreAbsent || isMixedSelection) && (
+                      <button
+                        type="button"
+                        onClick={markSelectedAsPresent}
+                        disabled={bulkMarkingAbsent}
+                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors shadow-sm"
+                      >
+                        {bulkMarkingAbsent
+                          ? "Marking present..."
+                          : "Mark selected present"}
+                      </button>
+                    )}
+                    {(allSelectedArePresent || isMixedSelection) && (
+                      <button
+                        type="button"
+                        onClick={markSelectedAsAbsent}
+                        disabled={bulkMarkingAbsent}
+                        className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors shadow-sm"
+                      >
+                        {bulkMarkingAbsent
+                          ? "Marking absent..."
+                          : "Mark selected absent"}
+                      </button>
+                    )}
+                  </div>
                 )}
                 <span className="text-xs text-gray-400">
                   {filter.selectedDate}
