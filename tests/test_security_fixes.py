@@ -25,6 +25,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
@@ -371,15 +372,53 @@ class TestLoginThrottleWiring(unittest.TestCase):
         self.assertIn('register_success', body)
 
     def test_every_login_success_path_clears_counters(self):
-        """Three backends, three success returns — miss one and a user who
-        typed their password wrong twice stays counted forever."""
+        """Clear the throttle after successful authentication on every backend.
+
+        Valid credentials also clear prior failures when access is denied for
+        an inactive organization or missing module grants, so the call count
+        is intentionally greater than the number of authentication backends.
+        """
         fn = find_route('/api/login', 'POST')
-        successes = sum(
-            1 for sub in ast.walk(fn)
-            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
-            and sub.func.attr == 'register_success'
+
+        def has_register_success(node):
+            return any(
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == 'register_success'
+                for sub in ast.walk(node)
+            )
+
+        authenticated_branches = {
+            node.test.id: node
+            for node in ast.walk(fn)
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id in {'client_user', 'client_staff'}
+        }
+        self.assertEqual(
+            {'client_user', 'client_staff'},
+            set(authenticated_branches),
+            'expected explicit authenticated branches for both Supabase backends',
         )
-        self.assertEqual(3, successes, 'expected register_success on all 3 auth backends')
+        for backend, branch in authenticated_branches.items():
+            with self.subTest(backend=backend):
+                self.assertTrue(
+                    has_register_success(branch),
+                    f'{backend} authentication success must clear throttle counters',
+                )
+
+        legacy_auth_index = next(
+            index for index, node in enumerate(fn.body)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == 'user' for target in node.targets)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == 'authenticate_user'
+        )
+        self.assertTrue(
+            any(has_register_success(node) for node in fn.body[legacy_auth_index + 1:]),
+            'legacy SQLite authentication success must clear throttle counters',
+        )
 
     def test_other_login_routes_throttled(self):
         for path in ('client_staff_auth_routes.py', 'support_routes.py'):
@@ -421,6 +460,13 @@ class TestAuthDecoratorsLive(unittest.TestCase):
 
         cls.client = app.test_client()
 
+        # The fake org doesn't exist, so the real lookup reports a non-active
+        # status and the decorator correctly answers 403. Pin the status so
+        # these tests exercise JWT/scope/admin logic, not live org data.
+        org_status = mock.patch('support_db_core._compute_org_status', return_value='active')
+        org_status.start()
+        cls.addClassCleanup(org_status.stop)
+
     def _token(self, org_id='11111111-1111-1111-1111-111111111111', role='staff'):
         return self.cda.mint_dashboard_token(
             {'id': 'user-1', 'org_id': org_id, 'branch_id': None, 'role': role},
@@ -446,6 +492,12 @@ class TestAuthDecoratorsLive(unittest.TestCase):
     def test_admin_token_passes_admin_route(self):
         r = self.client.post('/admin', headers={'Authorization': f'Bearer {self._token(role="admin")}'})
         self.assertEqual(200, r.status_code)
+
+    def test_suspended_org_is_403_with_code(self):
+        with mock.patch('support_db_core._compute_org_status', return_value='suspended'):
+            r = self.client.get('/plain', headers={'Authorization': f'Bearer {self._token()}'})
+        self.assertEqual(403, r.status_code)
+        self.assertEqual('ORG_ACCESS_BLOCKED', r.get_json()['code'])
 
     def test_admin_route_still_401s_without_a_token(self):
         """require_client_dashboard_admin composes the base decorator, so a
