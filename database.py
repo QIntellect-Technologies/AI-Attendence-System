@@ -1,7 +1,7 @@
 import sqlite3
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 from logger_config import get_logger
 from config import DB_PATH, ATTENDANCE_LOG_RETENTION_DAYS
@@ -1464,6 +1464,22 @@ def log_attendance(
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            cursor.execute('SELECT join_date FROM users WHERE id = ?', (user_id,))
+            user = cursor.fetchone()
+            if user and user[0]:
+                from support_db_time_utils import ensure_attendance_on_or_after_join_date
+                try:
+                    ensure_attendance_on_or_after_join_date(
+                        user[0],
+                        datetime.now(timezone.utc).date(),
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        'Attendance not recorded for user %s: %s',
+                        user_id,
+                        exc,
+                    )
+                    return False
             cursor.execute(
                 '''INSERT INTO attendance
                    (user_id, detected_name, confidence, source, org_id, branch_id)
@@ -1473,8 +1489,10 @@ def log_attendance(
                  int(branch_id) if branch_id is not None else None),
             )
             conn.commit()
+            return True
     except Exception as e:
         logger.error(f"Failed to log attendance for user {user_id}: {e}")
+        return False
 
 
 def is_user_present_today(user_id: int) -> bool:
@@ -1597,10 +1615,14 @@ def get_attendance_by_user(
 def get_attendance_today(
     organization_id: int = None,
     branch_id: int = None,
+    start: str = None,
+    end: str = None,
+    people_type: str = None,
 ) -> List[Dict]:
-    """Return all attendance records for today with user/branch metadata."""
+    """Return attendance records for today or an explicit date range."""
     try:
-        filters: List[str] = ["date(a.timestamp) = date('now', 'utc')"]
+        ensure_staff_api_columns()
+        filters: List[str] = []
         params: List = []
 
         if organization_id is not None:
@@ -1611,7 +1633,21 @@ def get_attendance_today(
             filters.append("u.branch_id = ?")
             params.append(int(branch_id))
 
+        if people_type:
+            filters.append("LOWER(COALESCE(u.people_type, 'staff')) = ?")
+            params.append(str(people_type).strip().lower())
+
+        if start:
+            filters.append("date(a.timestamp) >= date(?)")
+            params.append(start)
+        if end:
+            filters.append("date(a.timestamp) <= date(?)")
+            params.append(end)
+        if not start and not end:
+            filters.append("date(a.timestamp) = date('now', 'utc')")
+
         where_sql = " AND ".join(filters)
+        range_limit = "LIMIT 20000" if start or end else ""
 
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
@@ -1625,6 +1661,7 @@ def get_attendance_today(
                 JOIN users u ON a.user_id = u.id
                 WHERE {where_sql}
                 ORDER BY a.timestamp DESC
+                {range_limit}
                 ''',
                 tuple(params),
             )
@@ -1640,7 +1677,7 @@ def get_attendance_today(
                 'check_in': r[5],
                 'check_out': None,
                 'status': 'PRESENT',
-                'log_date': r[5].split(' ')[0] if r[5] else '',
+                'log_date': r[5][:10] if r[5] else '',
                 'created_at': r[5],
                 'department': r[6] or '',
                 'branch_id': r[7],
@@ -1650,6 +1687,8 @@ def get_attendance_today(
         ]
     except Exception as e:
         logger.error(f"Failed to get today's attendance: {e}")
+        if start or end:
+            raise
         return []
 
 def get_attendance_statistics(

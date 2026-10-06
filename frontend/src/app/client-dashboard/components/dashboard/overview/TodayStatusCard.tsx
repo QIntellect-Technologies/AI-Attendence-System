@@ -1,13 +1,13 @@
 /**
  * TodayStatusCard.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Renders department-level attendance ratios as a donut chart.
+ * Renders department- or class/section-level attendance ratios as a donut chart.
  *
- * Default view ("All Departments"): each donut slice = one department,
- * sized by its total staff count.
+ * Default view: each donut slice is a configured department or student
+ * class/section, sized by its total roster count.
  *
- * When a specific department is selected via the three-dot dropdown,
- * the donut switches to that department's Present / Late / Absent breakdown.
+ * Selecting a group via the three-dot dropdown switches to its Present / Late /
+ * Absent breakdown.
  */
 
 import React, { useMemo, useState, useRef, useEffect } from "react";
@@ -24,10 +24,6 @@ import { useOrg } from "../../../contexts/OrgConfigContext";
 import type {
   TodayStatusItem,
 } from "../../../hooks/useDashboardOverviewData";
-import {
-  getAttendanceToday,
-  type TodayAttendanceRecord,
-} from "../../../pages/attendance_temp/api/attendanceApi";
 import { MoreHorizontal, ChevronDown, Building2, Users } from "lucide-react";
 import {
   buildPresence,
@@ -35,6 +31,11 @@ import {
   staffStateOnDay,
   toDateKey,
 } from "../../../utils/attendanceAnalytics";
+import {
+  configItemClassName,
+  configItemFamily,
+  configItemSectionName,
+} from "../../../utils/templateRendering";
 
 // ─── Department colours ────────────────────────────────────────────────────────
 const DEPT_COLORS = [
@@ -74,6 +75,12 @@ interface TodayStatusCardProps {
   data?: TodayStatusItem[];
   presentToday: number;
   totalStaff?: number;
+  peopleType?: string | null;
+  isStudent?: boolean;
+  groupLabel?: string;
+  groupPlural?: string;
+  subgroupLabel?: string;
+  subgroupPlural?: string;
   /** Active staff roster. When given, absent = roster members with no attended row today. */
   staff?: any[];
   /** Today's attendance rows for the same scope as `staff`. */
@@ -85,39 +92,43 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
   data,
   presentToday,
   totalStaff = 0,
+  peopleType,
+  isStudent = false,
+  groupLabel = "Department",
+  groupPlural = "Departments",
+  subgroupLabel = "Section",
+  subgroupPlural = "Sections",
   staff,
   records,
 }) => {
   const items = data ?? [];
   const { cfg } = useOrg();
-  const [selectedDept, setSelectedDept] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [todayRecords, setTodayRecords] = useState<TodayAttendanceRecord[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (records) return; // parent supplied scoped data
-    let active = true;
-    getAttendanceToday({ limit: 2000 })
-      .then((records) => {
-        if (active) setTodayRecords(records);
-      })
-      .catch((error) => {
-        console.error("Failed to load today's department attendance", error);
-      });
-    return () => {
-      active = false;
-    };
-  }, [records]);
+    setSelectedGroup(null);
+  }, [peopleType]);
 
-  // ── All configured department names (source of truth) ─────────────────────
-  const cfgDeptNames = useMemo<string[]>(() => {
+  // ── Configured grouping names (source of truth) ───────────────────────────
+  const cfgGroupNames = useMemo<string[]>(() => {
     const names = new Set<string>();
-    Object.values(cfg.departments).forEach((depts) =>
-      depts.forEach((d) => { if (d.name) names.add(d.name); })
-    );
+    Object.values(cfg.departments).forEach((groups) => {
+      groups.forEach((group) => {
+        if (!isStudent) {
+          if (group.name) names.add(group.name);
+          return;
+        }
+        if (configItemFamily(group) !== "student") return;
+        const className = configItemClassName(group).trim();
+        const sectionName = configItemSectionName(group).trim();
+        const name = [className, sectionName].filter(Boolean).join(" · ");
+        if (name) names.add(name);
+      });
+    });
     return Array.from(names).sort();
-  }, [cfg.departments]);
+  }, [cfg.departments, isStudent]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -131,32 +142,53 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     return () => document.removeEventListener("mousedown", handler);
   }, [menuOpen]);
 
-  // Build department stats. cfg departments seed the list; counts come from the
+  // Build grouping stats. Configured groups seed the list; counts come from the
   // roster (so people with no row today are Absent) when `staff` is provided,
   // otherwise from the attendance rows alone (legacy behaviour).
   const deptStats = useMemo<DeptStats[]>(() => {
     const map = new Map<string, { total: number; present: number; late: number; absent: number }>(
-      cfgDeptNames.map((name) => [name, { total: 0, present: 0, late: 0, absent: 0 }]),
+      cfgGroupNames.map((name) => [name, { total: 0, present: 0, late: 0, absent: 0 }]),
     );
     const bucketFor = (dept: string) => {
       const matched =
-        cfgDeptNames.find((n) => n.toLowerCase() === dept.toLowerCase()) ?? dept;
+        cfgGroupNames.find((n) => n.toLowerCase() === dept.toLowerCase()) ?? dept;
       if (!map.has(matched)) map.set(matched, { total: 0, present: 0, late: 0, absent: 0 });
       return map.get(matched)!;
     };
 
+    const groupNameFor = (person: Record<string, unknown>) => {
+      if (!isStudent) return staffDepartment(person);
+      const className = String(
+        person.className ??
+          person.class_name ??
+          person.groupName ??
+          person.group_name ??
+          person.department ??
+          person.dept ??
+          "",
+      ).trim();
+      const sectionName = String(
+        person.sectionName ??
+          person.section_name ??
+          person.subgroupName ??
+          person.subgroup_name ??
+          "",
+      ).trim();
+      return [className, sectionName].filter(Boolean).join(" · ") || "Unassigned";
+    };
+
     if (staff) {
-      const todayMap = buildPresence(records ?? todayRecords).get(toDateKey(new Date()));
+      const todayMap = buildPresence(records ?? []).get(toDateKey(new Date()));
       for (const member of staff) {
-        const b = bucketFor(staffDepartment(member));
+        const b = bucketFor(groupNameFor(member));
         const state = staffStateOnDay(member, todayMap);
         b.total++;
         b[state]++;
       }
     } else {
       const seenStaff = new Set<string>();
-      for (const entry of todayRecords) {
-        const dept = entry.department;
+      for (const entry of records ?? []) {
+        const dept = groupNameFor(entry);
         if (!dept) continue;
         const identity = String(entry.staffId ?? entry.userId ?? entry.id);
         if (seenStaff.has(identity)) continue;
@@ -173,13 +205,13 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     return Array.from(map.entries())
       .map(([name, counts]) => ({ name, ...counts }))
       .sort((a, b) => b.total - a.total);
-  }, [todayRecords, records, staff, cfgDeptNames]);
+  }, [records, staff, cfgGroupNames, isStudent]);
 
   const hasDeptData = deptStats.length > 0;
 
   // Determine what to show in the donut
   const { donutData, legendItems, centerValue, centerLabel } = useMemo(() => {
-    if (!hasDeptData || selectedDept === null) {
+    if (!hasDeptData || selectedGroup === null) {
       if (hasDeptData) {
         return {
           donutData: deptStats.map((d, i) => ({
@@ -199,7 +231,7 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
             sub: `${d.present + d.late} present${d.late ? ` (${d.late} late)` : ""} · ${d.absent} absent`,
           })),
           centerValue: String(deptStats.length),
-          centerLabel: "Departments",
+          centerLabel: isStudent ? "Groups" : groupPlural,
         };
       }
 
@@ -227,13 +259,13 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     }
 
     // Single department view
-    const dept = deptStats.find((d) => d.name === selectedDept);
+    const dept = deptStats.find((d) => d.name === selectedGroup);
     if (!dept) {
       return {
         donutData: [],
         legendItems: [],
         centerValue: "0",
-        centerLabel: selectedDept,
+        centerLabel: selectedGroup,
       };
     }
 
@@ -261,7 +293,17 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
       centerValue: String(dept.present),
       centerLabel: "Present",
     };
-  }, [hasDeptData, selectedDept, deptStats, items, presentToday, totalStaff, staff]);
+  }, [
+    hasDeptData,
+    selectedGroup,
+    deptStats,
+    items,
+    presentToday,
+    totalStaff,
+    staff,
+    isStudent,
+    groupPlural,
+  ]);
 
   // SVG Donut Generator
   const svgDonut = useMemo(() => {
@@ -380,21 +422,21 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
               fontFamily: "'DM Sans', sans-serif",
             }}
           >
-            Filter by Department
+            Filter by {isStudent ? `${groupLabel} / ${subgroupLabel}` : groupLabel}
           </div>
 
-          {/* All Departments */}
+          {/* All groups */}
           <div
             onClick={() => {
-              setSelectedDept(null);
+              setSelectedGroup(null);
               setMenuOpen(false);
             }}
             style={{
               padding: "10px 14px",
               fontSize: 12.5,
-              fontWeight: selectedDept === null ? 700 : 500,
-              color: selectedDept === null ? T.teal700 : T.head,
-              background: selectedDept === null ? T.teal50 : "transparent",
+              fontWeight: selectedGroup === null ? 700 : 500,
+              color: selectedGroup === null ? T.teal700 : T.head,
+              background: selectedGroup === null ? T.teal50 : "transparent",
               cursor: "pointer",
               borderTop: `1px solid ${T.border}`,
               fontFamily: "'DM Sans', sans-serif",
@@ -404,33 +446,33 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
               gap: 8,
             }}
             onMouseEnter={(e) => {
-              if (selectedDept !== null)
+              if (selectedGroup !== null)
                 e.currentTarget.style.background = T.slate50;
             }}
             onMouseLeave={(e) => {
-              if (selectedDept !== null)
+              if (selectedGroup !== null)
                 e.currentTarget.style.background = "transparent";
             }}
           >
             <Building2 size={13} />
-            All Departments
+            All {isStudent ? `${groupPlural} / ${subgroupPlural}` : groupPlural}
           </div>
 
-          {/* Individual departments */}
+          {/* Individual groups */}
           {deptStats.map((dept, i) => (
             <div
               key={dept.name}
               onClick={() => {
-                setSelectedDept(dept.name);
+                setSelectedGroup(dept.name);
                 setMenuOpen(false);
               }}
               style={{
                 padding: "10px 14px",
                 fontSize: 12.5,
-                fontWeight: selectedDept === dept.name ? 700 : 500,
-                color: selectedDept === dept.name ? T.teal700 : T.head,
+                fontWeight: selectedGroup === dept.name ? 700 : 500,
+                color: selectedGroup === dept.name ? T.teal700 : T.head,
                 background:
-                  selectedDept === dept.name ? T.teal50 : "transparent",
+                  selectedGroup === dept.name ? T.teal50 : "transparent",
                 cursor: "pointer",
                 borderTop: `1px solid ${T.border}`,
                 fontFamily: "'DM Sans', sans-serif",
@@ -441,11 +483,11 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
                 transition: "background 0.15s",
               }}
               onMouseEnter={(e) => {
-                if (selectedDept !== dept.name)
+                if (selectedGroup !== dept.name)
                   e.currentTarget.style.background = T.slate50;
               }}
               onMouseLeave={(e) => {
-                if (selectedDept !== dept.name)
+                if (selectedGroup !== dept.name)
                   e.currentTarget.style.background = "transparent";
               }}
             >
@@ -504,8 +546,8 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     </div>
   );
 
-  // Active filter chip (shown when a department is selected)
-  const filterChip = selectedDept ? (
+  // Active filter chip (shown when a group is selected)
+  const filterChip = selectedGroup ? (
     <div
       style={{
         display: "inline-flex",
@@ -523,9 +565,9 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
       }}
     >
       <Users size={11} />
-      {selectedDept}
+      {selectedGroup}
       <span
-        onClick={() => setSelectedDept(null)}
+        onClick={() => setSelectedGroup(null)}
         style={{
           cursor: "pointer",
           marginLeft: 2,
@@ -542,9 +584,9 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
     </div>
   ) : null;
 
-  const cardTitle = selectedDept
-    ? `${selectedDept}`
-    : "Department Attendance";
+  const cardTitle = selectedGroup
+    ? selectedGroup
+    : `${groupLabel}${isStudent ? ` / ${subgroupLabel}` : ""} Attendance`;
 
   return (
     <DashboardCard title={cardTitle} height="100%" action={menuAction}>
@@ -674,8 +716,8 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
             <div
               key={item.name}
               onClick={() => {
-                if (!selectedDept && hasDeptData) {
-                  setSelectedDept(item.name);
+                if (!selectedGroup && hasDeptData) {
+                  setSelectedGroup(item.name);
                 }
               }}
               style={{
@@ -687,11 +729,11 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
                 borderRadius: 10,
                 border: `1px solid ${T.border}`,
                 cursor:
-                  !selectedDept && hasDeptData ? "pointer" : "default",
+                  !selectedGroup && hasDeptData ? "pointer" : "default",
                 transition: "all 0.2s ease",
               }}
               onMouseEnter={(e) => {
-                if (!selectedDept && hasDeptData) {
+                if (!selectedGroup && hasDeptData) {
                   e.currentTarget.style.background = `${item.color}10`;
                   e.currentTarget.style.borderColor = `${item.color}40`;
                   e.currentTarget.style.transform = "translateX(4px)";

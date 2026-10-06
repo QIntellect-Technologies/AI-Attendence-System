@@ -1303,6 +1303,20 @@ export interface StaffPageParams extends StaffListParams {
   sortDir?: "asc" | "desc";
 }
 
+function appendPeopleTypeQuery(
+  query: URLSearchParams,
+  params: StaffListParams,
+) {
+  const peopleType =
+    params.peopleType ??
+    params.people_type ??
+    params.personType ??
+    params.person_type;
+  if (peopleType && String(peopleType).trim()) {
+    query.set("people_type", String(peopleType).trim());
+  }
+}
+
 export async function listStaffPage(
   params: StaffPageParams,
 ): Promise<StaffPageResponse> {
@@ -1324,14 +1338,7 @@ export async function listStaffPage(
   if (params.sortBy) qs.set("sortBy", params.sortBy);
   if (params.sortDir) qs.set("sortDir", params.sortDir);
 
-  const peopleType =
-    params.peopleType ??
-    params.people_type ??
-    params.personType ??
-    params.person_type;
-  if (peopleType && String(peopleType).trim()) {
-    qs.set("people_type", String(peopleType).trim());
-  }
+  appendPeopleTypeQuery(qs, params);
 
   if (params.role && String(params.role).trim()) {
     qs.set("role", String(params.role).trim());
@@ -1378,6 +1385,7 @@ export async function listStaffRecords(params?: StaffListParams) {
   const qs = new URLSearchParams();
 
   if (params?.role) qs.set("role", params.role);
+  appendPeopleTypeQuery(qs, params ?? {});
 
   if (
     params?.organizationId !== undefined &&

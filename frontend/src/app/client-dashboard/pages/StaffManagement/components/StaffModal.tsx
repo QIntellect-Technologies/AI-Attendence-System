@@ -4307,7 +4307,6 @@ export const StaffModal: FC<{
                       value: "inactive",
                       label: peopleModel.statusLabels.inactive,
                     },
-                    { value: "pending", label: peopleModel.statusLabels.pending },
                   ]}
                   ariaLabel="Select status"
                   width="100%"

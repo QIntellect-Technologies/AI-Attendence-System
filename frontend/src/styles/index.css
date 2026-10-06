@@ -62,6 +62,10 @@
   min-width: 1120px;
 }
 
+.staff-directory-table-row:not(.staff-directory-table-row-selected):hover {
+  background: #f8fafc !important;
+}
+
 .dynamic-filter-toolbar__mobile {
   display: none;
 }

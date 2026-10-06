@@ -49,6 +49,17 @@ def test_scheduled_day_rate_and_missing_workday_absence():
     assert result.net_pay == 21_000
 
 
+def test_month_working_dates_reuse_payroll_calendar_rules():
+    working_dates = payroll_engine.scheduled_work_dates_for_month(
+        '2024-02',
+        _policy(),
+    )
+
+    assert len(working_dates) == 24
+    assert '2024-02-02' not in working_dates
+    assert all(date.fromisoformat(day).weekday() != 6 for day in working_dates)
+
+
 def test_weekly_off_day_and_holiday_are_not_absences():
     result = _breakdown(
         attendance_rows=[

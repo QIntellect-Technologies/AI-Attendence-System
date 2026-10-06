@@ -25,10 +25,10 @@ import {
   activeModulesFromConfig,
   isDashboardModuleVisible,
 } from "../../utils/moduleAccess";
+import { resolveApiBranchId } from "../../utils/tenantScope";
 import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
 import type { DashboardLiveLogItem } from "../../hooks/useDashboardOverviewData";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
-import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
 import useBranchAttendanceAnalytics from "../../hooks/useBranchAttendanceAnalytics";
 import usePaidPayrollTrends from "../../hooks/usePaidPayrollTrends";
 import { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
@@ -99,7 +99,12 @@ const equalSummaryWidgetGrid = (minWidth = 300): React.CSSProperties => ({
 });
 
 const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
-  const { cfg, visibleBranches } = useOrg();
+  const { cfg, visibleBranches, organizationId } = useOrg();
+  const liveLogBackendBranchId = resolveApiBranchId(
+    organizationId,
+    branchId,
+    cfg.branches,
+  );
   const masterData = useOrgMasterData();
   const { user } = useAuth();
   const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
@@ -211,22 +216,46 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
   const presentCardRef = useRef<HTMLDivElement>(null);
   const absentCardRef = useRef<HTMLDivElement>(null);
   const [fetchedLogs, setFetchedLogs] = useState<any[]>([]);
-  const [allStaff, setAllStaff] = useState<any[]>([]);
 
   const dateFilter = useDateFilter("daily");
 
   useEffect(() => {
     if (!showAttendanceModule) return;
-    const fetchRealData = () => {
-      getAttendanceLogs(500).then(setFetchedLogs).catch(() => { });
-      if (user?.org_id || user?.organization_id) {
-        listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number }).then(setAllStaff).catch(() => { });
-      }
+    let active = true;
+    setFetchedLogs([]);
+    if (!liveLogBackendBranchId) {
+      setFetchedLogs([]);
+      return () => {
+        active = false;
+      };
+    }
+    const fetchLogs = () => {
+      getAttendanceLogs({
+        limit: 2000,
+        backendBranchId: liveLogBackendBranchId,
+        peopleType: effectivePeopleType,
+        start: dateFilter.range.startDate,
+        end: dateFilter.range.endDate,
+      })
+        .then((logs) => {
+          if (active) setFetchedLogs(logs);
+        })
+        .catch(() => {});
     };
-    fetchRealData();
-    const interval = setInterval(fetchRealData, 10000);
-    return () => clearInterval(interval);
-  }, [showAttendanceModule, user?.org_id, user?.organization_id]);
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 10000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [
+    branchId,
+    effectivePeopleType,
+    liveLogBackendBranchId,
+    showAttendanceModule,
+    dateFilter.range.startDate,
+    dateFilter.range.endDate,
+  ]);
 
   // ── All configured department names (source of truth) ─────────────────────
   const cfgDeptNames = useMemo<string[]>(() => {
@@ -298,16 +327,8 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
     }));
   }, [filteredLogs]);
 
-  // Branch-scoped staff for the department allocation chart. `allStaff` is
-  // fetched org-wide, so narrow it to this branch when records carry a branch id.
-  const branchStaff = useMemo(
-    () =>
-      allStaff.filter((s) => {
-        const sid = s.branch_id ?? s.branchId;
-        return sid === undefined || sid === null || String(sid) === String(branchId);
-      }),
-    [allStaff, branchId],
-  );
+  // The analytics hook owns the branch and people-type scoped roster fetch.
+  const branchStaff = analytics.staff ?? [];
 
   const deptAbsentRows = useMemo<KpiDeptRow[]>(() => {
     const presentIds = new Set(
@@ -318,8 +339,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
         })
         .map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
     );
-    const activeStaffList = branchStaff.length > 0 ? branchStaff : allStaff;
-    const absentStaff = activeStaffList.filter((s) => !presentIds.has(String(s.id)));
+    const absentStaff = branchStaff.filter((s) => !presentIds.has(String(s.id)));
     const deptCounts = new Map<string, number>();
     absentStaff.forEach((s) => {
       const dept = s.department_name || s.department || "General";
@@ -333,12 +353,22 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       subtitle: `${count} staff`,
       color: DEPT_COLORS[i % DEPT_COLORS.length],
     }));
-  }, [filteredLogs, branchStaff, allStaff]);
+  }, [filteredLogs, branchStaff]);
 
   const effectiveLiveLog = useMemo(() => {
     if (!filteredLogs || filteredLogs.length === 0) return [];
 
-    const sorted = [...filteredLogs].sort((a: any, b: any) => {
+    const presentLogs = filteredLogs.filter((log) =>
+      [
+        "present",
+        "late",
+        "on_time",
+        "checked_in",
+        "checked_out",
+        "half_day",
+      ].includes(String(log.status || "").toLowerCase()),
+    );
+    const sorted = [...presentLogs].sort((a: any, b: any) => {
       const timeA = new Date(a.time || a.timestamp || a.date || a.created_at || 0).getTime();
       const timeB = new Date(b.time || b.timestamp || b.date || b.created_at || 0).getTime();
       if (timeA && timeB) return timeB - timeA;
@@ -359,7 +389,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       }
     }
 
-    return unique.slice(0, 5).map((log: any, index: number) => {
+    return unique.map((log: any, index: number) => {
       const rawStatus = (log.status || log.arrival_status || "present").toString().toLowerCase();
       let status: "Present" | "Late" | "Absent" = "Present";
       if (rawStatus.includes("absent")) status = "Absent";
@@ -396,7 +426,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       presentLogs.map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
     );
     const presentToday = uniquePresentIds.size;
-    const totalStaff = branchStaff.length > 0 ? branchStaff.length : (allStaff.length > 0 ? allStaff.length : (data.stats.totalStaff > 0 ? data.stats.totalStaff : Math.max(filteredLogs.length, 8)));
+    const totalStaff = analytics.staff?.length ?? data.stats.totalStaff;
     const absentToday = Math.max(0, totalStaff - presentToday);
     const avgAttendance = totalStaff > 0 ? Math.round((presentToday / totalStaff) * 100) : 0;
     const lateToday = presentLogs.filter((l) => (l.status || "").toLowerCase().includes("late")).length;
@@ -408,7 +438,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       avgAttendance,
       lateToday,
     };
-  }, [filteredLogs, branchStaff, allStaff, data.stats]);
+  }, [filteredLogs, analytics.staff, data.stats]);
 
   const realTimeTodayStatus = useMemo(() => [
     { name: "Present" as const, value: realTimeStats.presentToday },
@@ -427,13 +457,20 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
         payrollTrend.refresh(),
       ];
       if (showAttendanceModule) {
-        promises.push(getAttendanceLogs(500).then(setFetchedLogs).catch(() => {}));
-        if (user?.org_id || user?.organization_id) {
+        if (liveLogBackendBranchId) {
           promises.push(
-            listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number })
-              .then(setAllStaff)
-              .catch(() => {})
+            getAttendanceLogs({
+              limit: 2000,
+              backendBranchId: liveLogBackendBranchId,
+              peopleType: effectivePeopleType,
+              start: dateFilter.range.startDate,
+              end: dateFilter.range.endDate,
+            })
+              .then(setFetchedLogs)
+              .catch(() => {}),
           );
+        } else {
+          setFetchedLogs([]);
         }
       }
       await Promise.all(promises);
@@ -602,6 +639,12 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
                   data={realTimeTodayStatus}
                   presentToday={realTimeStats.presentToday}
                   totalStaff={realTimeStats.totalStaff}
+                  peopleType={effectivePeopleType}
+                  isStudent={peopleModel.isStudent}
+                  groupLabel={peopleModel.groupLabel}
+                  groupPlural={peopleModel.groupPlural}
+                  subgroupLabel={peopleModel.subgroupLabel}
+                  subgroupPlural={peopleModel.subgroupPlural}
                   staff={analytics.staff}
                   records={analytics.todayRecords}
                 />

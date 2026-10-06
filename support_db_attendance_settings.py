@@ -1054,26 +1054,30 @@ def list_designations(org_id: str, department_id: str, *, include_inactive: bool
     anymore. department_id is now required, matching classes/sections:
     a designation is a child row of its department, not a shared, reusable
     catalog entry assignable to many departments."""
-    sb = get_supabase()
-    department = (
-        sb.table("departments")
+    department = _execute_supabase("list_designations.department", lambda: (
+        get_supabase()
+        .table("departments")
         .select("id,org_id")
         .eq("id", str(department_id))
         .eq("org_id", str(org_id))
         .limit(1)
-        .execute()
-    )
+    ))
     if not department.data:
         raise ValueError(f"Department {department_id!r} not found for this organization")
-    query = (
-        sb.table("designations")
-        .select("*")
-        .eq("org_id", str(org_id))
-        .eq("department_id", str(department_id))
-    )
-    if not include_inactive:
-        query = query.eq("status", "active")
-    return query.order("name").execute().data or []
+
+    def build():
+        query = (
+            get_supabase()
+            .table("designations")
+            .select("*")
+            .eq("org_id", str(org_id))
+            .eq("department_id", str(department_id))
+        )
+        if not include_inactive:
+            query = query.eq("status", "active")
+        return query.order("name")
+
+    return _execute_supabase("list_designations", build).data or []
 
 
 def create_designation(org_id: str, department_id: str, payload: dict) -> dict:

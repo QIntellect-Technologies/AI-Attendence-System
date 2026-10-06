@@ -912,11 +912,16 @@ class CameraStreamReader:
                                                     f"Supabase attendance written for '{name}'"
                                                 )
                                         elif not db.is_user_present_today(matched_id):
-                                            db.log_attendance(matched_id, name, float(best_similarity), f'stream_{self.camera_id}')
-                                            logger.info(
-                                                f"[_ai_loop - Stream {self.camera_id} - Track {tid}] "
-                                                f"DB Attendance written for '{name}'"
-                                            )
+                                            if db.log_attendance(
+                                                matched_id,
+                                                name,
+                                                float(best_similarity),
+                                                f'stream_{self.camera_id}',
+                                            ):
+                                                logger.info(
+                                                    f"[_ai_loop - Stream {self.camera_id} - Track {tid}] "
+                                                    f"DB Attendance written for '{name}'"
+                                                )
                                     except Exception as attendance_error:
                                         logger.error(
                                             f"[_ai_loop - Stream {self.camera_id} - Track {tid}] "
@@ -1749,11 +1754,18 @@ def api_mark_user_absent(user_id):
         if not target or not _dashboard_target_org_matches(g.dashboard_user, target.get('organization_id')):
             return jsonify({'error': 'User not found'}), 404
 
+        from support_db_time_utils import ensure_attendance_on_or_after_join_date
+        ensure_attendance_on_or_after_join_date(
+            target.get('join_date'),
+            datetime.now(timezone.utc).date(),
+        )
         success = db.mark_user_absent_today(user_id)
         if success:
             return jsonify({'success': True, 'message': f'User ID {user_id} marked absent for today'}), 200
         else:
             return jsonify({'error': 'Failed to mark user absent'}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"API mark absent error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1767,11 +1779,18 @@ def api_mark_user_present(user_id):
         if not target or not _dashboard_target_org_matches(g.dashboard_user, target.get('organization_id')):
             return jsonify({'error': 'User not found'}), 404
 
+        from support_db_time_utils import ensure_attendance_on_or_after_join_date
+        ensure_attendance_on_or_after_join_date(
+            target.get('join_date'),
+            datetime.now(timezone.utc).date(),
+        )
         success = db.mark_user_present_today(user_id)
         if success:
             return jsonify({'success': True, 'message': f'User ID {user_id} marked present for today'}), 200
         else:
             return jsonify({'error': 'Failed to mark user present'}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"API mark present error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1860,6 +1879,7 @@ def get_stats():
             'today_attendance': stats.get('today_count', 0),
             'unique_users_today': stats.get('unique_users_today', 0),
             'present_today': stats.get('present_today', 0),
+            'late_today': stats.get('late_today', 0),
             'absent_today': stats.get('absent_today', 0),
             'total_logs': stats.get('total_records', stats.get('today_count', 0)),
             'avg_confidence': stats.get('avg_confidence', 0),
@@ -4179,6 +4199,8 @@ def api_attendance_today():
         raw_branch_id = dashboard_user.get('branch_id') or raw_branch_id
 
     date_value = request.args.get('date') or request.args.get('log_date')
+    start = request.args.get('start')
+    end = request.args.get('end')
     people_type = request.args.get('people_type') or request.args.get('peopleType')
     limit = request.args.get('limit', 500, type=int)
 
@@ -4191,8 +4213,6 @@ def api_attendance_today():
     # Local/cloud node attendance is written to Supabase. The React dashboard
     # must read the same source, otherwise manual/CCTV attendance sync succeeds
     # but the UI still shows absent.
-    start = request.args.get('start')
-    end = request.args.get('end')
     if not _positive_int(raw_org_id):
         try:
             return jsonify(support_cp_db.get_client_attendance_today(
@@ -4217,7 +4237,13 @@ def api_attendance_today():
 
     organization_id = _positive_int(raw_org_id)
     branch_id = _positive_int(raw_branch_id)
-    rows = db.get_attendance_today(organization_id=organization_id, branch_id=branch_id)
+    rows = db.get_attendance_today(
+        organization_id=organization_id,
+        branch_id=branch_id,
+        start=start,
+        end=end,
+        people_type=people_type,
+    )
     # Legacy numeric orgs never mint a scoped client_staff token (see
     # /api/staff's identical comment) so scope_ids is always None here —
     # filter kept only so this branch can't silently diverge if that
@@ -4269,8 +4295,18 @@ def api_mark_absent():
             logger.exception('Supabase mark absent failed')
             return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 500
 
-    db.mark_user_absent_today(int(user_id))
-    return jsonify({'success': True})
+    try:
+        target = db.get_user_by_id(int(user_id))
+        if target:
+            from support_db_time_utils import ensure_attendance_on_or_after_join_date
+            ensure_attendance_on_or_after_join_date(
+                target.get('join_date'),
+                datetime.now(timezone.utc).date(),
+            )
+        db.mark_user_absent_today(int(user_id))
+        return jsonify({'success': True})
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc), 'error': str(exc)}), 400
 
 
 @app.route('/api/attendance/<record_id>', methods=['PATCH'])
@@ -5556,6 +5592,33 @@ def api_get_payroll_policy():
     return jsonify({'success': True, 'policy': policy}), 200
 
 
+@app.route('/api/payroll/working-days', methods=['GET'])
+@require_client_dashboard_auth
+def api_get_payroll_working_days():
+    dashboard_user = g.dashboard_user
+    org_id = str(dashboard_user.get('org_id') or '').strip()
+    month_key = str(request.args.get('month') or '').strip()
+    if not org_id:
+        return jsonify({'success': False, 'error': 'organization_id is required'}), 400
+    if not re.fullmatch(r'\d{4}-\d{2}', month_key):
+        return jsonify({'success': False, 'error': 'month must be YYYY-MM'}), 400
+
+    branch_id = _clean_id_text(request.args.get('branch_id') or request.args.get('branchId')) or None
+    try:
+        policy = support_cp_db.get_payroll_policy_for_period(
+            org_id,
+            f'{month_key}-01',
+            branch_id=branch_id,
+        )
+        working_dates = payroll_engine.scheduled_work_dates_for_month(month_key, policy)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception:
+        logger.exception('Failed to load payroll working days for org=%s month=%s', org_id, month_key)
+        return jsonify({'success': False, 'error': 'Unable to load payroll working days'}), 500
+    return jsonify({'success': True, 'working_dates': working_dates}), 200
+
+
 @app.route('/api/payroll/policy', methods=['PUT'])
 @require_client_dashboard_auth
 def api_save_payroll_policy():
@@ -5925,7 +5988,7 @@ def legacy_video_feed(camera_id):
 
 
 @app.route('/api/branches/summary', methods=['GET'])
-@require_client_dashboard_auth
+@require_client_dashboard_admin
 def api_get_branch_summary():
     """Return backend-connected global branch comparison metrics.
 

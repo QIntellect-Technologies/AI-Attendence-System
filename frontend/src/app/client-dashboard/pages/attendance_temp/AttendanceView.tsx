@@ -40,6 +40,7 @@ import {
   type DepartmentRecord,
   type ShiftRecord,
 } from "../StaffManagement/api/attendanceSettingsApi";
+import { getPayrollWorkingDates } from "../Payroll/api/payrollApi";
 import { fetchLiveCameras } from "../LiveAttendance/api/liveStreamApi";
 import {
   getTodayAttendance as getTodayNodeAttendance,
@@ -211,6 +212,7 @@ type AttendanceStatusFilter = "all" | "present" | "absent" | "late" | "onTime";
 interface AttendanceStaff {
   id: string | number;
   name: string;
+  joinDate?: string;
   email?: string;
   phone?: string;
   branchId?: number;
@@ -708,6 +710,7 @@ type AttendanceCellContext = {
     notes?: string | null;
     isPresent?: boolean;
     isLate?: boolean;
+    eligible?: boolean;
   };
   getBranchName: (branchId: number) => string;
   branches: BranchLike[];
@@ -1098,6 +1101,7 @@ const normalizeStaffForAttendance = (
     shiftIdRef: member.shiftIdRef ?? member.shift_id_ref ?? null,
     checkInGraceOverride:
       member.checkInGraceOverride ?? member.check_in_grace_override ?? null,
+    joinDate: String(member.joinDate ?? member.join_date ?? "").slice(0, 10),
   };
 };
 
@@ -1493,6 +1497,12 @@ export default function AttendanceView() {
 
   const [apiStaff, setApiStaff] = useState<AttendanceStaff[]>([]);
   const [apiAttendance, setApiAttendance] = useState<ApiAttendance[]>([]);
+  const [payrollWorkingDatesByBranch, setPayrollWorkingDatesByBranch] =
+    useState<Map<number, Set<string>>>(() => new Map());
+  const [payrollCalendarLoading, setPayrollCalendarLoading] = useState(false);
+  const [payrollCalendarError, setPayrollCalendarError] = useState<
+    string | null
+  >(null);
   const [checkInGraceByStaffId, setCheckInGraceByStaffId] = useState<
     Map<string, number>
   >(() => new Map());
@@ -2298,6 +2308,100 @@ export default function AttendanceView() {
     });
   }, [activeBranchId, isGlobal, peopleType, scopedBranchId, staff]);
 
+  const payrollCalendarMonths = useMemo(
+    () => Array.from(new Set(filter.dates.map((date) => date.slice(0, 7)))),
+    [filter.dates],
+  );
+
+  useEffect(() => {
+    if (
+      !useRealApi ||
+      !organizationIdForApi ||
+      filter.mode === "daily"
+    ) {
+      setPayrollWorkingDatesByBranch(new Map());
+      setPayrollCalendarLoading(false);
+      setPayrollCalendarError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const branchIds = Array.from(
+      new Set(
+        scopedStaff.map((member) => {
+          const branchId = Number(member.branchId);
+          return Number.isFinite(branchId) && branchId > 0 ? branchId : 0;
+        }),
+      ),
+    );
+    setPayrollCalendarLoading(true);
+    setPayrollCalendarError(null);
+
+    void Promise.all(
+      branchIds.map(async (uiBranchId) => {
+        const branchId = uiBranchId
+          ? backendBranchIdForUi(branches, uiBranchId)
+          : null;
+        const monthResults = await Promise.all(
+          payrollCalendarMonths.map(async (month) => {
+            try {
+              return {
+                dates: await getPayrollWorkingDates(
+                  organizationIdForApi,
+                  month,
+                  branchId,
+                ),
+                error: null,
+              };
+            } catch (error) {
+              return {
+                dates: [],
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Unable to load payroll working days.",
+              };
+            }
+          }),
+        );
+        return {
+          uiBranchId,
+          workingDates: monthResults.flatMap((result) => result.dates),
+          error: monthResults.find((result) => result.error)?.error ?? null,
+        };
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const nextDates = new Map<number, Set<string>>();
+      const errors: string[] = [];
+      results.forEach(({ uiBranchId, workingDates, error }) => {
+        if (error) {
+          errors.push(error);
+        } else {
+          nextDates.set(uiBranchId, new Set(workingDates));
+        }
+      });
+      setPayrollWorkingDatesByBranch(nextDates);
+      setPayrollCalendarError(
+        errors.length
+          ? `Payroll working days could not be loaded: ${errors[0]}`
+          : null,
+      );
+      setPayrollCalendarLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    branches,
+    filter.mode,
+    organizationIdForApi,
+    payrollCalendarMonths,
+    scopedStaff,
+    useRealApi,
+  ]);
+
   useEffect(() => {
     if (!useRealApi || !organizationIdForApi || staff.length === 0) {
       setCheckInGraceByStaffId(new Map());
@@ -2408,6 +2512,10 @@ export default function AttendanceView() {
 
     const rows = scopedStaff
       .filter((member) => {
+        const joinDate = String(member.joinDate ?? "").slice(0, 10);
+        return !joinDate || filter.dates.some((date) => date >= joinDate);
+      })
+      .filter((member) => {
         if (!normalizedSearch) return true;
         const haystack = [
           member.name,
@@ -2430,8 +2538,36 @@ export default function AttendanceView() {
       )
       .map((staffMember) => {
         const staffBranchId = Number((staffMember as any).branchId);
+        const payrollBranchKey =
+          Number.isFinite(staffBranchId) && staffBranchId > 0
+            ? staffBranchId
+            : 0;
         const branchTimezone = getBranchTimezone(staffBranchId, branches);
+        const joinDate = String(staffMember.joinDate ?? "").slice(0, 10);
+        const payrollWorkingDates =
+          payrollWorkingDatesByBranch.get(payrollBranchKey);
         const dateRecords = filter.dates.map((date) => {
+          if (joinDate && date < joinDate) {
+            return {
+              id: undefined,
+              date,
+              status: "NOT_JOINED",
+              arrivalStatus: "",
+              checkInStatus: null,
+              inTime: "",
+              outTime: "",
+              workDuration: "",
+              notes: null,
+              captureChannel: null,
+              cameraId: null,
+              dayStatus: null,
+              payrollDecision: null,
+              isPresent: false,
+              isLate: false,
+              eligible: false,
+            };
+          }
+
           const realRecord = attendance.find((record) => {
             const sameName =
               record.user_name?.toLowerCase().trim() ===
@@ -2508,6 +2644,7 @@ export default function AttendanceView() {
               }),
               isPresent,
               isLate,
+              eligible: true,
             };
           }
 
@@ -2527,26 +2664,46 @@ export default function AttendanceView() {
             payrollDecision: null,
             isPresent: false,
             isLate: false,
+            eligible: true,
           };
         });
 
-        const presentDays = dateRecords.filter(
+        const eligibleRecords = dateRecords.filter((record) => record.eligible);
+        const summaryRecords =
+          filter.mode !== "daily" && useRealApi
+            ? payrollWorkingDates
+              ? eligibleRecords.filter((record) =>
+                  payrollWorkingDates.has(record.date),
+                )
+              : []
+            : eligibleRecords;
+        const totalDays =
+          filter.mode !== "daily" && useRealApi
+            ? payrollWorkingDates
+              ? Array.from(payrollWorkingDates).filter(
+                  (date) =>
+                    filter.dates.includes(date) &&
+                    (!joinDate || date >= joinDate),
+                ).length
+              : 0
+            : summaryRecords.length;
+        const presentDays = summaryRecords.filter(
           (record) => record.isPresent,
         ).length;
-        const lateDays = dateRecords.filter((record) => record.isLate).length;
-        const absentDays = dateRecords.length - presentDays;
+        const lateDays = summaryRecords.filter((record) => record.isLate).length;
+        const absentDays = Math.max(0, totalDays - presentDays);
 
         return {
           staff: staffMember,
           records: dateRecords,
           summary: {
-            totalDays: dateRecords.length,
+            totalDays,
             presentDays,
             lateDays,
             absentDays,
             attendanceRate:
-              dateRecords.length > 0
-                ? Math.round((presentDays / dateRecords.length) * 100)
+              totalDays > 0
+                ? Math.round((presentDays / totalDays) * 100)
                 : 0,
           },
         };
@@ -2581,6 +2738,8 @@ export default function AttendanceView() {
     activeStatus,
     filter.dates,
     filter.mode,
+    payrollWorkingDatesByBranch,
+    useRealApi,
   ]);
 
   const exportDateRange = useMemo(() => {
@@ -2712,7 +2871,10 @@ export default function AttendanceView() {
     filter.mode === "monthly" ||
     filter.mode === "custom";
 
-  const totalStaff = scopedStaff.length;
+  const totalStaff = scopedStaff.filter((member) => {
+    const joinDate = String(member.joinDate ?? "").slice(0, 10);
+    return !joinDate || filter.dates.some((date) => date >= joinDate);
+  }).length;
   const rawPresentDays = attendanceRows.reduce(
     (sum, row) => sum + row.summary.presentDays,
     0,
@@ -3350,6 +3512,14 @@ export default function AttendanceView() {
           role="alert"
         >
           {apiError}
+        </div>
+      )}
+      {payrollCalendarError && (
+        <div
+          className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          role="alert"
+        >
+          {payrollCalendarError}
         </div>
       )}
 
@@ -4059,9 +4229,34 @@ export default function AttendanceView() {
                 <tbody className="divide-y divide-[#f1f5f9]">
                   {paginatedAttendanceRows.map(
                     ({ staff: member, records, summary }) => {
+                      const memberJoinDate = String(member.joinDate ?? "").slice(
+                        0,
+                        10,
+                      );
+                      const memberBranchId = Number(member.branchId);
+                      const memberPayrollWorkingDates =
+                        payrollWorkingDatesByBranch.get(
+                          Number.isFinite(memberBranchId) && memberBranchId > 0
+                            ? memberBranchId
+                            : 0,
+                        );
+                      const leaveDateScope =
+                        filter.mode !== "daily" && useRealApi
+                          ? memberPayrollWorkingDates
+                            ? records
+                                .filter(
+                                  (record) =>
+                                    record.eligible &&
+                                    memberPayrollWorkingDates.has(record.date) &&
+                                    (!memberJoinDate ||
+                                      record.date >= memberJoinDate),
+                                )
+                                .map((record) => record.date)
+                            : []
+                          : records.map((record) => record.date);
                       const leaveDays = countApprovedLeaveDays(
                         member,
-                        records.map((record) => record.date),
+                        leaveDateScope,
                         leaveRecords,
                       );
                       const initial = member.name.charAt(0).toUpperCase();
@@ -4119,7 +4314,17 @@ export default function AttendanceView() {
                             {toYearNumber(exportDateRange.from)}
                           </td>
                           <td className="px-5 py-3.5 text-center text-[13px] font-bold text-gray-800">
-                            {summary.totalDays}
+                            {filter.mode !== "daily" &&
+                            useRealApi &&
+                            (payrollCalendarLoading ||
+                              !payrollWorkingDatesByBranch.has(
+                                Number.isFinite(Number(member.branchId)) &&
+                                  Number(member.branchId) > 0
+                                  ? Number(member.branchId)
+                                  : 0,
+                              ))
+                              ? "—"
+                              : summary.totalDays}
                           </td>
                           <td className="px-5 py-3.5 text-center">
                             <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">

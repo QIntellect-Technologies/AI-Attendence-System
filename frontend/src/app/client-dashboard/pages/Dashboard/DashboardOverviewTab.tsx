@@ -40,6 +40,7 @@ import {
   activeModulesFromConfig,
   isDashboardModuleVisible,
 } from "../../utils/moduleAccess";
+import { resolveApiBranchId } from "../../utils/tenantScope";
 import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
 import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
@@ -122,7 +123,7 @@ const equalSummaryWidgetGrid = (minWidth = 300): React.CSSProperties => ({
 
 const DashboardOverviewTab: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const { cfg } = useOrg();
+  const { cfg, organizationId } = useOrg();
   const masterData = useOrgMasterData();
   const { user } = useAuth();
 
@@ -134,6 +135,10 @@ const DashboardOverviewTab: React.FC = () => {
     | string
     | number
     | undefined;
+  const rosterBranchId = branch.isAllBranches ? undefined : selectedBranchId;
+  const liveLogBackendBranchId = branch.isAllBranches
+    ? undefined
+    : resolveApiBranchId(organizationId, selectedBranchId, cfg.branches);
 
   const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
     null,
@@ -245,7 +250,21 @@ const DashboardOverviewTab: React.FC = () => {
         payrollTrend.refresh(),
       ];
       if (showAttendanceModule) {
-        promises.push(getAttendanceLogs(500).then(setFetchedLogs).catch(() => {}));
+        if (branch.isAllBranches || liveLogBackendBranchId) {
+          promises.push(
+            getAttendanceLogs({
+              limit: 2000,
+              backendBranchId: liveLogBackendBranchId,
+              peopleType: effectivePeopleType,
+              start: dateFilter.range.startDate,
+              end: dateFilter.range.endDate,
+            })
+              .then(setFetchedLogs)
+              .catch(() => {}),
+          );
+        } else {
+          setFetchedLogs([]);
+        }
         if (user?.org_id || user?.organization_id) {
           promises.push(
             listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number })
@@ -280,16 +299,54 @@ const DashboardOverviewTab: React.FC = () => {
 
   useEffect(() => {
     if (!showAttendanceModule) return;
+    let active = true;
+    setFetchedLogs([]);
+    setAllStaff([]);
     const fetchRealData = () => {
-      getAttendanceLogs(500).then(setFetchedLogs).catch(() => { });
+      if (!branch.isAllBranches && !liveLogBackendBranchId) {
+        setFetchedLogs([]);
+        return;
+      }
+      getAttendanceLogs({
+        limit: 2000,
+        backendBranchId: liveLogBackendBranchId,
+        peopleType: effectivePeopleType,
+        start: dateFilter.range.startDate,
+        end: dateFilter.range.endDate,
+      })
+        .then((logs) => {
+          if (active) setFetchedLogs(logs);
+        })
+        .catch(() => {});
       if (user?.org_id || user?.organization_id) {
-        listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number }).then(setAllStaff).catch(() => { });
+        listStaffRecords({
+          organizationId: (user?.org_id || user?.organization_id) as string | number,
+          branchId: rosterBranchId,
+          peopleType: effectivePeopleType,
+        })
+          .then((staff) => {
+            if (active) setAllStaff(staff);
+          })
+          .catch(() => { });
       }
     };
     fetchRealData();
     const interval = setInterval(fetchRealData, 10000);
-    return () => clearInterval(interval);
-  }, [showAttendanceModule, user?.org_id, user?.organization_id]);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [
+    showAttendanceModule,
+    user?.org_id,
+    user?.organization_id,
+    effectivePeopleType,
+    rosterBranchId,
+    branch.isAllBranches,
+    liveLogBackendBranchId,
+    dateFilter.range.startDate,
+    dateFilter.range.endDate,
+  ]);
 
   // ── All configured department names (source of truth) ─────────────────────
   const cfgDeptNames = useMemo<string[]>(() => {
@@ -389,7 +446,17 @@ const DashboardOverviewTab: React.FC = () => {
   const effectiveLiveLog = useMemo(() => {
     if (!filteredLogs || filteredLogs.length === 0) return [];
 
-    const sorted = [...filteredLogs].sort((a: any, b: any) => {
+    const presentLogs = filteredLogs.filter((log) =>
+      [
+        "present",
+        "late",
+        "on_time",
+        "checked_in",
+        "checked_out",
+        "half_day",
+      ].includes(String(log.status || "").toLowerCase()),
+    );
+    const sorted = [...presentLogs].sort((a: any, b: any) => {
       const timeA = new Date(a.time || a.timestamp || a.date || a.created_at || 0).getTime();
       const timeB = new Date(b.time || b.timestamp || b.date || b.created_at || 0).getTime();
       if (timeA && timeB) return timeB - timeA;
@@ -410,7 +477,7 @@ const DashboardOverviewTab: React.FC = () => {
       }
     }
 
-    return unique.slice(0, 5).map((log: any, index: number) => {
+    return unique.map((log: any, index: number) => {
       const rawStatus = (log.status || log.arrival_status || "present").toString().toLowerCase();
       let status: "Present" | "Late" | "Absent" = "Present";
       if (rawStatus.includes("absent")) status = "Absent";
@@ -447,7 +514,7 @@ const DashboardOverviewTab: React.FC = () => {
       presentLogs.map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
     );
     const presentToday = uniquePresentIds.size;
-    const totalStaff = allStaff.length > 0 ? allStaff.length : (data.stats.totalStaff > 0 ? data.stats.totalStaff : Math.max(filteredLogs.length, 8));
+    const totalStaff = analytics.staff?.length ?? data.stats.totalStaff;
     const absentToday = Math.max(0, totalStaff - presentToday);
     const avgAttendance = totalStaff > 0 ? Math.round((presentToday / totalStaff) * 100) : 0;
     const lateToday = presentLogs.filter((l) => (l.status || "").toLowerCase().includes("late")).length;
@@ -459,7 +526,7 @@ const DashboardOverviewTab: React.FC = () => {
       avgAttendance,
       lateToday,
     };
-  }, [filteredLogs, allStaff, data.stats]);
+  }, [filteredLogs, analytics.staff, data.stats]);
 
   const realTimeTodayStatus = useMemo(() => [
     { name: "Present" as const, value: realTimeStats.presentToday },
@@ -673,6 +740,14 @@ const DashboardOverviewTab: React.FC = () => {
                   data={realTimeTodayStatus}
                   presentToday={realTimeStats.presentToday}
                   totalStaff={realTimeStats.totalStaff}
+                  peopleType={effectivePeopleType}
+                  isStudent={peopleModel.isStudent}
+                  groupLabel={peopleModel.groupLabel}
+                  groupPlural={peopleModel.groupPlural}
+                  subgroupLabel={peopleModel.subgroupLabel}
+                  subgroupPlural={peopleModel.subgroupPlural}
+                  staff={analytics.staff}
+                  records={analytics.todayRecords}
                 />
               )}
             </Suspense>

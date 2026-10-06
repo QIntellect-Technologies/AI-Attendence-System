@@ -417,6 +417,22 @@ def _scheduled_work_dates(period_start: date, period_end: date, policy: dict) ->
     return scheduled_dates
 
 
+def scheduled_work_dates_for_month(month_key: str, policy: dict) -> list[str]:
+    """Return the payroll-calendar working dates for one YYYY-MM month."""
+    try:
+        month_start = date.fromisoformat(f'{month_key}-01')
+    except (TypeError, ValueError) as exc:
+        raise ValueError('month must be YYYY-MM') from exc
+    if month_start.strftime('%Y-%m') != month_key:
+        raise ValueError('month must be YYYY-MM')
+    month_end = date(
+        month_start.year,
+        month_start.month,
+        monthrange(month_start.year, month_start.month)[1],
+    )
+    return sorted(_scheduled_work_dates(month_start, month_end, policy))
+
+
 def _per_day_rate(base_salary: float, policy: dict, period_start: date, period_end: date) -> float:
     month_start = period_start.replace(day=1)
     month_end = period_start.replace(day=monthrange(period_start.year, period_start.month)[1])

@@ -264,7 +264,7 @@ export const BranchDefaultShiftCard: FC<{
     shifts: ShiftRecord[];
     isLoadingShifts: boolean;
     /** Called after a successful force-override so the parent can refresh the staff list. */
-    onForceOverrideComplete?: () => void;
+    onForceOverrideComplete?: () => void | Promise<void>;
 }> = ({
     apiBranchId,
     organizationId,
@@ -365,7 +365,7 @@ export const BranchDefaultShiftCard: FC<{
                 if (forceOverride) {
                     toastSuccess(`Default shift saved and applied to all ${personPlural}.`);
                     // Notify parent to refresh the staff list so shifts show updated values
-                    onForceOverrideComplete?.();
+                    await onForceOverrideComplete?.();
                 } else {
                     toastSuccess(`Default shift saved for ${personPlural}.`);
                 }

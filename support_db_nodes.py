@@ -1150,7 +1150,7 @@ def push_node_attendance(node_api_key: str, payload: dict) -> dict:
 
         staff_result = (
             sb.table('client_staff')
-            .select('id, name, is_archived, status, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override, person_code')
+            .select('id, name, is_archived, status, join_date, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override, person_code')
             .eq('org_id', str(node['org_id']))
             .eq('branch_id', str(node['branch_id']))
             .eq('people_type', people_type)
@@ -1181,7 +1181,7 @@ def push_node_attendance(node_api_key: str, payload: dict) -> dict:
         if staff is None and person_code.isdigit():
             same_scope_result = (
                 sb.table('client_staff')
-                .select('id, name, is_archived, status, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override, person_code')
+                .select('id, name, is_archived, status, join_date, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override, person_code')
                 .eq('org_id', str(node['org_id']))
                 .eq('branch_id', str(node['branch_id']))
                 .eq('people_type', people_type)
@@ -1242,6 +1242,19 @@ def push_node_attendance(node_api_key: str, payload: dict) -> dict:
             event_time_utc=event_dt,
         )
         branch_zone = _get_branch_timezone(sb, str(node['org_id']), str(node['branch_id']))
+        from support_db_time_utils import ensure_attendance_on_or_after_join_date
+        try:
+            ensure_attendance_on_or_after_join_date(
+                staff.get('join_date'),
+                event_dt.astimezone(branch_zone).date(),
+            )
+        except ValueError as exc:
+            results.append({
+                'local_event_id': local_event_id,
+                'status': 'skipped',
+                'reason': str(exc),
+            })
+            continue
 
         # Same UTC day-window convention _dashboard_day_window_utc already
         # uses elsewhere — kept consistent rather than introducing a second
@@ -1909,16 +1922,26 @@ def record_cloud_camera_attendance(
 
     staff_result = (
         sb.table('client_staff')
-        .select('id, name, people_type, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override')
+        .select('id, name, people_type, join_date, shift_id_ref, department_id, check_in_grace_override, check_out_grace_override, is_archived, status')
         .eq('id', staff_key)
         .eq('org_id', org_key)
         .limit(1)
         .execute()
     )
-    staff_row = staff_result.data[0] if staff_result.data else {'id': staff_key}
+    if not staff_result.data:
+        raise ValueError('Staff member not found')
+    staff_row = staff_result.data[0]
+    if staff_row.get('is_archived') or str(staff_row.get('status') or 'active') == 'inactive':
+        raise ValueError('This account is archived or inactive.')
     people_type = staff_row.get('people_type') or 'staff'
 
     event_dt = datetime.now(timezone.utc)
+    branch_zone = _get_branch_timezone(sb, org_key, str(branch_id)) if branch_id else ZoneInfo('UTC')
+    from support_db_time_utils import ensure_attendance_on_or_after_join_date
+    ensure_attendance_on_or_after_join_date(
+        staff_row.get('join_date'),
+        event_dt.astimezone(branch_zone).date(),
+    )
     window = resolve_timing_source(
         org_id=org_key,
         branch_id=str(branch_id) if branch_id else None,
@@ -1926,8 +1949,6 @@ def record_cloud_camera_attendance(
         people_type=people_type,
         event_time_utc=event_dt,
     )
-    branch_zone = _get_branch_timezone(sb, org_key, str(branch_id)) if branch_id else ZoneInfo('UTC')
-
     existing_result = (
         sb.table('attendance')
         .select('id, check_out_timestamp, notes')

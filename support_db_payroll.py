@@ -5234,10 +5234,17 @@ def get_client_branch_summary(org_id: str, people_type: str | None = None) -> di
         enrolled = sum(1 for item in staff_rows if item.get('is_face_verified'))
         payroll = sum(float(item.get('salary') or 0) for item in staff_rows)
         try:
-            stats = get_client_attendance_statistics(str(org_id), branch_id=backend_id)
+            stats = get_client_attendance_statistics(
+                str(org_id),
+                branch_id=backend_id,
+                people_type=clean_people_type,
+            )
         except Exception:
             stats = {}
-        present = int(stats.get('present_today') or stats.get('unique_users_today') or 0)
+        present = min(
+            staff_count,
+            max(0, int(stats.get('present_today') or stats.get('unique_users_today') or 0)),
+        )
         absent = max(0, staff_count - present)
         attendance_rate = round((present / staff_count) * 100) if staff_count else 0
         rows.append({

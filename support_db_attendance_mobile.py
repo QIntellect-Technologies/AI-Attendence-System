@@ -845,7 +845,7 @@ def _resolve_client_staff_attendance_window(
         .select(
             'id, name, people_type, shift_id_ref, department_id, '
             'check_in_grace_override, check_out_grace_override, '
-            'is_archived, status, office_bssid'
+            'is_archived, status, office_bssid, join_date'
         )
         .eq('id', staff_key)
         .eq('org_id', org_key)
@@ -858,6 +858,12 @@ def _resolve_client_staff_attendance_window(
     if staff_row.get('is_archived') or str(staff_row.get('status') or 'active') == 'inactive':
         raise ValueError('This account is archived or inactive.')
     people_type = staff_row.get('people_type') or 'staff'
+    branch_zone = _get_branch_timezone(sb, org_key, str(branch_id)) if branch_id else ZoneInfo('UTC')
+    from support_db_time_utils import ensure_attendance_on_or_after_join_date
+    ensure_attendance_on_or_after_join_date(
+        staff_row.get('join_date'),
+        event_dt.astimezone(branch_zone).date(),
+    )
 
     window = resolve_timing_source(
         org_id=org_key,
@@ -866,7 +872,6 @@ def _resolve_client_staff_attendance_window(
         people_type=people_type,
         event_time_utc=event_dt,
     )
-    branch_zone = _get_branch_timezone(sb, org_key, str(branch_id)) if branch_id else ZoneInfo('UTC')
     return staff_row, window, branch_zone
 
 def _attendance_day_window_utc(event_dt: 'datetime', branch_zone: ZoneInfo) -> tuple[str, str, str]:

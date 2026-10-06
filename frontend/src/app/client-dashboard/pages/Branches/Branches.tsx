@@ -14,27 +14,33 @@ import {
   AlertCircle,
   Building2,
   CalendarClock,
-  CheckCircle2,
   DollarSign,
-  Download,
   MapPin,
   RefreshCcw,
   Users,
+  type LucideIcon,
 } from "lucide-react";
-import { isModuleEnabled } from "../../utils/moduleAccess";
 import { T } from "../../components/ui/theme";
+import OverviewStatCard from "../../components/dashboard/overview/StatCard";
 import { useAuth } from "../../contexts/useAuth";
 import { useOrg } from "../../contexts/OrgConfigContext";
+import { ModuleShell } from "../engine/ModuleShell";
 import BranchCompareChart from "./BranchCompareChart";
+import DateFilterBar from "../../components/ui/DateFilterBar";
 import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
 import RefreshButton from "../../components/ui/RefreshButton";
+import { useDateFilter } from "../../hooks/useDateFilter";
+import {
+  getAttendanceToday,
+  type TodayAttendanceRecord,
+} from "../attendance_temp/api/attendanceApi";
+import { getPaidPayrollMonthlyTrends } from "../Payroll/api/payrollApi";
 import {
   fetchBranchSummary,
   type BranchSummaryResponse,
   type BranchSummaryRow,
 } from "./api/branchApi";
-import { downloadClientNodeInstaller } from "./api/clientNodeInstallerApi";
 import { resolveTemplateRenderingModel } from "../../utils/templateColumns";
 import {
   peopleLabelForType,
@@ -46,8 +52,6 @@ type AuthUserLike = {
   id?: number | string;
   organization_id?: number | string | null;
   organizationId?: number | string | null;
-  organizationStatus?: string | null;
-  organization_status?: string | null;
   allowedModules?: string[] | string | null;
   accessModules?: string[] | string | null;
   access_modules?: string[] | string | null;
@@ -62,6 +66,21 @@ type BranchRowWithAliases = BranchSummaryRow & {
 };
 
 type TemplateModel = ReturnType<typeof resolveTemplateRenderingModel>;
+
+function monthKeysBetween(startDate: string, endDate: string): string[] {
+  const [startYear, startMonth] = startDate.split("-").map(Number);
+  const [endYear, endMonth] = endDate.split("-").map(Number);
+  const start = startYear * 12 + startMonth - 1;
+  const end = endYear * 12 + endMonth - 1;
+  const months: string[] = [];
+
+  for (let month = start; month <= end; month += 1) {
+    const year = Math.floor(month / 12);
+    const monthOfYear = (month % 12) + 1;
+    months.push(`${year}-${String(monthOfYear).padStart(2, "0")}`);
+  }
+  return months;
+}
 
 function toPositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
@@ -104,24 +123,6 @@ function hasModule(modules: string[], key: string): boolean {
   );
 }
 
-function getBackendBranchId(branch: BranchSummaryRow): string {
-  const row = branch as BranchRowWithAliases & {
-    backendBranchId?: string | null;
-    backend_branch_id?: string | null;
-    branchUuid?: string | null;
-    branch_uuid?: string | null;
-  };
-  return toTenantId(
-    row.backendBranchId ??
-      row.backend_branch_id ??
-      row.branchUuid ??
-      row.branch_uuid ??
-      row.branch_id ??
-      row.branchId ??
-      row.id,
-  );
-}
-
 function getBranchLocation(branch: BranchSummaryRow): string {
   const row = branch as BranchRowWithAliases;
   return String(row.branchCity ?? row.city ?? "");
@@ -140,6 +141,30 @@ function getBranchDashboardPath(branch: BranchSummaryRow): string | null {
 function getBranchDisplayName(branch: BranchSummaryRow): string {
   const row = branch as BranchRowWithAliases;
   return String(row.branchName ?? row.name ?? "Branch");
+}
+
+function branchMetricKey(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function getBranchMetricKey(branch: BranchSummaryRow): string {
+  return branchMetricKey(
+    branch.backendBranchId ??
+      branch.backend_branch_id ??
+      branch.branchUuid ??
+      branch.branch_uuid ??
+      branch.branchId ??
+      branch.id,
+  );
+}
+
+function getAttendanceBranchMetricKey(record: TodayAttendanceRecord): string {
+  return branchMetricKey(
+    record.backendBranchId ??
+      record.backend_branch_id ??
+      record.branchId ??
+      record.branch_id,
+  );
 }
 
 function formatMoney(value: number): string {
@@ -282,9 +307,9 @@ function writeCachedBranchSummary(
 
 function statCard(
   label: string,
-  value: React.ReactNode,
+  value: string | number,
   sub: string,
-  Icon: React.ElementType,
+  Icon: LucideIcon,
   tone: "blue" | "green" | "amber" | "red" | "teal" = "teal",
 ): React.ReactNode {
   const tones = {
@@ -296,50 +321,14 @@ function statCard(
   }[tone];
 
   return (
-    <div
-      style={{
-        background: T.card,
-        border: `1px solid ${T.border}`,
-        borderRadius: 14,
-        padding: 18,
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        minHeight: 96,
-      }}
-    >
-      <div>
-        <div style={{ fontSize: 12, color: T.muted, fontWeight: 700 }}>
-          {label}
-        </div>
-        <div
-          style={{
-            fontSize: 26,
-            fontWeight: 900,
-            color: T.navy600,
-            marginTop: 6,
-          }}
-        >
-          {value}
-        </div>
-        <div style={{ fontSize: 12, color: tones.fg, marginTop: 4 }}>{sub}</div>
-      </div>
-
-      <div
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: "50%",
-          background: tones.bg,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-        }}
-      >
-        <Icon size={21} color={tones.fg} />
-      </div>
-    </div>
+    <OverviewStatCard
+      title={label}
+      value={value}
+      sub={sub}
+      icon={Icon}
+      iconBg={tones.bg}
+      iconColor={tones.fg}
+    />
   );
 }
 
@@ -395,7 +384,6 @@ const BranchesModule: React.FC = () => {
   const showPayroll =
     templateModel.features.payroll &&
     payrollPeopleTypes.includes(selectedPeopleType);
-  const showBiometrics = templateModel.features.media;
 
   const user = rawUser ?? null;
   const resolvedOrgId =
@@ -408,8 +396,188 @@ const BranchesModule: React.FC = () => {
   );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>("");
-  const [installerError, setInstallerError] = useState<string>("");
-  const [downloadingBranchId, setDownloadingBranchId] = useState<string>("");
+  const dateFilter = useDateFilter("monthly");
+  const [periodAttendance, setPeriodAttendance] = useState<{
+    totalDailyPresent: number;
+    dayCount: number;
+    branches: Map<string, { totalDailyPresent: number; totalDailyLate: number }>;
+  } | null>(null);
+  const [attendancePeriodError, setAttendancePeriodError] = useState("");
+  const [periodPayroll, setPeriodPayroll] = useState<{
+    total: number;
+    branches: Map<string, number>;
+  } | null>(null);
+  const [payrollPeriodError, setPayrollPeriodError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const { startDate, endDate } = dateFilter.range;
+
+    setPeriodAttendance(null);
+    setAttendancePeriodError("");
+    setPeriodPayroll(null);
+    setPayrollPeriodError("");
+    if (!resolvedOrgId) {
+      return () => {
+        active = false;
+      };
+    }
+
+    void getAttendanceToday({
+      start: startDate,
+      end: endDate,
+      peopleType: selectedPeopleType,
+      limit: 20000,
+    }).then(
+      (records) => {
+        if (!active) return;
+        if (records.length >= 20000) {
+          setAttendancePeriodError(
+            "Attendance results exceeded the supported range limit. Narrow the selected dates and try again.",
+          );
+          return;
+        }
+
+        const peopleByDay = new Map<string, Set<string>>();
+        const peopleByBranchAndDay = new Map<string, Set<string>>();
+        const latePeopleByBranchAndDay = new Map<string, Set<string>>();
+        for (const record of records) {
+          const day = record.logDate || String(record.timestamp ?? "").slice(0, 10);
+          const personId = record.userId ?? record.staffId;
+          if (!day || personId == null) continue;
+          const people = peopleByDay.get(day) ?? new Set<string>();
+          people.add(String(personId));
+          peopleByDay.set(day, people);
+
+          const branchKey = getAttendanceBranchMetricKey(record);
+          if (!branchKey) continue;
+          const branchDayKey = `${branchKey}\u001f${day}`;
+          const branchPeople = peopleByBranchAndDay.get(branchDayKey) ?? new Set<string>();
+          branchPeople.add(String(personId));
+          peopleByBranchAndDay.set(branchDayKey, branchPeople);
+
+          const isLate =
+            String(record.checkInStatus ?? record.check_in_status ?? "")
+              .toLowerCase() === "late" ||
+            String(record.dayStatus ?? record.day_status ?? "")
+              .toLowerCase() === "late" ||
+            String(record.status ?? "").toLowerCase().includes("late");
+          if (isLate) {
+            const latePeople =
+              latePeopleByBranchAndDay.get(branchDayKey) ?? new Set<string>();
+            latePeople.add(String(personId));
+            latePeopleByBranchAndDay.set(branchDayKey, latePeople);
+          }
+        }
+        const branchAttendance = new Map<
+          string,
+          { totalDailyPresent: number; totalDailyLate: number }
+        >();
+        for (const [branchDayKey, people] of peopleByBranchAndDay) {
+          const [branchKey] = branchDayKey.split("\u001f");
+          const metric = branchAttendance.get(branchKey) ?? {
+            totalDailyPresent: 0,
+            totalDailyLate: 0,
+          };
+          metric.totalDailyPresent += people.size;
+          metric.totalDailyLate +=
+            latePeopleByBranchAndDay.get(branchDayKey)?.size ?? 0;
+          branchAttendance.set(branchKey, metric);
+        }
+        setPeriodAttendance({
+          totalDailyPresent: Array.from(peopleByDay.values()).reduce(
+            (total, people) =>
+              total + Math.min(people.size, summary?.totals.staff ?? people.size),
+            0,
+          ),
+          dayCount: dateFilter.dates.length,
+          branches: branchAttendance,
+        });
+      },
+      (err: unknown) => {
+        if (!active) return;
+        setAttendancePeriodError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load attendance for the selected period.",
+        );
+      },
+    );
+
+    if (!showPayroll) {
+      return () => {
+        active = false;
+      };
+    }
+
+    if (!resolvedOrgId || Number.isFinite(Number(resolvedOrgId))) {
+      setPayrollPeriodError(
+        "Paid payroll history is unavailable for this organization.",
+      );
+      return () => {
+        active = false;
+      };
+    }
+
+    const months = monthKeysBetween(startDate, endDate);
+    const selectedMonths = new Set(months);
+    const monthChunks = Array.from(
+      { length: Math.ceil(months.length / 12) },
+      (_, index) => months.slice(index * 12, index * 12 + 12),
+    );
+
+    void Promise.all(
+      monthChunks.map((chunk) =>
+        getPaidPayrollMonthlyTrends({
+          organizationId: resolvedOrgId,
+          anchorMonth: chunk[chunk.length - 1],
+          peopleType: selectedPeopleType,
+        }),
+      ),
+    ).then(
+      (trends) => {
+        if (!active) return;
+        const branchPayroll = new Map<string, number>();
+        for (const trend of trends) {
+          for (const row of trend.rows) {
+            if (!selectedMonths.has(row.month)) continue;
+            const branchKey = branchMetricKey(row.branch_id);
+            if (!branchKey) continue;
+            branchPayroll.set(
+              branchKey,
+              (branchPayroll.get(branchKey) ?? 0) + (Number(row.payroll) || 0),
+            );
+          }
+        }
+        setPeriodPayroll({
+          total: Array.from(branchPayroll.values()).reduce(
+            (total, amount) => total + amount,
+            0,
+          ),
+          branches: branchPayroll,
+        });
+      },
+      (err: unknown) => {
+        if (!active) return;
+        setPayrollPeriodError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load paid payroll for the selected period.",
+        );
+      },
+    );
+
+    return () => {
+      active = false;
+    };
+  }, [
+    dateFilter.range,
+    dateFilter.dates.length,
+    selectedPeopleType,
+    resolvedOrgId,
+    summary?.totals.staff,
+    showPayroll,
+  ]);
 
   useEffect(() => {
     setSummary(readCachedBranchSummary(resolvedOrgId, selectedPeopleType));
@@ -453,61 +621,32 @@ const BranchesModule: React.FC = () => {
     return () => window.removeEventListener("orgDataChanged", handler);
   }, [load]);
 
-  const attendanceModuleEnabled = useMemo(
-    () => isModuleEnabled(cfg.modules, "attendance"),
-    [cfg.modules],
-  );
-
-  const organizationStatus = String(
-    user?.organizationStatus ?? user?.organization_status ?? "active",
-  ).toLowerCase();
-  const isLocalAttendance =
-    String(cfg.attendanceMode ?? cfg.attendance_mode ?? "")
-      .trim()
-      .toLowerCase() === "local";
-  const organizationAllowsInstaller = ["active", "grace_period"].includes(
-    organizationStatus,
-  );
-  const showInstallerAction = isLocalAttendance && organizationAllowsInstaller;
-  const installerDisabledReason = !isLocalAttendance
-    ? "Installer is available only for local attendance mode."
-    : !organizationAllowsInstaller
-      ? "Installer is blocked because organization access is not active."
-      : !attendanceModuleEnabled
-        ? "Attendance module is not active for this organization."
-        : "";
-  const installerEligible = showInstallerAction && attendanceModuleEnabled;
-
-  const handleDownloadInstaller = useCallback(
-    async (branch: BranchSummaryRow) => {
-      const backendBranchId = getBackendBranchId(branch);
-      if (!backendBranchId || !user?.id || !installerEligible) return;
-
-      setInstallerError("");
-      setDownloadingBranchId(backendBranchId);
-      try {
-        await downloadClientNodeInstaller({
-          branchId: backendBranchId,
-          userId: user.id,
-          nodeLabel: `${cfg.orgName || "QIntellect"} - ${getBranchDisplayName(branch)}`,
-          ttlDays: 7,
-          packageType: "exe",
-        });
-      } catch (err) {
-        setInstallerError(
-          err instanceof Error
-            ? err.message
-            : "Failed to download node installer.",
-        );
-      } finally {
-        setDownloadingBranchId("");
-      }
-    },
-    [cfg.orgName, installerEligible, user?.id],
-  );
-
   const branches = useMemo<BranchSummaryRow[]>(() => {
-    if (summary?.branches) return summary.branches;
+    if (summary?.branches) {
+      return summary.branches.map((branch) => {
+        const staffCount = Math.max(
+          0,
+          Number(branch.staffCount ?? branch.staff) || 0,
+        );
+        const presentToday = Math.min(
+          staffCount,
+          Math.max(0, Number(branch.presentToday) || 0),
+        );
+        const attendanceRate = staffCount
+          ? Math.min(100, (presentToday / staffCount) * 100)
+          : 0;
+
+        return {
+          ...branch,
+          staff: staffCount,
+          staffCount,
+          presentToday,
+          absentToday: Math.max(0, staffCount - presentToday),
+          attendance: attendanceRate,
+          attendanceRate,
+        };
+      });
+    }
 
     // Very small UI fallback while backend is still loading.
     return cfg.branches.map((branch) => ({
@@ -560,6 +699,22 @@ const BranchesModule: React.FC = () => {
     attendanceRate: 0,
   };
 
+  const attendancePeriodStats = useMemo(() => {
+    if (!periodAttendance || periodAttendance.dayCount <= 0) return null;
+    const averagePresent = Math.min(
+      totals.staff,
+      periodAttendance.totalDailyPresent / periodAttendance.dayCount,
+    );
+    const averageAbsent = Math.max(0, totals.staff - averagePresent);
+    return {
+      averagePresent,
+      averageAbsent,
+      attendanceRate: totals.staff
+        ? (averagePresent / totals.staff) * 100
+        : 0,
+    };
+  }, [periodAttendance, totals.staff]);
+
   const descriptionItems = useMemo(
     () => [
       `${lowerLabel(peoplePlural)} coverage`,
@@ -581,422 +736,407 @@ const BranchesModule: React.FC = () => {
         ".9fr",
         ...(showPayroll ? [".9fr"] : []),
         ".8fr",
-        ...(showBiometrics ? [".9fr"] : []),
         "210px",
       ].join(" "),
-    [showBiometrics, showPayroll],
+    [showPayroll],
   );
 
-  const tableMinWidth = showPayroll || showBiometrics ? 980 : 820;
+  const tableMinWidth = showPayroll ? 980 : 820;
 
   return (
-    <div style={{ display: "grid", gap: 18 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 14,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h2 style={{ margin: 0, color: T.head, fontSize: 24 }}>
-            {branchPlural}
-          </h2>
-          <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>
-            Backend-connected branch comparison, {descriptionItems.join(", ")}.
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          {activePeopleTypes.length > 1 ? (
-            <ModernSelect
-              value={selectedPeopleType}
-              options={activePeopleTypes.map((type) => ({
-                value: type,
-                label: peopleLabelForType(type, cfg as any).plural,
-              }))}
-              onChange={(value) => setSelectedPeopleType(value)}
-              ariaLabel="People type"
-              minWidth={160}
+    <div
+      className="branches-page"
+      style={{
+        background: "#f5f6fa",
+        minWidth: 0,
+        width: "100%",
+        boxSizing: "border-box",
+        overflowX: "hidden",
+        padding: "24px",
+        fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
+      }}
+    >
+      <ModuleShell
+        title={branchPlural}
+        Icon={Building2}
+        total={totals.branches}
+        actions={
+          <>
+            <DateFilterBar filter={dateFilter} compact />
+            {activePeopleTypes.length > 1 ? (
+              <ModernSelect
+                value={selectedPeopleType}
+                options={activePeopleTypes.map((type) => ({
+                  value: type,
+                  label: peopleLabelForType(type, cfg as any).plural,
+                }))}
+                onChange={(value) => setSelectedPeopleType(value)}
+                ariaLabel="People type"
+                minWidth={160}
+              />
+            ) : null}
+            <RefreshButton
+              variant="secondary"
+              size="md"
+              loading={refreshing}
+              onClick={() => void load()}
             />
-          ) : null}
-          <RefreshButton
-            variant="secondary"
-            size="md"
-            loading={refreshing}
-            onClick={() => void load()}
-          />
-        </div>
-      </div>
-
-      {(error || installerError) && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: 14,
-            borderRadius: 12,
-            background: "#FFF1F2",
-            border: "1px solid #FECDD3",
-            color: "#BE123C",
-            fontSize: 13,
-            fontWeight: 700,
-          }}
-        >
-          <AlertCircle size={17} />
-          {error || installerError}
-        </div>
-      )}
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: showPayroll
-            ? "repeat(4, minmax(180px, 1fr))"
-            : "repeat(3, minmax(180px, 1fr))",
-          gap: 14,
-        }}
-      >
-        {statCard(
-          `Total ${branchPlural}`,
-          totals.branches,
-          "Configured locations",
-          Building2,
-          "teal",
-        )}
-        {statCard(
-          `Total ${peoplePlural}`,
-          totals.staff,
-          `${totals.activeStaff} active ${lowerLabel(
-            pluralCountLabel(totals.activeStaff, peopleSingular, peoplePlural),
-          )}`,
-          Users,
-          "blue",
-        )}
-        {statCard(
-          "Attendance Today",
-          `${Math.round(totals.attendanceRate)}%`,
-          `${totals.presentToday} present · ${totals.absentToday} absent`,
-          Activity,
-          "green",
-        )}
-        {showPayroll &&
-          statCard(
-            "Monthly Payroll",
-            formatMoney(totals.payroll),
-            `Across all ${lowerLabel(branchPlural)}`,
-            DollarSign,
-            "amber",
-          )}
-      </div>
-
-      <section
-        style={{
-          background: T.card,
-          border: `1px solid ${T.border}`,
-          borderRadius: 16,
-          padding: 18,
-          overflow: "hidden",
-        }}
-      >
-        <BranchCompareChart
-          branches={branches}
-          templateModel={templateModel}
-          showPayroll={showPayroll}
-        />
-      </section>
-
-      <section
-        style={{
-          background: T.card,
-          border: `1px solid ${T.border}`,
-          borderRadius: 16,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            padding: "16px 18px",
-            borderBottom: `1px solid ${T.border}`,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: T.head }}>
-              {branchSingular} Directory
+          </>
+        }
+        stats={
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 14,
+                minWidth: 0,
+                width: "100%",
+                marginBottom: 16,
+              }}
+            >
+              {statCard(
+                `Total ${branchPlural}`,
+                totals.branches,
+                "Configured locations",
+                Building2,
+                "teal",
+              )}
+              {statCard(
+                `Total ${peoplePlural}`,
+                totals.staff,
+                `${totals.activeStaff} active ${lowerLabel(
+                  pluralCountLabel(
+                    totals.activeStaff,
+                    peopleSingular,
+                    peoplePlural,
+                  ),
+                )}`,
+                Users,
+                "blue",
+              )}
+              {statCard(
+                "Average Attendance",
+                attendancePeriodStats
+                  ? `${Math.round(attendancePeriodStats.attendanceRate)}%`
+                  : "—",
+                attendancePeriodStats
+                  ? `${attendancePeriodStats.averagePresent.toLocaleString(
+                      undefined,
+                      { maximumFractionDigits: 1 },
+                    )} avg present · ${attendancePeriodStats.averageAbsent.toLocaleString(
+                      undefined,
+                      { maximumFractionDigits: 1 },
+                    )} avg absent · ${dateFilter.label}`
+                  : attendancePeriodError
+                    ? `Unavailable · ${dateFilter.label}`
+                    : `Loading attendance · ${dateFilter.label}`,
+                Activity,
+                "green",
+              )}
+              {showPayroll &&
+                statCard(
+                  "Paid Payroll",
+                  periodPayroll === null ? "—" : formatMoney(periodPayroll.total),
+                  periodPayroll === null
+                    ? payrollPeriodError
+                      ? "Paid history unavailable"
+                      : "Loading paid payroll"
+                    : "Selected calendar month(s)",
+                  DollarSign,
+                  "amber",
+                )}
             </div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
-              Click a branch to open its scoped dashboard. Local-mode branches
-              can download the Windows node installer.
-            </div>
-          </div>
-          <div style={{ fontSize: 12, color: T.muted }}>
-            {branches.length}{" "}
-            {lowerLabel(
-              pluralCountLabel(branches.length, branchSingular, branchPlural),
-            )}
-          </div>
-        </div>
-
-        <div style={{ overflowX: "auto" }}>
+          </>
+        }
+      >
+        {(error || attendancePeriodError || payrollPeriodError) && (
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: tableGridTemplate,
-              minWidth: tableMinWidth,
-              padding: "10px 18px",
-              background: T.teal50,
-              borderBottom: `1px solid ${T.border}`,
-              fontSize: 10,
-              fontWeight: 900,
-              color: T.muted,
-              textTransform: "uppercase",
-              letterSpacing: ".08em",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: 14,
+              borderRadius: 12,
+              background: "#FFF1F2",
+              border: "1px solid #FECDD3",
+              color: "#BE123C",
+              fontSize: 13,
+              fontWeight: 700,
             }}
           >
-            <div>{branchSingular}</div>
-            <div>{peoplePlural}</div>
-            <div>Attendance</div>
-            <div>Present</div>
-            {showPayroll && <div>Payroll</div>}
-            <div>Late</div>
-            {showBiometrics && <div>Biometrics</div>}
-            <div>Action</div>
+            <AlertCircle size={17} />
+            {error || attendancePeriodError || payrollPeriodError}
+          </div>
+        )}
+
+        <section
+          style={{
+            background: T.card,
+            border: `1px solid ${T.border}`,
+            borderRadius: 16,
+            padding: 18,
+            overflow: "hidden",
+          }}
+        >
+          <BranchCompareChart
+            branches={branches}
+            templateModel={templateModel}
+            showPayroll={showPayroll}
+            filter={dateFilter}
+          />
+        </section>
+
+        <section
+          style={{
+            background: T.card,
+            border: `1px solid ${T.border}`,
+            borderRadius: 16,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              padding: "16px 18px",
+              borderBottom: `1px solid ${T.border}`,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: T.head }}>
+                {branchSingular} Directory
+              </div>
+              <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
+                Click a branch to open its scoped dashboard.
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: T.muted }}>
+              {branches.length}{" "}
+              {lowerLabel(
+                pluralCountLabel(branches.length, branchSingular, branchPlural),
+              )}
+            </div>
           </div>
 
-          {branches.map((branch, index) => {
-            const branchDashboardId = getBranchDashboardId(branch);
-            const branchDashboardPath = getBranchDashboardPath(branch);
-            const branchName = getBranchDisplayName(branch);
-
-            return (
-              <div
-                key={branchDashboardId ?? `${branchName}-${index}`}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: tableGridTemplate,
-                  minWidth: tableMinWidth,
-                  padding: "13px 18px",
-                  borderBottom: `1px solid ${T.teal50}`,
-                  alignItems: "center",
-                  fontSize: 12,
-                  color: T.head,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: 10,
-                      background: T.teal50,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <MapPin size={16} color={T.teal600} />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 900, color: T.head }}>
-                      {getBranchDisplayName(branch)}
-                    </div>
-                    <div style={{ color: T.muted, fontSize: 11, marginTop: 2 }}>
-                      {getBranchLocation(branch) || "No city set"}
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <strong>{branch.staffCount}</strong>
-                  <span style={{ color: T.muted }}>
-                    {" "}
-                    {lowerLabel(
-                      pluralCountLabel(
-                        branch.staffCount,
-                        peopleSingular,
-                        peoplePlural,
-                      ),
-                    )}
-                  </span>
-                </div>
-                <div style={{ fontWeight: 900, color: T.teal600 }}>
-                  {Math.round(branch.attendanceRate)}%
-                </div>
-                <div>
-                  <strong>{branch.presentToday}</strong>
-                  <span style={{ color: T.muted }}> / {branch.staffCount}</span>
-                </div>
-                {showPayroll && (
-                  <div style={{ fontWeight: 900, color: T.navy600 }}>
-                    {formatMoney(branch.payroll)}
-                  </div>
-                )}
-                <div style={{ color: branch.lateCount ? "#D97706" : T.muted }}>
-                  {branch.lateCount}
-                </div>
-                {showBiometrics && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      color:
-                        branch.staffCount > 0 && branch.enrolledStaff === 0
-                          ? "#DC2626"
-                          : branch.enrolledStaff >= branch.staffCount &&
-                              branch.staffCount > 0
-                            ? T.teal600
-                            : T.muted,
-                      fontWeight: 800,
-                    }}
-                    title={
-                      branch.staffCount > 0 && branch.enrolledStaff === 0
-                        ? "No faces enrolled — recognition will silently fail at this branch until staff are enrolled."
-                        : undefined
-                    }
-                  >
-                    {branch.staffCount > 0 && branch.enrolledStaff === 0 ? (
-                      <AlertCircle size={14} />
-                    ) : (
-                      <CheckCircle2 size={14} />
-                    )}
-                    {branch.enrolledStaff}/{branch.staffCount}
-                  </div>
-                )}
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {branchDashboardPath ? (
-                    <Link
-                      to={branchDashboardPath}
-                      aria-label={`Open ${branchName} dashboard`}
-                      onClick={(event) => event.stopPropagation()}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        height: 30,
-                        minWidth: 82,
-                        padding: "0 12px",
-                        borderRadius: 8,
-                        border: "1px solid transparent",
-                        background: T.teal600,
-                        color: "#ffffff",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        textDecoration: "none",
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                        lineHeight: 1,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <CalendarClock size={13} />
-                      Open
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled
-                      title={`${branchSingular} id missing`}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        height: 30,
-                        minWidth: 82,
-                        padding: "0 12px",
-                        borderRadius: 8,
-                        border: `1px solid ${T.border}`,
-                        background: T.slate50,
-                        color: T.muted,
-                        fontSize: 12,
-                        fontWeight: 800,
-                        fontFamily: "inherit",
-                        lineHeight: 1,
-                        whiteSpace: "nowrap",
-                        cursor: "not-allowed",
-                        opacity: 0.65,
-                      }}
-                    >
-                      <CalendarClock size={13} />
-                      Open
-                    </button>
-                  )}
-
-                  {showInstallerAction && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!installerEligible) return;
-                        void handleDownloadInstaller(branch);
-                      }}
-                      disabled={
-                        !installerEligible ||
-                        downloadingBranchId === getBackendBranchId(branch)
-                      }
-                      title={
-                        installerDisabledReason ||
-                        `Download ${branchName} Windows node installer`
-                      }
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        height: 30,
-                        minWidth: 94,
-                        padding: "0 12px",
-                        borderRadius: 8,
-                        border: `1px solid ${T.border}`,
-                        background: T.card,
-                        color: T.teal600,
-                        fontSize: 12,
-                        fontWeight: 800,
-                        fontFamily: "inherit",
-                        lineHeight: 1,
-                        whiteSpace: "nowrap",
-                        cursor: !installerEligible
-                          ? "not-allowed"
-                          : downloadingBranchId === getBackendBranchId(branch)
-                            ? "wait"
-                            : "pointer",
-                        opacity: !installerEligible ? 0.65 : 1,
-                      }}
-                    >
-                      <Download size={13} />
-                      {downloadingBranchId === getBackendBranchId(branch)
-                        ? "Preparing"
-                        : "Installer"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {branches.length === 0 && (
-            <div style={{ padding: 24, textAlign: "center", color: T.muted }}>
-              No {lowerLabel(branchPlural)} found for this organization.
+          <div style={{ overflowX: "auto" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: tableGridTemplate,
+                minWidth: tableMinWidth,
+                padding: "10px 18px",
+                background: T.teal50,
+                borderBottom: `1px solid ${T.border}`,
+                fontSize: 10,
+                fontWeight: 900,
+                color: T.muted,
+                textTransform: "uppercase",
+                letterSpacing: ".08em",
+              }}
+            >
+              <div>{branchSingular}</div>
+              <div>{peoplePlural}</div>
+              <div>Attendance</div>
+              <div>Avg. Present</div>
+              {showPayroll && <div>Payroll</div>}
+              <div>Avg. Late</div>
+              <div>Action</div>
             </div>
-          )}
-        </div>
-      </section>
+
+            {branches.map((branch, index) => {
+              const branchDashboardId = getBranchDashboardId(branch);
+              const branchDashboardPath = getBranchDashboardPath(branch);
+              const branchName = getBranchDisplayName(branch);
+              const branchAttendance = periodAttendance?.branches.get(
+                getBranchMetricKey(branch),
+              );
+              const averagePresent =
+                periodAttendance?.dayCount
+                  ? Math.min(
+                      branch.staffCount,
+                      (branchAttendance?.totalDailyPresent ?? 0) /
+                        periodAttendance.dayCount,
+                    )
+                  : null;
+              const averageLate =
+                periodAttendance?.dayCount
+                  ? (branchAttendance?.totalDailyLate ?? 0) /
+                    periodAttendance.dayCount
+                  : null;
+              const attendanceRate =
+                averagePresent !== null && branch.staffCount
+                  ? (averagePresent / branch.staffCount) * 100
+                  : 0;
+              const branchPayroll = periodPayroll?.branches.get(
+                getBranchMetricKey(branch),
+              );
+
+              return (
+                <div
+                  key={branchDashboardId ?? `${branchName}-${index}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: tableGridTemplate,
+                    minWidth: tableMinWidth,
+                    padding: "13px 18px",
+                    borderBottom: `1px solid ${T.teal50}`,
+                    alignItems: "center",
+                    fontSize: 12,
+                    color: T.head,
+                  }}
+                >
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 10 }}
+                  >
+                    <div
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 10,
+                        background: T.teal50,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <MapPin size={16} color={T.teal600} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 900, color: T.head }}>
+                        {getBranchDisplayName(branch)}
+                      </div>
+                      <div
+                        style={{ color: T.muted, fontSize: 11, marginTop: 2 }}
+                      >
+                        {getBranchLocation(branch) || "No city set"}
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <strong>{branch.staffCount}</strong>
+                    <span style={{ color: T.muted }}>
+                      {" "}
+                      {lowerLabel(
+                        pluralCountLabel(
+                          branch.staffCount,
+                          peopleSingular,
+                          peoplePlural,
+                        ),
+                      )}
+                    </span>
+                  </div>
+                  <div style={{ fontWeight: 900, color: T.teal600 }}>
+                    {averagePresent === null ? "—" : `${Math.round(attendanceRate)}%`}
+                  </div>
+                  <div>
+                    <strong>
+                      {averagePresent === null
+                        ? "—"
+                        : averagePresent.toLocaleString(undefined, {
+                            maximumFractionDigits: 1,
+                          })}
+                    </strong>
+                    <span style={{ color: T.muted }}>
+                      {" "}
+                      / {branch.staffCount}
+                    </span>
+                  </div>
+                  {showPayroll && (
+                    <div style={{ fontWeight: 900, color: T.navy600 }}>
+                      {periodPayroll === null
+                        ? "—"
+                        : formatMoney(branchPayroll ?? 0)}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      color: averageLate ? "#D97706" : T.muted,
+                    }}
+                  >
+                    {averageLate === null
+                      ? "—"
+                      : averageLate.toLocaleString(undefined, {
+                          maximumFractionDigits: 1,
+                        })}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {branchDashboardPath ? (
+                      <Link
+                        to={branchDashboardPath}
+                        aria-label={`Open ${branchName} dashboard`}
+                        onClick={(event) => event.stopPropagation()}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 6,
+                          height: 30,
+                          minWidth: 82,
+                          padding: "0 12px",
+                          borderRadius: 8,
+                          border: "1px solid transparent",
+                          background: T.teal600,
+                          color: "#ffffff",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          textDecoration: "none",
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          lineHeight: 1,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <CalendarClock size={13} />
+                        Open
+                      </Link>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        title={`${branchSingular} id missing`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 6,
+                          height: 30,
+                          minWidth: 82,
+                          padding: "0 12px",
+                          borderRadius: 8,
+                          border: `1px solid ${T.border}`,
+                          background: T.slate50,
+                          color: T.muted,
+                          fontSize: 12,
+                          fontWeight: 800,
+                          fontFamily: "inherit",
+                          lineHeight: 1,
+                          whiteSpace: "nowrap",
+                          cursor: "not-allowed",
+                          opacity: 0.65,
+                        }}
+                      >
+                        <CalendarClock size={13} />
+                        Open
+                      </button>
+                    )}
+
+                  </div>
+                </div>
+              );
+            })}
+
+            {branches.length === 0 && (
+              <div style={{ padding: 24, textAlign: "center", color: T.muted }}>
+                No {lowerLabel(branchPlural)} found for this organization.
+              </div>
+            )}
+          </div>
+        </section>
+      </ModuleShell>
     </div>
   );
 };

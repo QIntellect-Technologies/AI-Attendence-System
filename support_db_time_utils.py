@@ -17,7 +17,7 @@ Write operations (create/update/delete) must never accept it; only list/read
 functions do.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -65,6 +65,38 @@ def clean_text(value: Any) -> str:
 
 def normalize_people_type(value: Any) -> str:
     return clean_text(value).lower().replace(" ", "_").replace("-", "_") or "staff"
+
+
+def ensure_attendance_on_or_after_join_date(join_date: Any, attendance_date: Any) -> None:
+    """Reject attendance dated before the person's branch-local joining day."""
+    if not clean_text(join_date):
+        return
+
+    try:
+        joined_on = date.fromisoformat(str(join_date).strip()[:10])
+        if isinstance(attendance_date, datetime):
+            marked_on = attendance_date.date()
+        elif isinstance(attendance_date, date):
+            marked_on = attendance_date
+        else:
+            marked_on = date.fromisoformat(str(attendance_date).strip()[:10])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Joining date and attendance date must be valid dates") from exc
+
+    if marked_on < joined_on:
+        raise ValueError(
+            f"Attendance cannot be recorded before the joining date ({joined_on.isoformat()})."
+        )
+
+
+def count_unique_late_staff(attendance_rows: list[dict]) -> int:
+    """Count distinct people whose check-in status is 'late'."""
+    return len({
+        sid
+        for row in attendance_rows
+        if clean_text(row.get('check_in_status') or row.get('checkInStatus')).lower() == 'late'
+        and (sid := clean_text(row.get('staff_id') or row.get('staffId')))
+    })
 
 
 def validate_time_string(value: Any, field_name: str = "time") -> str:

@@ -22,6 +22,7 @@ import uuid
 import os
 from supabase_client import get_supabase, reset_supabase_client
 from logger_config import get_logger
+from support_db_time_utils import count_unique_late_staff
 
 logger = get_logger(__name__)
 from support_db_core import (
@@ -186,6 +187,7 @@ from support_db_payroll import (
     get_local_node_overtime_hours_for_payroll_period,
     get_paid_payroll_periods,
     get_payroll_policy,
+    get_payroll_policy_for_period,
     get_staff_attendance_for_payroll_period,
     list_client_overtime_requests,
     mark_payroll_paid,
@@ -550,12 +552,42 @@ def _client_attendance_rows(
             lambda: (
                 get_supabase()
                 .table('client_staff')
-                .select('id, org_id, branch_id, employee_id, person_code, registration_number, person_code_label, name, email, department_name, role_name, position, role, people_type, status, is_archived')
+                .select('id, org_id, branch_id, employee_id, person_code, registration_number, person_code_label, name, email, department_name, role_name, position, role, people_type, status, is_archived, join_date')
                 .eq('org_id', org_id)
                 .in_('id', staff_ids)
             ),
         )
         staff_by_id = {str(staff.get('id')): staff for staff in (staff_result.data or [])}
+
+    branch_zones = {
+        str(row.get('branch_id')): _get_branch_timezone(sb, org_id, str(row['branch_id']))
+        for row in rows if row.get('branch_id')
+    }
+    eligible_rows = []
+    for row in rows:
+        staff = staff_by_id.get(str(row.get('staff_id') or ''), {})
+        join_date = str(staff.get('join_date') or '').strip()[:10]
+        timestamp = str(row.get('timestamp') or '')
+        if join_date and timestamp:
+            local_date = _attendance_exceptions.local_date_str_iso(
+                timestamp,
+                branch_zones.get(str(row.get('branch_id') or ''), ZoneInfo('UTC')),
+            )
+            try:
+                joined_on = date.fromisoformat(join_date)
+                attended_on = date.fromisoformat(local_date)
+            except ValueError:
+                logger.warning(
+                    'Ignoring invalid joining/attendance date while filtering attendance for staff_id=%s',
+                    row.get('staff_id'),
+                )
+            else:
+                if attended_on < joined_on:
+                    continue
+        eligible_rows.append(row)
+    rows = eligible_rows
+    if not rows:
+        return []
 
     normalized_people_type = _normalize_people_type(people_type, '') if people_type else ''
     if normalized_people_type:
@@ -798,6 +830,7 @@ def get_client_attendance_statistics(
         'today_attendance': len(attendance_rows),
         'unique_users_today': present_today,
         'present_today': present_today,
+        'late_today': count_unique_late_staff(attendance_rows),
         'absent_today': max(0, total_staff - present_today),
         'avg_confidence': (
             sum(float(row.get('confidence') or 0) for row in attendance_rows) / len(attendance_rows)
@@ -847,7 +880,9 @@ def mark_client_staff_absent_today(
     if backend_branch_id and str(staff.get('backend_branch_id') or '') != str(backend_branch_id):
         raise ValueError('Person does not belong to the requested branch')
 
-    _log_date, start_iso, end_iso = _dashboard_day_window_utc(date_value)
+    log_date, start_iso, end_iso = _dashboard_day_window_utc(date_value)
+    from support_db_time_utils import ensure_attendance_on_or_after_join_date
+    ensure_attendance_on_or_after_join_date(staff.get('join_date'), log_date)
     query = (
         get_supabase()
         .table('attendance')
@@ -966,6 +1001,24 @@ def update_client_attendance_record(org_id: str, record_id: str, payload: dict) 
     if not updates:
         raise ValueError('No editable fields were provided')
 
+    staff_id = str(existing.data[0].get('staff_id') or '').strip()
+    staff = get_client_staff_member(staff_id) if staff_id else {}
+    branch_id = str(existing.data[0].get('branch_id') or '').strip()
+    branch_zone = _get_branch_timezone(sb, org_key, branch_id) if branch_id else ZoneInfo('UTC')
+    effective_check_in = updates.get('timestamp') or existing.data[0].get('timestamp')
+    parsed_check_in = _parse_dt(effective_check_in) if effective_check_in else None
+    if parsed_check_in:
+        local_check_in = (
+            parsed_check_in.replace(tzinfo=branch_zone)
+            if parsed_check_in.tzinfo is None
+            else parsed_check_in.astimezone(branch_zone)
+        )
+        from support_db_time_utils import ensure_attendance_on_or_after_join_date
+        ensure_attendance_on_or_after_join_date(
+            staff.get('join_date'),
+            local_check_in.date(),
+        )
+
     (
         sb.table('attendance')
         .update(updates)
@@ -984,8 +1037,6 @@ def update_client_attendance_record(org_id: str, record_id: str, payload: dict) 
     )
     row = (refreshed.data or existing.data)[0]
 
-    staff_id = str(row.get('staff_id') or '').strip()
-    staff = get_client_staff_member(staff_id) if staff_id else {}
     branches = list_branches(org_key)
     branch_by_id = {str(b.get('id')): b for b in branches if b.get('id')}
     branch_ui_by_id = {str(b.get('id')): idx for idx, b in enumerate(branches, start=1) if b.get('id')}
@@ -1115,6 +1166,18 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
         compare_check_in = _parse_dt(existing_row.get('timestamp'))
     if check_out_dt and compare_check_in and check_out_dt < compare_check_in:
         raise ValueError('Check-out time cannot be earlier than check-in time')
+    branch_zone = _get_branch_timezone(sb, org_key, branch_id) if branch_id else ZoneInfo('UTC')
+    if compare_check_in:
+        local_check_in = (
+            compare_check_in.replace(tzinfo=branch_zone)
+            if compare_check_in.tzinfo is None
+            else compare_check_in.astimezone(branch_zone)
+        )
+        from support_db_time_utils import ensure_attendance_on_or_after_join_date
+        ensure_attendance_on_or_after_join_date(
+            staff.get('join_date'),
+            local_check_in.date(),
+        )
 
     raw_status = str(
         payload.get('arrival_status')
@@ -1155,7 +1218,6 @@ def save_manual_attendance_record(org_id: str, payload: dict, record_id: str | N
         # same "add attendance" form could be submitted twice (or clash
         # with a row a camera later writes for the same day) and silently
         # fork a person's day into two attendance rows.
-        branch_zone = _get_branch_timezone(sb, org_key, branch_id) if branch_id else ZoneInfo('UTC')
         local_check_in = (
             check_in_dt.replace(tzinfo=branch_zone)
             if check_in_dt.tzinfo is None

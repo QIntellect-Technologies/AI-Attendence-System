@@ -1924,6 +1924,11 @@ const StaffDirectory: FC = () => {
     setSelectedArchived(new Set());
   };
 
+  const refreshStaffAndDirectory = useCallback(async () => {
+    await refreshStaff();
+    refreshStaffDirectoryRecords();
+  }, [refreshStaff, refreshStaffDirectoryRecords]);
+
   const applyShift = useCallback(
     async (target: {
       scope: "branch" | "department" | "individual";
@@ -1951,16 +1956,14 @@ const StaffDirectory: FC = () => {
         target.apiBranchId,
         target.shiftId,
       );
-      await refreshStaff();
-      refreshStaffDirectoryRecords();
+      await refreshStaffAndDirectory();
       return assignedCount;
     },
     [
       isGlobalDashboard,
       completeStaffDirectory,
       assignShifts,
-      refreshStaff,
-      refreshStaffDirectoryRecords,
+      refreshStaffAndDirectory,
     ],
   );
 
@@ -2337,7 +2340,7 @@ const StaffDirectory: FC = () => {
               peopleModel={peopleModel}
               onApplyShift={applyShift}
               overrideStaffId={overrideTargetStaffId}
-              onStaffRefresh={refreshStaff}
+              onStaffRefresh={refreshStaffAndDirectory}
             />
           </Suspense>
         )}
@@ -2364,12 +2367,18 @@ const StaffDirectory: FC = () => {
 
         {activeTab === "archived" && (
           <div
+            className="staff-directory-table-scroll"
             style={{
-              background: T.card,
-              border: `1px solid ${T.border}`,
+              background: "#ffffff",
+              border: "1px solid #d2dce4",
               borderRadius: 12,
+              boxShadow:
+                "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
               overflowX: "auto",
               overflowY: "hidden",
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
             }}
           >
             <div
@@ -2508,6 +2517,7 @@ const StaffDirectory: FC = () => {
             ) : (
               <>
                 <div
+                  className="staff-directory-table-grid"
                   style={{
                     display: "grid",
                     gridTemplateColumns:
@@ -2516,11 +2526,11 @@ const StaffDirectory: FC = () => {
                         : "36px 1.3fr 1fr 1.1fr 1fr .9fr 1.5fr 1fr 210px",
                     gap: 12,
                     minWidth: 1180,
-                    padding: "10px 16px",
-                    background: T.teal50,
-                    borderBottom: `1px solid ${T.border}`,
+                    padding: "12px 16px",
+                    background: "#f8fafc",
+                    borderBottom: "1px solid #e2e8f0",
                     fontSize: 10,
-                    fontWeight: 800,
+                    fontWeight: 700,
                     color: T.muted,
                     textTransform: "uppercase",
                     letterSpacing: ".07em",
@@ -2560,6 +2570,7 @@ const StaffDirectory: FC = () => {
                   return (
                     <div
                       key={member.id}
+                      className={`staff-directory-table-grid staff-directory-table-row${isSelected ? " staff-directory-table-row-selected" : ""}`}
                       style={{
                         display: "grid",
                         gridTemplateColumns: showBranchColumn
@@ -2567,11 +2578,11 @@ const StaffDirectory: FC = () => {
                           : "36px 1.3fr 1fr 1.1fr 1fr .9fr 1.5fr 1fr 210px",
                         gap: 12,
                         minWidth: 1180,
-                        padding: "12px 16px",
-                        borderBottom: `1px solid ${T.teal50}`,
+                        padding: "11px 16px",
+                        borderBottom: "1px solid #f1f5f9",
                         alignItems: "center",
                         fontSize: 12,
-                        background: isSelected ? T.teal50 : "transparent",
+                        background: isSelected ? T.teal50 : "#ffffff",
                       }}
                     >
                       <input

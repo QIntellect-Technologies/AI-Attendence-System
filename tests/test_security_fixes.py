@@ -15,7 +15,7 @@ Two layers, because neither alone is enough:
             real and exercised over HTTP through a Flask test client. These
             are the pieces that have actual runtime behaviour to get wrong.
 
-Run: python test_security_fixes.py
+Run: python tests/test_security_fixes.py
 """
 
 from __future__ import annotations
@@ -26,9 +26,10 @@ import sys
 import time
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 
-APP_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app.py')
+APP_PY = os.path.join(REPO_ROOT, 'app.py')
 with open(APP_PY, encoding='utf-8', errors='replace') as fh:
     APP_SOURCE = fh.read()
 APP_TREE = ast.parse(APP_SOURCE)
@@ -226,6 +227,14 @@ class TestRetentionPolicyFixes(unittest.TestCase):
                     root = root.value
                 self.assertTrue(isinstance(root, ast.Name) and root.id == 'g',
                                 'updated_by must come from the session')
+
+
+class TestBranchSummaryScope(unittest.TestCase):
+    """The global branch comparison must only be available to admins."""
+
+    def test_branch_summary_requires_admin(self):
+        fn = find_route('/api/branches/summary', 'GET')
+        self.assertIn('require_client_dashboard_admin', _decorator_names(fn))
 
 
 class TestSpaFallbackApiRoutes(unittest.TestCase):

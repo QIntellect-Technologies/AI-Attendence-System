@@ -40,7 +40,7 @@ export function FastPagination({ page, pageSize, total, onPageChange, onPageSize
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <ModernSelect
           value={String(pageSize)}
-          options={[25, 50, 100, 150, 250].map((size) => ({
+          options={[25, 50].map((size) => ({
             value: String(size),
             label: `${size} / page`,
           }))}

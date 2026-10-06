@@ -13,7 +13,7 @@ import { Spinner } from "../../../components/ui/Spinner";
 import { useAuthenticatedImageUrl } from "../../../hooks/useAuthenticatedImageUrl";
 import { type PeopleRenderingModel } from "../../../utils/templateRendering";
 import { type StaffMember } from "../types/staffTypes";
-import { staffAvatarUrl, staffInitial } from "../utils/staffMember";
+import { staffAvatarUrl, staffInitial, staffSalary } from "../utils/staffMember";
 import { STATUS_META, statusIcon } from "../utils/staffStatus";
 import {
   getColumnAlign,
@@ -168,7 +168,7 @@ export const StaffRow: FC<{
     }
 
     if (column.key === "status") {
-      const isAct = member.status === "active";
+      const statusMeta = sm ?? STATUS_META.inactive;
       return (
         <div
           style={{
@@ -182,25 +182,18 @@ export const StaffRow: FC<{
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
-              padding: "3px 9px",
+              gap: 6,
+              padding: "4px 10px",
               borderRadius: 999,
-              background: isAct ? "#f0fdf4" : "#fff1f2",
-              border: `1px solid ${isAct ? "#bbf7d0" : "#fecdd3"}`,
-              color: isAct ? "#15803d" : "#e11d48",
+              background: statusMeta.bg,
+              border: `1px solid ${statusMeta.color}40`,
+              color: statusMeta.color,
               fontSize: 11,
               fontWeight: 700,
               whiteSpace: "nowrap",
             }}
           >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: isAct ? "#22c55e" : "#ef4444",
-              }}
-            />
+            {statusIcon(member.status)}
             {sm?.label ?? member.status}
           </span>
         </div>
@@ -256,16 +249,46 @@ export const StaffRow: FC<{
     }
 
     if (column.key === "salary") {
+      const align = getColumnAlign(column);
+      const salaryAmount = staffSalary(member);
       return (
         <div
           style={{
-            fontSize: 12,
-            fontWeight: 700,
-            color: TABLE_THEME.navy600,
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: align === "right" ? "flex-end" : "flex-start",
+            gap: 5,
+            width: "100%",
             whiteSpace: "nowrap",
           }}
+          title={rawVal}
         >
-          {rawVal || "—"}
+          {salaryAmount > 0 ? (
+            <>
+              <span
+                style={{
+                  color: T.muted,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: ".02em",
+                }}
+              >
+                PKR
+              </span>
+              <span
+                style={{
+                  color: TABLE_THEME.navy600,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {salaryAmount.toLocaleString()}
+              </span>
+            </>
+          ) : (
+            <span style={{ color: T.muted, fontSize: 12 }}>—</span>
+          )}
         </div>
       );
     }

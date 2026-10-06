@@ -72,6 +72,7 @@ export function useBranchAttendanceAnalytics(args: {
                 listStaffRecords({
                     organizationId: scope.organizationId,
                     branchId: scope.apiBranchId ?? undefined,
+                    peopleType: peopleType ?? undefined,
                 }),
             ]);
             if (id !== reqId.current) return;

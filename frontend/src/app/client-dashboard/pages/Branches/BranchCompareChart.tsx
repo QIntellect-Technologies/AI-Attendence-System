@@ -12,8 +12,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { T } from "../../components/ui/theme";
-import { useDateFilter } from "../../hooks/useDateFilter";
-import DateFilterBar from "../../components/ui/DateFilterBar";
+import type { DateFilterState } from "../../hooks/useDateFilter";
 import GroupedBarChartCard from "../../components/ui/charts/GroupedBarChartCard";
 import JellyButton from "../../components/ui/JellyButton";
 import type { BarDataPoint } from "../../components/ui/charts/GroupedBarChartCard";
@@ -63,6 +62,7 @@ interface BranchCompareChartProps {
   branches: BranchCompareData[];
   templateModel: TemplateRenderingModel;
   showPayroll: boolean;
+  filter: DateFilterState;
 }
 
 function toNumber(value: unknown, fallback = 0): number {
@@ -172,6 +172,7 @@ const BranchCompareChart: React.FC<BranchCompareChartProps> = ({
   branches,
   templateModel,
   showPayroll,
+  filter,
 }) => {
   const metrics = useMemo(
     () => buildBranchMetrics(templateModel, showPayroll),
@@ -181,8 +182,6 @@ const BranchCompareChart: React.FC<BranchCompareChartProps> = ({
   const defaultMetric = metrics[0]?.key ?? "attendance";
   const [activeMetric, setActiveMetric] =
     useState<BranchMetricKey>(defaultMetric);
-
-  const filter = useDateFilter("monthly");
 
   useEffect(() => {
     if (!metrics.some((metric) => metric.key === activeMetric)) {
@@ -249,17 +248,6 @@ const BranchCompareChart: React.FC<BranchCompareChartProps> = ({
             flexWrap: "wrap",
           }}
         >
-          <DateFilterBar filter={filter} compact />
-
-          <div
-            style={{
-              width: 1,
-              height: 24,
-              background: T.border,
-              flexShrink: 0,
-            }}
-          />
-
           {metrics.map((metric) => (
             <JellyButton
               key={metric.key}

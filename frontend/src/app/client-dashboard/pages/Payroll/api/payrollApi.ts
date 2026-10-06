@@ -708,6 +708,23 @@ export async function getPayrollPolicy(
   return normalizePayrollPolicy(data.policy);
 }
 
+export async function getPayrollWorkingDates(
+  organizationId: PayrollId,
+  month: string,
+  branchId?: PayrollId | null,
+): Promise<string[]> {
+  const query = new URLSearchParams({
+    organization_id: String(organizationId),
+    month,
+  });
+  const cleanBranchId = cleanPayrollId(branchId);
+  if (cleanBranchId !== null) query.set("branch_id", String(cleanBranchId));
+  const data = await requestJson<{ working_dates: string[] }>(
+    `/payroll/working-days?${query.toString()}`,
+  );
+  return data.working_dates;
+}
+
 /**
  * True once the company has actually set up payroll rules (as opposed to the
  * built-in defaults that getPayrollPolicy() fills in for every org). Judged on

@@ -12,6 +12,7 @@ import { toastError, toastSuccess } from "../../../utils/notifications";
 import { Plus, Save, Trash2, X } from "lucide-react";
 import { ActionButton } from "../../engine/ModuleShell";
 import { T } from "../../../components/ui/theme";
+import Spinner from "../../../components/ui/Spinner";
 import {
   createShift,
   deleteShift,
@@ -403,8 +404,16 @@ export const ShiftTimingsModal: FC<{
 
         <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
           {isLoading ? (
-            <div style={{ fontSize: 13, color: T.muted, padding: "20px 0" }}>
-              Loading shifts…
+            <div
+              role="status"
+              aria-label="Loading shifts"
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                padding: "20px 0",
+              }}
+            >
+              <Spinner size={24} color={T.teal600} />
             </div>
           ) : loadError ? (
             <div style={{ fontSize: 13, color: "#e11d48", padding: "20px 0" }}>
