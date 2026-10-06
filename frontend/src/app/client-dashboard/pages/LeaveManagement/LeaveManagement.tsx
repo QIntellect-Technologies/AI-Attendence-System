@@ -1455,7 +1455,7 @@ export default function LeaveManagement() {
                   total={historyTotalItems}
                   onPageChange={goToHistoryPage}
                   onPageSizeChange={setLeavePageSize}
-                  disabled={loading}
+                  disabled={historyLoading}
                 />
               </div>
             )}
