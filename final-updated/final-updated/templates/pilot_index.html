@@ -1,0 +1,3821 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pilot Testing AI Attendance System - QIntellect Technologies</title>
+    <!-- Bootstrap 5 Dark -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Premium Fonts & Icons -->
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+    <style>
+      :root {
+        --bg-primary: #f8fafc;
+        --bg-secondary: #f1f5f9;
+        --bg-card: #ffffff;
+        --border-color: #e2e8f0;
+        --text-primary: #0f172a;
+        --text-secondary: #64748b;
+        --accent-primary: #0d9488;
+        --accent-secondary: #0284c7;
+        --accent-success: #10b981;
+        --accent-danger: #ef4444;
+        --accent-warning: #f59e0b;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Plus Jakarta Sans", "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        height: 100vh;
+        max-height: 100vh;
+        display: flex;
+        overflow: hidden;
+      }
+
+      /* Sidebar Navigation */
+      .sidebar {
+        width: 260px;
+        background: #ffffff;
+        border-right: 1px solid #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        padding: 22px 14px 20px;
+        position: fixed;
+        height: 100vh;
+        left: 0;
+        top: 0;
+        z-index: 100;
+        box-shadow: 4px 0 24px rgba(15, 23, 42, 0.03);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .sidebar.hidden {
+        transform: translateX(-100%);
+      }
+      .sidebar::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(
+          90deg,
+          #0d9488 0%,
+          #0284c7 60%,
+          #10b981 100%
+        );
+      }
+      .sidebar-brand {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 28px;
+        padding: 10px 12px;
+        background: linear-gradient(
+          135deg,
+          rgba(13, 148, 136, 0.08),
+          rgba(2, 132, 199, 0.04)
+        );
+        border-radius: 12px;
+        border: 1px solid rgba(13, 148, 136, 0.15);
+      }
+      .sidebar-brand-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .sidebar-brand i.brand-logo {
+        font-size: 1.25em;
+        color: #0d9488;
+        flex-shrink: 0;
+      }
+      .sidebar-brand span {
+        font-size: 0.98em;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: -0.01em;
+      }
+      .sidebar-brand span em {
+        font-style: normal;
+        color: #0d9488;
+      }
+      .sidebar-toggle-btn {
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        color: #64748b;
+        cursor: pointer;
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85em;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+      }
+      .sidebar-toggle-btn:hover {
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+
+      .top-menu-btn {
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        color: #0f172a;
+        padding: 8px 14px;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+        margin-right: 12px;
+      }
+      .top-menu-btn:hover {
+        background: #f8fafc;
+        border-color: #0d9488;
+        color: #0d9488;
+      }
+
+      .sidebar-menu {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        flex: 1;
+      }
+
+      .menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
+        color: #64748b;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85em;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        border-left: 3px solid transparent;
+      }
+      .menu-item:hover {
+        color: #0d9488;
+        background: rgba(13, 148, 136, 0.06);
+        border-left-color: rgba(13, 148, 136, 0.3);
+      }
+      .menu-item.active {
+        color: #0d9488;
+        background: #f0fdfa;
+        border-left-color: #0d9488;
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.1);
+        font-weight: 700;
+      }
+
+      .menu-item i {
+        font-size: 1.05em;
+        width: 20px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .sidebar-footer {
+        padding: 14px;
+        margin-top: 8px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        font-size: 0.78em;
+      }
+      .close-app-btn {
+        width: 100%;
+        margin-top: 12px;
+        padding: 9px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        background: #fff;
+        color: #b91c1c;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .close-app-btn:hover {
+        background: #fef2f2;
+      }
+      .close-app-btn:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .connection-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #0f172a;
+        font-weight: 700;
+      }
+      .status-pulse {
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        animation: pulse-ring 2s infinite;
+        flex-shrink: 0;
+      }
+
+      @keyframes pulse-ring {
+        0% {
+          box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+        }
+        70% {
+          box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+        }
+      }
+      .main-panel {
+        margin-left: 260px;
+        width: calc(100% - 260px);
+        height: 100vh;
+        box-sizing: border-box;
+        padding: 24px 32px;
+        background-color: var(--bg-primary);
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .main-panel.full-width {
+        margin-left: 0;
+        width: 100%;
+      }
+
+      /* Dynamic Pages (Tabs) */
+      .page-view {
+        display: none;
+        animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      }
+
+      .page-view.active {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .page-header {
+        margin-bottom: 28px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 18px;
+      }
+
+      .page-header h1 {
+        font-size: 1.65rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: -0.02em;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .system-status {
+        font-size: 0.82rem;
+        font-weight: 600;
+        background: #ecfdf5;
+        border: 1px solid #a7f3d0;
+        color: #047857;
+        padding: 6px 14px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background-color: #10b981;
+        border-radius: 50%;
+        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+      }
+
+      .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.95em;
+        margin-top: -18px;
+        margin-bottom: 24px;
+      }
+
+      /* Cards & Containers */
+      .card {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 2px 12px rgba(15, 23, 42, 0.03);
+        margin-bottom: 24px;
+      }
+
+      .card h2 {
+        font-size: 1.15em;
+        margin-bottom: 18px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-primary);
+      }
+
+      .card h2 i {
+        color: var(--accent-primary);
+      }
+
+      /* Metrics grid */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .stat-box {
+        background-color: var(--bg-card);
+        border: 1px solid var(--border-color);
+        padding: 22px 24px;
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+        transition: all 0.22s ease;
+      }
+
+      .stat-box:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+        border-color: #cbd5e1;
+      }
+
+      .stat-icon {
+        width: 52px;
+        height: 52px;
+        background-color: rgba(13, 148, 136, 0.08);
+        color: var(--accent-primary);
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4em;
+      }
+
+      .stat-icon.green {
+        background-color: rgba(16, 185, 129, 0.08);
+        color: var(--accent-success);
+      }
+
+      .stat-icon.orange {
+        background-color: rgba(245, 158, 11, 0.08);
+        color: var(--accent-warning);
+      }
+
+      .stat-content {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .stat-value {
+        font-size: 2em;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.1;
+      }
+
+      .stat-label {
+        color: var(--text-secondary);
+        font-size: 0.85em;
+        margin-top: 4px;
+        font-weight: 600;
+      }
+
+      /* Split-column grids */
+      .grid-2col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+      }
+
+      /* Forms Styling */
+      .form-group {
+        margin-bottom: 18px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--text-secondary);
+        font-size: 0.88em;
+        font-weight: 600;
+      }
+
+      input[type="text"],
+      input[type="email"],
+      input[type="number"],
+      input[type="file"],
+      select {
+        width: 100%;
+        padding: 11px 15px;
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        color: var(--text-primary);
+        font-size: 0.92em;
+        transition: all 0.2s ease;
+        font-family: inherit;
+      }
+
+      input:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+        background-color: #ffffff;
+      }
+
+      /* Success/Error boxes */
+      .success,
+      .error,
+      .info {
+        padding: 12px 18px;
+        border-radius: 10px;
+        margin-bottom: 18px;
+        font-weight: 600;
+        font-size: 0.9em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .success {
+        background-color: #ecfdf5;
+        border: 1px solid #a7f3d0;
+        color: #047857;
+      }
+
+      .error {
+        background-color: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #dc2626;
+      }
+
+      .info {
+        background-color: #f0fdfa;
+        border: 1px solid #99f6e4;
+        color: #0d9488;
+      }
+
+      /* CCTV Grid layout for Live streaming tab */
+      .cctv-layout {
+        display: grid;
+        grid-template-columns: 1fr 380px;
+        gap: 24px;
+        margin-top: 10px;
+        flex: 1;
+        min-height: 0;
+        align-items: stretch;
+      }
+
+      @media (max-width: 1120px) {
+        .cctv-layout {
+          grid-template-columns: 1fr;
+          height: auto;
+          overflow-y: auto;
+        }
+        .ticker-card {
+          height: 420px !important;
+        }
+      }
+
+      .cctv-screen-wrapper {
+        position: relative;
+        width: 100%;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 1px solid #cbd5e1;
+        background: #090d16;
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+        aspect-ratio: 16 / 9;
+      }
+
+      .cctv-viewport {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .cctv-viewport img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      .cctv-badge {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(8px);
+        color: #34d399;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 0.78em;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(52, 211, 153, 0.3);
+      }
+
+      .cctv-badge-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background-color: #10b981;
+        border-radius: 50%;
+        box-shadow: 0 0 8px #10b981;
+      }
+
+      .cctv-controls {
+        margin-top: 18px;
+        display: flex;
+        gap: 12px;
+      }
+
+      .cctv-camera-tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .camera-tab-btn {
+        background-color: #ffffff;
+        border: 1px solid var(--border-color);
+        color: #475569;
+        padding: 10px 18px;
+        border-radius: 12px;
+        font-size: 0.88rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+      }
+
+      .camera-tab-btn:hover {
+        color: #0f172a;
+        border-color: #cbd5e1;
+        background: #f8fafc;
+      }
+
+      .camera-tab-btn.active {
+        background: #f0fdfa;
+        border-color: #0d9488;
+        color: #0d9488;
+        box-shadow: 0 2px 10px rgba(13, 148, 136, 0.12);
+        font-weight: 700;
+      }
+
+      /* Button Styles */
+      .btn-primary-action {
+        background: linear-gradient(135deg, #0d9488, #059669);
+        border: none;
+        border-radius: 12px;
+        color: #ffffff !important;
+        padding: 11px 24px;
+        font-weight: 700;
+        font-size: 0.92rem;
+        box-shadow: 0 4px 14px rgba(13, 148, 136, 0.22);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+      }
+      .btn-primary-action:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(13, 148, 136, 0.32);
+        color: #ffffff !important;
+      }
+
+      .btn-disconnect-action {
+        background: #ffffff;
+        border: 1.5px solid #fecaca;
+        color: #dc2626 !important;
+        border-radius: 12px;
+        padding: 11px 20px;
+        font-weight: 700;
+        font-size: 0.92rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        box-shadow: 0 1px 3px rgba(220, 38, 38, 0.05);
+      }
+      .btn-disconnect-action:hover {
+        background: #fef2f2;
+        border-color: #fca5a5;
+        color: #b91c1c !important;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.12);
+        transform: translateY(-1px);
+      }
+
+      /* Real-Time Roll ticker lists */
+      .ticker-card {
+        background-color: #ffffff;
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 20px;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+      }
+
+      /* AI Radar Scanner Card */
+      .ai-radar-card {
+        background: linear-gradient(135deg, #f8fafc 0%, #f0fdfa 100%);
+        border: 1.5px dashed rgba(13, 148, 136, 0.35);
+        border-radius: 14px;
+        padding: 24px 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        gap: 12px;
+        margin: 12px 0;
+        position: relative;
+        overflow: hidden;
+      }
+      .radar-icon-container {
+        position: relative;
+        width: 50px;
+        height: 50px;
+        background: #ffffff;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 14px rgba(13, 148, 136, 0.18);
+        border: 1px solid rgba(13, 148, 136, 0.25);
+      }
+      .radar-icon-container i {
+        font-size: 1.35rem;
+        color: #0d9488;
+        animation: radarPulse 2s ease-in-out infinite;
+      }
+      .radar-ring {
+        position: absolute;
+        inset: -6px;
+        border: 2px solid rgba(13, 148, 136, 0.35);
+        border-radius: 50%;
+        animation: ringPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+      @keyframes ringPing {
+        75%, 100% {
+          transform: scale(1.45);
+          opacity: 0;
+        }
+      }
+      @keyframes radarPulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.15); opacity: 0.85; }
+      }
+
+      .ai-radar-title {
+        font-size: 0.86rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: -0.01em;
+      }
+      .ai-radar-sub {
+        font-size: 0.76rem;
+        color: #0d9488;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 3px;
+      }
+      .radar-dots-wave span {
+        animation: waveDot 1.4s infinite ease-in-out;
+        display: inline-block;
+        font-weight: 900;
+      }
+      .radar-dots-wave span:nth-child(2) { animation-delay: 0.2s; }
+      .radar-dots-wave span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes waveDot {
+        0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+        40% { transform: scale(1.4); opacity: 1; }
+      }
+
+      .ticker-header {
+        font-size: 0.85rem;
+        font-weight: 800;
+        margin-bottom: 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #0f172a;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #f1f5f9;
+      }
+
+      .ticker-list {
+        flex: 1;
+        overflow-y: auto;
+        max-height: calc(100vh - 280px);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-right: 4px;
+      }
+
+      .ticker-list::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .ticker-list::-webkit-scrollbar-track {
+        background: #f1f5f9;
+        border-radius: 4px;
+      }
+
+      .ticker-list::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+
+      .ticker-list::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+
+      .ticker-item {
+        background: transparent;
+        border: none;
+        padding: 0;
+        border-radius: 0;
+        display: block;
+        animation: slideInDown 0.3s ease-out;
+      }
+
+      @keyframes slideInDown {
+        from {
+          opacity: 0;
+          transform: translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .ticker-avatar {
+        width: 36px;
+        height: 36px;
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        color: white;
+        font-size: 0.9em;
+      }
+
+      .ticker-info {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+      }
+
+      .ticker-name {
+        font-weight: 600;
+        font-size: 0.9em;
+      }
+
+      .ticker-time {
+        font-size: 0.75em;
+        color: var(--text-secondary);
+        margin-top: 2px;
+      }
+
+      .ticker-match {
+        font-size: 0.8em;
+        background-color: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 700;
+      }
+
+      /* Log tables */
+      .log-table-wrapper {
+        overflow-x: auto;
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        background-color: var(--bg-card);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+      }
+
+      .log-table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+      }
+
+      .log-table th {
+        background-color: #f8fafc;
+        color: #475569;
+        padding: 14px 16px;
+        font-size: 0.8em;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      .log-table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid #f1f5f9;
+        color: #0f172a;
+        font-size: 0.9em;
+      }
+
+      .log-table tr:hover {
+        background-color: #f8fafc;
+      }
+
+      .badge {
+        display: inline-flex;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 0.78em;
+        font-weight: 700;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .badge-success {
+        background-color: #ecfdf5;
+        color: #047857;
+        border: 1px solid #a7f3d0;
+      }
+
+      .badge-info {
+        background-color: #f0fdfa;
+        color: #0d9488;
+        border: 1px solid #99f6e4;
+      }
+
+      /* AI Progress Log Console */
+      .terminal-wrapper {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      .terminal-log {
+        background-color: #05070c;
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        font-family: "JetBrains Mono", monospace;
+        padding: 20px;
+        color: #10b981;
+        flex: 1;
+        min-height: 350px;
+        max-height: 480px;
+        overflow-y: auto;
+        font-size: 0.85em;
+        line-height: 1.6;
+        box-shadow: inset 0 10px 30px rgba(0, 0, 0, 0.5);
+      }
+
+      .terminal-log .system {
+        color: #818cf8;
+      }
+      .terminal-log .success {
+        color: #34d399;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        display: inline;
+      }
+      .terminal-log .warning {
+        color: #facc15;
+      }
+      .terminal-log .error-line {
+        color: #f87171;
+      }
+
+      .terminal-header {
+        background-color: #0d1222;
+        border: 1px solid var(--border-color);
+        border-bottom: none;
+        padding: 10px 16px;
+        border-radius: 12px 12px 0 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.8em;
+        color: var(--text-secondary);
+        font-weight: 600;
+      }
+
+      .terminal-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .td-red {
+        background-color: #f43f5e;
+      }
+      .td-yellow {
+        background-color: #eab308;
+      }
+      .td-green {
+        background-color: #22c55e;
+      }
+
+      /* Drag & Drop File Container */
+      .dropzone-container {
+        border: 2px dashed var(--border-color);
+        border-radius: 12px;
+        padding: 30px;
+        text-align: center;
+        background-color: rgba(255, 255, 255, 0.01);
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .dropzone-container:hover {
+        border-color: var(--accent-primary);
+        background-color: rgba(99, 102, 241, 0.02);
+      }
+      .dropzone-icon {
+        font-size: 2em;
+        color: var(--accent-primary);
+        margin-bottom: 10px;
+      }
+      .dropzone-text {
+        font-size: 0.9em;
+        color: var(--text-secondary);
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ============================================================ -->
+    <!-- FIRST-LAUNCH SETUP WIZARD OVERLAY -->
+    <!-- ============================================================ -->
+    <style>
+      /* Setup Wizard Modal */
+      #setup-wizard-overlay {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(10, 14, 26, 0.92);
+        backdrop-filter: blur(16px);
+        z-index: 99999;
+        align-items: center;
+        justify-content: center;
+      }
+      #setup-wizard-overlay.visible { display: flex; }
+
+      .wizard-card {
+        background: #ffffff;
+        border-radius: 20px;
+        padding: 0;
+        width: 920px;
+        max-width: 94vw;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 30px 100px rgba(15,23,42,0.4), 0 0 0 1px rgba(13,148,136,0.2);
+        overflow: hidden;
+        animation: wizardPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+      @keyframes wizardPop {
+        from { opacity: 0; transform: scale(0.92) translateY(20px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .wizard-header {
+        background: linear-gradient(135deg, #0d9488 0%, #059669 100%);
+        padding: 22px 30px;
+        color: white;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        position: relative;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .wizard-header-icon {
+        width: 48px; height: 48px;
+        background: rgba(255,255,255,0.18);
+        border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.35em; color: #ffffff;
+        flex-shrink: 0;
+      }
+      .wizard-header-title h2 {
+        font-size: 1.25em; font-weight: 800;
+        margin-bottom: 2px; color: #ffffff;
+      }
+      .wizard-header-title p {
+        font-size: 0.84em; opacity: 0.9;
+        font-weight: 500; margin: 0; line-height: 1.3;
+      }
+
+      .wizard-body { 
+        padding: 24px 30px; 
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 18px;
+      }
+      @media (max-width: 860px) {
+        .wizard-body { grid-template-columns: 1fr; }
+      }
+
+      .wizard-section {
+        margin-bottom: 0;
+        padding: 18px;
+        background: #f8fafc;
+        border-radius: 14px;
+        border: 1.5px solid #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .wizard-section-title {
+        font-size: 0.82em; font-weight: 800;
+        color: #0d9488; text-transform: uppercase;
+        letter-spacing: 0.5px; margin-bottom: 12px;
+        display: flex; align-items: center; gap: 8px;
+      }
+      .wizard-section-title i { font-size: 1.05em; }
+
+      .wizard-label {
+        display: block; font-size: 0.84em; font-weight: 700;
+        color: #1e293b; margin-bottom: 8px;
+      }
+      .wizard-input {
+        width: 100%; padding: 10px 12px;
+        border: 1.5px solid #cbd5e1; border-radius: 10px;
+        font-size: 0.86em; font-family: 'JetBrains Mono', monospace;
+        background: white; color: #0f172a;
+        transition: all 0.2s;
+      }
+      .wizard-input:focus {
+        outline: none; border-color: #0d9488;
+        box-shadow: 0 0 0 3px rgba(13,148,136,0.15);
+      }
+      .wizard-input.optional { opacity: 0.85; }
+      .wizard-input.optional:focus { opacity: 1; }
+      .wizard-hint {
+        font-size: 0.75em; color: #64748b;
+        margin-top: 8px; display: block; font-family: inherit;
+        line-height: 1.35;
+      }
+
+      .webcam-chips {
+        display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
+      }
+      .webcam-chip {
+        padding: 6px 12px; border-radius: 20px;
+        border: 1.5px solid #cbd5e1; background: white;
+        font-size: 0.8em; font-weight: 700; cursor: pointer;
+        transition: all 0.2s; color: #334155;
+      }
+      .webcam-chip:hover { border-color: #0d9488; color: #0d9488; }
+      .webcam-chip.selected {
+        background: #0d9488; color: white; border-color: #0d9488;
+        box-shadow: 0 2px 8px rgba(13,148,136,0.3);
+      }
+      .webcam-chip.auto-tag::after {
+        content: ' (Auto)';
+        font-size: 0.8em; opacity: 0.85;
+      }
+
+      #wizard-loading-msg {
+        font-size: 0.82em; color: #64748b;
+        display: flex; align-items: center; gap: 8px;
+      }
+      .wizard-spinner {
+        width: 14px; height: 14px;
+        border: 2px solid #e2e8f0; border-top-color: #0d9488;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite; display: inline-block;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .wizard-footer {
+        padding: 20px 36px 28px;
+        display: flex; align-items: center; justify-content: space-between;
+        border-top: 1.5px solid #f0f4f8;
+      }
+      .wizard-skip-btn {
+        background: none; border: none; color: #9ca3af;
+        font-size: 0.88em; cursor: pointer; padding: 8px 0;
+        font-family: inherit; font-weight: 500;
+        transition: color 0.2s;
+      }
+      .wizard-skip-btn:hover { color: #6b7280; }
+      .wizard-save-btn {
+        background: linear-gradient(135deg, #3aafa9, #2ee8c0);
+        color: white; border: none; border-radius: 12px;
+        padding: 13px 32px; font-size: 0.95em; font-weight: 700;
+        cursor: pointer; font-family: inherit;
+        box-shadow: 0 4px 16px rgba(58,175,169,0.35);
+        transition: all 0.2s; display: flex; align-items: center; gap: 8px;
+      }
+      .wizard-save-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(58,175,169,0.45); }
+      .wizard-save-btn:active { transform: translateY(0); }
+
+      #wizard-status-msg { font-size: 0.82em; margin-top: 12px;
+        padding: 10px 14px; border-radius: 8px; display: none; }
+      #wizard-status-msg.ok { background: rgba(34,197,94,0.1); color: #16a34a; border: 1px solid #bbf7d0; display: flex; gap: 8px; align-items: center; }
+      #wizard-status-msg.err { background: rgba(239,68,68,0.1); color: #dc2626; border: 1px solid #fecaca; display: flex; gap: 8px; align-items: center; }
+
+      /* Gear icon in top-right for reconfiguring */
+      #setup-reconfigure-btn {
+        position: fixed; bottom: 24px; right: 24px;
+        height: 44px; padding: 0 20px;
+        background: #ffffff; color: #0f172a;
+        border: 1px solid #cbd5e1; border-radius: 22px; cursor: pointer;
+        font-size: 0.88em; font-weight: 700; z-index: 9000;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+        display: none; align-items: center; gap: 8px; justify-content: center;
+        transition: all 0.2s;
+        font-family: inherit;
+      }
+      #setup-reconfigure-btn:hover { 
+        transform: translateY(-2px); 
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12);
+        border-color: #0d9488;
+        color: #0d9488;
+      }
+    </style>
+
+    <!-- Wizard Overlay -->
+    <div id="setup-wizard-overlay">
+      <div class="wizard-card">
+        <div class="wizard-header">
+          <div class="wizard-header-icon"><i class="fa-solid fa-sliders"></i></div>
+          <div class="wizard-header-title">
+            <h2>Camera Setup Wizard</h2>
+            <p>Configure your camera sources to get started. Settings are automatically saved for future launches.</p>
+          </div>
+        </div>
+
+        <div class="wizard-body">
+          <!-- Section 1: Webcam -->
+          <div class="wizard-section">
+            <div>
+              <div class="wizard-section-title"><i class="fa-solid fa-camera"></i> Local Webcam</div>
+              <label class="wizard-label">Select primary camera:</label>
+              <div id="wizard-loading-msg">
+                <span class="wizard-spinner"></span> Scanning for cameras...
+              </div>
+              <div class="webcam-chips" id="wizard-webcam-chips" style="display:none;"></div>
+            </div>
+            <span class="wizard-hint">Auto tag indicates best detected camera source.</span>
+          </div>
+
+          <!-- Section 2: IP Stream 1 -->
+          <div class="wizard-section">
+            <div>
+              <div class="wizard-section-title"><i class="fa-solid fa-video"></i> IP Camera Stream 1</div>
+              <label class="wizard-label" for="wizard-nvr-url">Camera Stream URL</label>
+              <input type="text" id="wizard-nvr-url" class="wizard-input optional"
+                placeholder="Enter RTSP URL here...">
+            </div>
+            <span class="wizard-hint">Optional. Enter stream URL for NVR/DVR or IP camera.</span>
+          </div>
+
+          <!-- Section 3: IP Stream 2 -->
+          <div class="wizard-section">
+            <div>
+              <div class="wizard-section-title"><i class="fa-solid fa-network-wired"></i> IP Camera Stream 2</div>
+              <label class="wizard-label" for="wizard-dvr-url">Camera Stream URL</label>
+              <input type="text" id="wizard-dvr-url" class="wizard-input optional"
+                placeholder="Enter RTSP URL here...">
+            </div>
+            <span class="wizard-hint">Optional. Enter secondary stream URL if available.</span>
+          </div>
+        </div>
+
+        <div id="wizard-status-msg" style="margin: 0 30px;"></div>
+
+        <div class="wizard-footer">
+          <button class="wizard-skip-btn" onclick="wizardSkip()">
+            <i class="fa-solid fa-forward"></i> Skip for now (use defaults)
+          </button>
+          <button class="wizard-save-btn" onclick="wizardSave()" id="wizard-save-btn">
+            <i class="fa-solid fa-circle-check"></i> Save & Start System
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reconfigure button (shown after first setup) -->
+    <button id="setup-reconfigure-btn" onclick="openSetupWizard()" title="Camera Settings">
+      <i class="fa-solid fa-gear"></i> Update Settings
+    </button>
+
+    <script>
+      // ── Setup Wizard Logic ──────────────────────────────────────────
+      let _wizardSelectedWebcam = null;
+
+      function openSetupWizard() {
+        document.getElementById('setup-wizard-overlay').classList.add('visible');
+        // Load existing config values
+        fetch('/api/config').then(r => r.json()).then(cfg => {
+          if (cfg.nvr_url) document.getElementById('wizard-nvr-url').value = cfg.nvr_url;
+          if (cfg.dvr_url) document.getElementById('wizard-dvr-url').value = cfg.dvr_url;
+          _wizardSelectedWebcam = cfg.webcam_index ?? cfg.detected_webcam ?? 0;
+          loadWebcamChips(cfg.webcam_index ?? cfg.detected_webcam);
+        }).catch(() => loadWebcamChips(null));
+      }
+
+      function loadWebcamChips(autoIndex) {
+        const loading = document.getElementById('wizard-loading-msg');
+        const chips   = document.getElementById('wizard-webcam-chips');
+        loading.style.display = 'flex';
+        chips.style.display = 'none';
+
+        fetch('/api/webcam-detect').then(r => r.json()).then(data => {
+          loading.style.display = 'none';
+          chips.style.display = 'flex';
+          chips.innerHTML = '';
+          const auto = data.auto_selected;
+          _wizardSelectedWebcam = autoIndex ?? auto;
+
+          if (data.cameras.length === 0) {
+            chips.innerHTML = '<span style="font-size:0.85em;color:#ef4444;"><i class="fa-solid fa-triangle-exclamation"></i> No cameras found. Please plug in your USB camera and refresh.</span>';
+            return;
+          }
+          data.cameras.forEach(cam => {
+            const chip = document.createElement('button');
+            chip.className = 'webcam-chip' + (cam.index === auto ? ' auto-tag' : '') +
+                             (cam.index === _wizardSelectedWebcam ? ' selected' : '');
+            chip.textContent = cam.label;
+            chip.dataset.index = cam.index;
+            chip.onclick = function() {
+              document.querySelectorAll('.webcam-chip').forEach(c => c.classList.remove('selected'));
+              this.classList.add('selected');
+              _wizardSelectedWebcam = parseInt(this.dataset.index);
+            };
+            chips.appendChild(chip);
+          });
+        }).catch(() => {
+          loading.innerHTML = '<span style="color:#ef4444;"><i class="fa-solid fa-triangle-exclamation"></i> Could not detect cameras.</span>';
+        });
+      }
+
+      function wizardSave() {
+        const btn = document.getElementById('wizard-save-btn');
+        const status = document.getElementById('wizard-status-msg');
+        btn.innerHTML = '<span class="wizard-spinner"></span> Saving...';
+        btn.disabled = true;
+        status.className = ''; status.style.display = 'none';
+
+        const payload = {
+          nvr_url: document.getElementById('wizard-nvr-url').value.trim(),
+          dvr_url: document.getElementById('wizard-dvr-url').value.trim(),
+          webcam_index: _wizardSelectedWebcam
+        };
+
+        fetch('/api/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        }).then(r => r.json()).then(res => {
+          if (res.success) {
+            status.className = 'ok';
+            status.innerHTML = '<i class="fa-solid fa-circle-check"></i> Saved! Streams are restarting...';
+            status.style.display = 'flex';
+            setTimeout(() => {
+              document.getElementById('setup-wizard-overlay').classList.remove('visible');
+              document.getElementById('setup-reconfigure-btn').style.display = 'flex';
+              btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Save & Start System';
+              btn.disabled = false;
+              status.style.display = 'none';
+            }, 1800);
+          } else {
+            throw new Error(res.error || 'Unknown error');
+          }
+        }).catch(e => {
+          status.className = 'err';
+          status.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Error: ' + e.message;
+          status.style.display = 'flex';
+          btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Save & Start System';
+          btn.disabled = false;
+        });
+      }
+
+      function wizardSkip() {
+        document.getElementById('setup-wizard-overlay').classList.remove('visible');
+        document.getElementById('setup-reconfigure-btn').style.display = 'flex';
+      }
+
+      function toggleSidebar() {
+        const sidebar = document.getElementById('mainSidebar');
+        const mainPanel = document.querySelector('.main-panel');
+        const toggleIcon = document.getElementById('toggleIcon');
+        
+        sidebar.classList.toggle('collapsed');
+        mainPanel.classList.toggle('expanded');
+        
+        if (sidebar.classList.contains('collapsed')) {
+          toggleIcon.className = 'fa-solid fa-chevron-right';
+        } else {
+          toggleIcon.className = 'fa-solid fa-chevron-left';
+        }
+      }
+
+      function toggleSidebar() {
+        const sidebar = document.getElementById('mainSidebar');
+        const mainPanel = document.querySelector('.main-panel');
+        
+        sidebar.classList.toggle('hidden');
+        mainPanel.classList.toggle('full-width');
+      }
+
+      // On page load: show wizard only if setup has not been done
+      window.addEventListener('DOMContentLoaded', function() {
+        fetch('/api/config').then(r => r.json()).then(cfg => {
+          if (!cfg.setup_done) {
+            openSetupWizard();
+          } else {
+            // Show the small reconfigure gear button
+            document.getElementById('setup-reconfigure-btn').style.display = 'flex';
+          }
+        }).catch(() => openSetupWizard());
+      });
+
+      async function closeApplication() {
+        if (!window.confirm('Close the Forks N Knives attendance app and stop its camera services?')) return;
+
+        const button = document.getElementById('close-app-btn');
+        button.disabled = true;
+        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Closing...';
+
+        try {
+          const response = await fetch('/api/system/shutdown', { method: 'POST' });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Shutdown request failed.');
+
+          document.body.innerHTML = '<main style="margin:auto;padding:32px;text-align:center;font-family:inherit;color:#0f172a"><h2>Forks N Knives Attendance is closed</h2><p>You can close this browser tab.</p></main>';
+        } catch (error) {
+          button.disabled = false;
+          button.innerHTML = '<i class="fa-solid fa-power-off"></i> Close App';
+          window.alert(error.message || 'Could not stop the app. Try again on the computer running it.');
+        }
+      }
+    </script>
+
+    <!-- Left Persistent Sidebar Panel -->
+    <div class="sidebar" id="mainSidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-brand-title">
+          <i class="fa-solid fa-circle-nodes brand-logo"></i>
+          <span>QIntellect <em>Technologies</em></span>
+        </div>
+        <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Hide Sidebar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <ul class="sidebar-menu">
+        <li class="menu-item active" onclick="switchTab('live-view', this)" title="Live Stream Monitoring">
+          <i class="fa-solid fa-video"></i>
+          <span>Live Stream Monitoring</span>
+        </li>
+        <li class="menu-item" onclick="switchTab('enroll-view', this)" title="Staff Directory">
+          <i class="fa-solid fa-users"></i>
+          <span>Staff Directory</span>
+        </li>
+        <li class="menu-item" onclick="switchTab('multi-view', this)" title="Multi-Camera View">
+          <i class="fa-solid fa-border-all"></i>
+          <span>Multi-Camera View</span>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div class="connection-status">
+          <span class="status-pulse"></span>
+          <span>System Operational</span>
+        </div>
+        <div
+          class="footer-text"
+          style="
+            font-size: 0.75em;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            font-weight: 600;
+          "
+        >
+          AI Core v2.4 Active
+        </div>
+        <button id="close-app-btn" class="close-app-btn" type="button" onclick="closeApplication()">
+          <i class="fa-solid fa-power-off"></i> Close App
+        </button>
+      </div>
+    </div>
+
+    <!-- Right Main Content Panel -->
+    <div class="main-panel">
+      <!-- ================= PAGE 1: DASHBOARD OVERVIEW ================= -->
+      <div id="dashboard-view" class="page-view">
+        <div class="page-header">
+          <h1>
+            <button class="top-menu-btn" onclick="toggleSidebar()" title="Toggle Sidebar Navigation">
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            <i class="fa-solid fa-chart-line"></i> Attendance Dashboard
+          </h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>AI Engine Standing By</span>
+          </div>
+        </div>
+        <p class="page-subtitle">Real-time stats and logged attendance records</p>
+
+        <!-- Metrics Grid -->
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-icon">
+              <i class="fa-solid fa-users"></i>
+            </div>
+            <div class="stat-content">
+              <div class="stat-value" id="valEnrolled">--</div>
+              <div class="stat-label">Enrolled Staff</div>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-icon green">
+              <i class="fa-solid fa-calendar-check"></i>
+            </div>
+            <div class="stat-content">
+              <div class="stat-value" id="valAttendance">--</div>
+              <div class="stat-label">Today's Attendance</div>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-icon orange">
+              <i class="fa-solid fa-database"></i>
+            </div>
+            <div class="stat-content">
+              <div class="stat-value" id="valRecords">--</div>
+              <div class="stat-label">Total Records</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Attendance Logs Card -->
+        <div class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 20px;
+            "
+          >
+            <h2>
+              <i class="fa-solid fa-list-check"></i> Recent Attendance Log
+            </h2>
+            <div style="display: flex; gap: 10px">
+              <button
+                onclick="loadStats()"
+                class="btn-outline"
+                style="width: auto; padding: 8px 16px; font-size: 0.85em"
+              >
+                <i class="fa-solid fa-rotate"></i> Refresh Stats
+              </button>
+              <button
+                class="btn btn-primary shadow shadow-sm"
+                onclick="loadAttendanceLogs()"
+                style="width: auto; padding: 8px 16px; font-size: 0.85em"
+              >
+                <i class="fa-solid fa-arrow-down-long"></i> Sync Logs
+              </button>
+            </div>
+          </div>
+          <div id="statsMessage"></div>
+          <div class="log-table-wrapper">
+            <div id="logsContainer">
+              <p
+                style="
+                  padding: 30px;
+                  text-align: center;
+                  color: var(--text-secondary);
+                "
+              >
+                Click "Sync Logs" to fetch the latest database records.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= PAGE 2: STAFF ENROLLMENT ================= -->
+      <div id="enroll-view" class="page-view">
+        <div class="page-header">
+          <h1>
+            <button class="top-menu-btn" onclick="toggleSidebar()" title="Toggle Sidebar Navigation">
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            <i class="fa-solid fa-users"></i> Staff Directory & Enrollment
+          </h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>Ready for Training</span>
+          </div>
+        </div>
+        <p class="page-subtitle">
+          Manage staff profiles and reset attendance statuses for testing.
+        </p>
+
+        <div class="grid-2col" style="display: none !important;">
+          <!-- Enrollment Profile Input -->
+          <div
+            class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+          >
+            <h2><i class="fa-solid fa-id-card"></i> 1. Create Staff Profile</h2>
+            <div id="enrollmentMessage"></div>
+
+            <div class="form-group">
+              <label>Full Name</label>
+              <input
+                type="text"
+                class="form-control bg-dark text-white border-secondary"
+                id="enrollName"
+                placeholder="Enter full name (e.g. Imran Khalid)"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Email Address</label>
+              <input
+                type="email"
+                class="form-control bg-dark text-white border-secondary"
+                id="enrollEmail"
+                placeholder="e.g. imran@example.com"
+              />
+            </div>
+            
+            <div class="form-group">
+              <label>Student Type</label>
+              <select class="form-control bg-dark text-white border-secondary" id="enrollIsVeiled">
+                <option value="false">Standard (No Veil)</option>
+                <option value="true">Veiled (Niqab/Mask)</option>
+              </select>
+            </div>
+
+            <button
+              class="btn btn-primary shadow shadow-sm"
+              onclick="createEnrollUser()"
+              style="margin-bottom: 25px"
+            >
+              <i class="fa-solid fa-user-plus"></i> Initialize Profile
+            </button>
+
+            <h2>
+              <i class="fa-solid fa-circle-play"></i> 2. Upload Enrollment Video
+            </h2>
+
+            <div class="form-group">
+              <label>Associated Profile User ID</label>
+              <input
+                type="number"
+                class="form-control bg-dark text-white border-secondary"
+                id="userIdEnroll"
+                placeholder="Auto-filled after profile initialization"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Upload Video (Max 15-30s)</label>
+              <div
+                class="dropzone-container"
+                onclick="document.getElementById('videoFile').click()"
+              >
+                <i class="fa-solid fa-video-slash dropzone-icon"></i>
+                <div class="dropzone-text">
+                  Click to choose a video file or Drag & Drop here
+                </div>
+                <input
+                  type="file"
+                  class="form-control bg-dark text-white border-secondary"
+                  id="videoFile"
+                  accept="video/*"
+                  style="display: none"
+                  onchange="updateDropzoneLabel(this)"
+                />
+              </div>
+            </div>
+
+            <button
+              class="btn btn-primary shadow-sm"
+              onclick="uploadEnrollmentVideo()"
+            >
+              <i class="fa-solid fa-microchip"></i> Process & Save Face Data
+            </button>
+          </div>
+
+          <!-- AI Progress log Console terminal -->
+          <div class="terminal-wrapper">
+            <div class="terminal-header">
+              <span class="terminal-dot td-red"></span>
+              <span class="terminal-dot td-yellow"></span>
+              <span class="terminal-dot td-green"></span>
+              <span style="margin-left: 5px"
+                >AI Processing Status</span
+              >
+            </div>
+            <div class="terminal-log" id="terminalLog">
+              <div class="system">
+                [SYSTEM INITIALIZATION] Monitor Online. Waiting for
+                enrollment...
+              </div>
+            </div>
+            <div style="margin-top: 10px; text-align: right">
+              <button
+                onclick="
+                  document.getElementById('terminalLog').innerHTML =
+                    '<div class=\'system\'>[SYSTEM] Console Cleared.</div>'
+                "
+                class="btn-outline"
+                style="width: auto; padding: 6px 14px; font-size: 0.8em"
+              >
+                Clear Console
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= NEW STAFF DIRECTORY & CRUD SECTION ================= -->
+        <div
+          class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+          style="margin-top: 30px"
+        >
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 20px;
+            "
+          >
+            <h2>
+              <i class="fa-solid fa-users-gear"></i> Enrolled Staff Directory
+              (CRUD Operations)
+            </h2>
+            <button
+              onclick="loadStaffDirectory()"
+              class="btn-outline"
+              style="width: auto; padding: 8px 16px; font-size: 0.85em"
+            >
+              <i class="fa-solid fa-arrows-rotate"></i> Refresh Directory
+            </button>
+          </div>
+          <div id="directoryMessage"></div>
+
+          <div class="log-table-wrapper">
+            <table
+              class="table table-dark table-hover table-borderless align-middle"
+            >
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Staff Member</th>
+                  <th>Email</th>
+                  <th>Department</th>
+                  <th>Phone</th>
+                  <th>Status Today</th>
+                  <th>Date Enrolled</th>
+                  <th style="text-align: right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="directoryTableBody">
+                <tr>
+                  <td
+                    colspan="8"
+                    style="
+                      text-align: center;
+                      color: var(--text-secondary);
+                      padding: 30px;
+                    "
+                  >
+                    Loading enrolled staff profiles...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Beautiful Premium Edit Modal (Interactive Overlay) -->
+        <div
+          id="editUserModal"
+          style="
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 999;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(8px);
+            padding: 20px;
+          "
+        >
+          <div
+            class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+            style="
+              width: 100%;
+              max-width: 550px;
+              margin-bottom: 0;
+              background-color: var(--bg-card);
+              border-color: var(--accent-primary);
+              box-shadow: 0 0 40px rgba(99, 102, 241, 0.25);
+            "
+          >
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 25px;
+              "
+            >
+              <h2 style="margin-bottom: 0">
+                <i class="fa-solid fa-user-pen"></i> Edit Staff Profile
+              </h2>
+              <i
+                class="fa-solid fa-circle-xmark"
+                onclick="closeEditModal()"
+                style="
+                  font-size: 1.6em;
+                  color: var(--text-secondary);
+                  cursor: pointer;
+                  transition: color 0.2s;
+                "
+                onmouseover="this.style.color = 'var(--accent-danger)'"
+                onmouseout="this.style.color = 'var(--text-secondary)'"
+              ></i>
+            </div>
+            <div id="editModalMessage"></div>
+            <input type="hidden" id="editUserId" />
+
+            <div class="form-group">
+              <label>Full Name</label>
+              <input
+                type="text"
+                class="form-control bg-dark text-white border-secondary"
+                id="editName"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Email Address</label>
+              <input
+                type="email"
+                class="form-control bg-dark text-white border-secondary"
+                id="editEmail"
+              />
+            </div>
+
+            <div class="grid-2col" style="gap: 15px; margin-bottom: 20px">
+              <div class="form-group" style="margin-bottom: 0">
+                <label>Department</label>
+                <input
+                  type="text"
+                  class="form-control bg-dark text-white border-secondary"
+                  id="editDepartment"
+                  placeholder="e.g. IT, HR, Finance"
+                />
+              </div>
+              <div class="form-group" style="margin-bottom: 0">
+                <label>Phone Number</label>
+                <input
+                  type="text"
+                  class="form-control bg-dark text-white border-secondary"
+                  id="editPhone"
+                  placeholder="e.g. +92 300 1234567"
+                />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Notes / Designation</label>
+              <input
+                type="text"
+                class="form-control bg-dark text-white border-secondary"
+                id="editNotes"
+                placeholder="e.g. Lead AI Engineer, Attendance manager"
+              />
+            </div>
+
+            <div class="grid-2col" style="gap: 15px; margin-top: 25px">
+              <button
+                class="btn btn-outline-info shadow-sm"
+                onclick="closeEditModal()"
+              >
+                Cancel
+              </button>
+              <button
+                class="btn btn-primary shadow-sm"
+                onclick="saveUserProfile()"
+              >
+                <i class="fa-solid fa-floppy-disk"></i> Save Profile Details
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Photo Upload Modal -->
+        <div
+          id="photoUploadModal"
+          style="
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 999;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(8px);
+          "
+        >
+          <div
+            style="
+              background: #fff;
+              border-radius: 16px;
+              padding: 30px;
+              width: 400px;
+              max-width: 90%;
+            "
+          >
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+              "
+            >
+              <h3 style="margin: 0; font-size: 1.1em; font-weight: 800">
+                <i class="fa-solid fa-camera" style="color: #3aafa9"></i>
+                Upload Profile Photo
+              </h3>
+              <i
+                class="fa-solid fa-circle-xmark"
+                onclick="closePhotoModal()"
+                style="font-size: 1.5em; color: #94a3b8; cursor: pointer"
+              ></i>
+            </div>
+
+            <!-- Preview -->
+            <div
+              id="photoPreviewWrap"
+              style="
+                width: 120px;
+                height: 120px;
+                border-radius: 12px;
+                background: #f1f5f9;
+                border: 2px dashed #cbd5e1;
+                margin: 0 auto 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+              "
+            >
+              <i
+                class="fa-solid fa-user"
+                style="font-size: 2.5em; color: #cbd5e1"
+                id="photoPreviewIcon"
+              ></i>
+              <img
+                id="photoPreviewImg"
+                style="
+                  display: none;
+                  width: 100%;
+                  height: 100%;
+                  object-fit: cover;
+                "
+              />
+            </div>
+
+            <p
+              id="photoModalName"
+              style="
+                text-align: center;
+                font-weight: 700;
+                margin-bottom: 15px;
+                color: #0f172a;
+              "
+            ></p>
+
+            <input type="hidden" id="photoModalUserId" />
+
+            <!-- File Input -->
+            <div
+              onclick="document.getElementById('photoFileInput').click()"
+              style="
+                border: 2px dashed #e2e8f0;
+                border-radius: 10px;
+                padding: 20px;
+                text-align: center;
+                cursor: pointer;
+                margin-bottom: 15px;
+                transition: all 0.2s;
+              "
+              onmouseover="this.style.borderColor = '#3aafa9'"
+              onmouseout="this.style.borderColor = '#e2e8f0'"
+            >
+              <i
+                class="fa-solid fa-cloud-arrow-up"
+                style="
+                  font-size: 1.5em;
+                  color: #3aafa9;
+                  display: block;
+                  margin-bottom: 8px;
+                "
+              ></i>
+              <span style="font-size: 0.85em; color: #64748b">
+                Click to select photo (JPG, PNG, WebP)
+              </span>
+            </div>
+
+            <input
+              type="file"
+              id="photoFileInput"
+              accept="image/*"
+              style="display: none"
+              onchange="previewPhoto(this)"
+            />
+
+            <div id="photoUploadMsg"></div>
+
+            <div
+              style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px"
+            >
+              <button
+                onclick="closePhotoModal()"
+                style="
+                  padding: 10px;
+                  border-radius: 8px;
+                  border: 1.5px solid #e2e8f0;
+                  background: #fff;
+                  cursor: pointer;
+                  font-weight: 700;
+                  color: #64748b;
+                "
+              >
+                Cancel
+              </button>
+              <button
+                onclick="uploadProfilePhoto()"
+                style="
+                  padding: 10px;
+                  border-radius: 8px;
+                  background: linear-gradient(135deg, #3aafa9, #1d8a84);
+                  border: none;
+                  color: #fff;
+                  cursor: pointer;
+                  font-weight: 700;
+                "
+              >
+                <i class="fa-solid fa-upload"></i> Upload
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= PAGE 3: LIVE CAMERA STREAMS ================= -->
+      <div id="live-view" class="page-view active">
+        <div class="page-header" style="margin-bottom: 20px;">
+          <h1>
+            <button class="top-menu-btn" onclick="toggleSidebar()" title="Toggle Sidebar Navigation">
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            Pilot Testing AI Attendance System - QIntellect Technologies
+          </h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>Monitoring Real-Time AI</span>
+          </div>
+        </div>
+
+        <div class="cctv-layout">
+          <!-- Live Stream Feed Screen -->
+          <div>
+            <!-- Camera Select Tabs -->
+            <div class="cctv-camera-tabs">
+              <button
+                class="camera-tab-btn active"
+                onclick="selectCamera('nvr_office', this)"
+              >
+                <i class="fa-solid fa-building-user"></i> NVR Office (Ch 3)
+              </button>
+              <button
+                class="camera-tab-btn"
+                onclick="selectCamera('dvr_office', this)"
+              >
+                <i class="fa-solid fa-door-open"></i> DVR Corridor (Ch 2)
+              </button>
+              <button
+                class="camera-tab-btn"
+                onclick="selectCamera('webcam', this)"
+              >
+                <i class="fa-solid fa-video"></i> Local Webcam
+              </button>
+            </div>
+
+            <div class="cctv-screen-wrapper">
+              <div class="cctv-badge" id="cctvLiveBadge" style="display: none">
+                <span class="cctv-badge-dot"></span>
+                LIVE AI FEED ACTIVE
+              </div>
+              <div class="cctv-viewport" id="viewportPlaceholder">
+                <div style="text-align: center; color: var(--text-secondary)">
+                  <i
+                    class="fa-solid fa-video-slash"
+                    style="font-size: 3em; margin-bottom: 15px; display: block"
+                  ></i>
+                  <p>
+                    Select a camera and click "Start Monitoring" to open the
+                    live stream.
+                  </p>
+                </div>
+              </div>
+              <div
+                class="cctv-viewport"
+                id="viewportLive"
+                style="display: none"
+              >
+                <img id="streamView" src="" alt="Live AI Camera Feed" />
+              </div>
+            </div>
+
+            <div class="cctv-controls">
+              <button
+                id="btnStartMonitor"
+                class="btn-primary-action"
+                onclick="toggleLiveStream()"
+                style="flex: 1"
+              >
+                <i class="fa-solid fa-play"></i> Start Monitoring
+              </button>
+              <button
+                onclick="stopLiveStream()"
+                class="btn-disconnect-action"
+                style="width: auto"
+              >
+                <i class="fa-solid fa-power-off"></i> Disconnect Feed
+              </button>
+            </div>
+
+            <div id="streamMessage" style="margin-top: 20px"></div>
+          </div>
+
+          <!-- Live Stream Ticker Panel -->
+          <div class="ticker-card">
+            <div class="ticker-header">
+              <span><i class="fa-solid fa-user-check"></i> Active Match Ticker</span>
+              <i
+                class="fa-solid fa-bolt"
+                style="color: var(--accent-warning)"
+              ></i>
+            </div>
+            <div id="tickerList" class="ticker-list">
+              <div class="ai-radar-card">
+                <div class="radar-icon-container">
+                  <div class="radar-ring"></div>
+                  <i class="fa-solid fa-expand"></i>
+                </div>
+                <div>
+                  <div class="ai-radar-title">AI Recognition Active</div>
+                  <div class="ai-radar-sub">
+                    <span class="status-pulse" style="width:6px;height:6px;"></span>
+                    Scanning live video feed
+                    <span class="radar-dots-wave"><span>.</span><span>.</span><span>.</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE 3.5: MULTI-VIEW -->
+      <div id="multi-view" class="page-view">
+        <div class="page-header" style="margin-bottom: 20px;">
+          <h1>
+            <button class="top-menu-btn" onclick="toggleSidebar()" title="Toggle Sidebar Navigation">
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            <i class="fa-solid fa-border-all"></i> Multi-Camera Live Monitoring
+          </h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>Monitoring 3 Real-Time AI Streams</span>
+          </div>
+        </div>
+
+        <div class="cctv-layout">
+          <div>
+            <div class="cctv-multi-wrapper" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div class="cctv-screen-wrapper" style="margin: 0; padding: 0;">
+                <div class="cctv-badge" style="display:flex;"><span class="cctv-badge-dot"></span><i class="fa-solid fa-building-user"></i> NVR Office (Ch 3)</div>
+                <div class="cctv-viewport" style="background: #000;">
+                  <img id="multiStreamNVR" src="" style="width:100%; height:100%; object-fit:contain; display:none;" />
+                  <i class="fa-solid fa-video-slash placeholder-icon" id="phNVR" style="font-size:2em; color:var(--text-secondary);"></i>
+                </div>
+              </div>
+              <div class="cctv-screen-wrapper" style="margin: 0; padding: 0;">
+                <div class="cctv-badge" style="display:flex;"><span class="cctv-badge-dot"></span><i class="fa-solid fa-door-open"></i> DVR Corridor (Ch 2)</div>
+                <div class="cctv-viewport" style="background: #000;">
+                  <img id="multiStreamDVR" src="" style="width:100%; height:100%; object-fit:contain; display:none;" />
+                  <i class="fa-solid fa-video-slash placeholder-icon" id="phDVR" style="font-size:2em; color:var(--text-secondary);"></i>
+                </div>
+              </div>
+              <div class="cctv-screen-wrapper" style="grid-column: span 2; margin: 0; padding: 0;">
+                <div class="cctv-badge" style="display:flex;"><span class="cctv-badge-dot"></span><i class="fa-solid fa-video"></i> Local Webcam</div>
+                <div class="cctv-viewport" style="background: #000;">
+                  <img id="multiStreamWebcam" src="" style="width:100%; height:100%; object-fit:contain; display:none;" />
+                  <i class="fa-solid fa-video-slash placeholder-icon" id="phWebcam" style="font-size:2em; color:var(--text-secondary);"></i>
+                </div>
+              </div>
+            </div>
+            <div class="cctv-controls">
+              <button class="btn-primary-action" onclick="startAllStreams()" style="flex: 1">
+                <i class="fa-solid fa-play"></i> Start All Streams
+              </button>
+              <button onclick="stopAllStreams()" class="btn-disconnect-action" style="width: auto">
+                <i class="fa-solid fa-power-off"></i> Stop All Streams
+              </button>
+            </div>
+            <div id="multiStreamMessage" style="margin-top: 20px"></div>
+          </div>
+
+          <div class="ticker-card">
+            <div class="ticker-header">
+              <span><i class="fa-solid fa-user-check"></i> Active Match Ticker</span>
+              <i class="fa-solid fa-bolt" style="color: var(--accent-warning)"></i>
+            </div>
+            <div id="multiTickerList" class="ticker-list">
+              <div class="ai-radar-card">
+                <div class="radar-icon-container">
+                  <div class="radar-ring"></div>
+                  <i class="fa-solid fa-expand"></i>
+                </div>
+                <div>
+                  <div class="ai-radar-title">AI Recognition Active</div>
+                  <div class="ai-radar-sub">
+                    <span class="status-pulse" style="width:6px;height:6px;"></span>
+                    Scanning live video feeds
+                    <span class="radar-dots-wave"><span>.</span><span>.</span><span>.</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+<script>
+let multiTickerInterval;
+let _lastMultiTickerKey = null;
+
+function startAllStreams() {
+    document.getElementById('multiStreamNVR').src = "/api/stream/nvr_office?t=" + new Date().getTime();
+    document.getElementById('multiStreamDVR').src = "/api/stream/dvr_office?t=" + new Date().getTime();
+    document.getElementById('multiStreamWebcam').src = "/api/stream/webcam?t=" + new Date().getTime();
+
+    ['multiStreamNVR', 'multiStreamDVR', 'multiStreamWebcam'].forEach(id => {
+        document.getElementById(id).style.display = 'block';
+    });
+    ['phNVR', 'phDVR', 'phWebcam'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+
+    document.getElementById('multiStreamMessage').innerHTML = '<div class="success"><i class="fa-solid fa-check-circle"></i> Monitoring active on all 3 cameras.</div>';
+
+    _lastMultiTickerKey = null;
+    if (multiTickerInterval) clearInterval(multiTickerInterval);
+    multiTickerInterval = setInterval(fetchMultiLiveDetections, 1500);
+    fetchMultiLiveDetections();
+}
+
+function stopAllStreams() {
+    document.getElementById('multiStreamNVR').src = "";
+    document.getElementById('multiStreamDVR').src = "";
+    document.getElementById('multiStreamWebcam').src = "";
+
+    ['multiStreamNVR', 'multiStreamDVR', 'multiStreamWebcam'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+    ['phNVR', 'phDVR', 'phWebcam'].forEach(id => {
+        document.getElementById(id).style.display = 'block';
+    });
+
+    document.getElementById('multiStreamMessage').innerHTML = '';
+
+    if (multiTickerInterval) { clearInterval(multiTickerInterval); multiTickerInterval = null; }
+    _lastMultiTickerKey = null;
+    document.getElementById("multiTickerList").innerHTML =
+        '<p style="text-align:center;color:var(--text-secondary);margin-top:30px;font-size:0.85em;">Feed standby.</p>';
+}
+
+async function fetchMultiLiveDetections() {
+    try {
+        const resp = await fetch(`${API_BASE}/live-detections`);
+        const data = await resp.json();
+        const list = document.getElementById("multiTickerList");
+
+        if (!data.detections || data.detections.length === 0) {
+            if (_lastMultiTickerKey !== '') {
+                _lastMultiTickerKey = '';
+                list.innerHTML = '<p style="text-align:center;color:var(--text-secondary);margin-top:30px;font-size:0.85em;">Awaiting matches...</p>';
+            }
+            return;
+        }
+
+        // Build a cache-key from ids+timestamps — only re-render if something changed
+        const key = data.detections.map(d => d.user_id + ':' + d.timestamp).join('|');
+        if (key === _lastMultiTickerKey) return;
+        _lastMultiTickerKey = key;
+
+        list.innerHTML =
+            `<div style="display:flex;flex-direction:column;gap:10px;">` +
+            data.detections.map((log) => {
+                const isUnknown = log.name === "Unknown";
+                const initials = log.name.split(" ").map(n => n[0] || "?").join("").toUpperCase().slice(0, 2);
+                const pct = Math.round((log.confidence || 0) * 100);
+                const time = new Date(log.timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                const userId = log.user_id;
+                const dept = log.department || "";
+                const sourceStr = log.source === "stream_nvr_office" ? "NVR" : log.source === "stream_dvr_office" ? "DVR" : "Webcam";
+                const accentColor = isUnknown ? "#94a3b8" : pct >= 80 ? "#0d9488" : pct >= 60 ? "#d97706" : "#dc2626";
+                const avatarBg = isUnknown ? "background:linear-gradient(135deg,#94a3b8,#64748b);" : "background:linear-gradient(135deg,#0d9488,#059669);";
+                const photoHTML = userId
+                    ? `<img src="/profile_photos/user_${userId}.jpg" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span style="display:none;width:100%;height:100%;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:0.9em;">${initials}</span>`
+                    : `<span style="font-weight:800;color:#fff;font-size:0.9em;">${initials}</span>`;
+
+                return `
+                <div style="background:#ffffff;border:1.5px solid #e2e8f0;border-left:4px solid ${accentColor};border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(15,23,42,0.04);">
+                  <div style="position:relative;width:48px;height:48px;min-width:48px;border-radius:12px;${avatarBg}overflow:hidden;border:1.5px solid #cbd5e1;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    ${photoHTML}
+                    <span style="position:absolute;bottom:2px;right:2px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:${isUnknown ? "#94a3b8" : "#22c55e"};"></span>
+                  </div>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:0.88em;font-weight:800;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${log.name}</div>
+                    <div style="font-size:0.72em;color:#64748b;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:2px;display:flex;align-items:center;gap:6px;">
+                      <span>${userId ? `EMP-${String(userId).padStart(3, "0")}` : "N/A"}</span>
+                      ${dept ? `<span style="color:#0d9488;">• ${dept}</span>` : ""}
+                    </div>
+                    <div style="font-size:0.7em;color:#94a3b8;margin-top:3px;display:flex;align-items:center;gap:8px;">
+                      <span><i class="fa-solid fa-clock" style="color:#0d9488;margin-right:3px;"></i>${time}</span>
+                      <span><i class="fa-solid fa-camera" style="color:#0d9488;margin-right:3px;"></i>${sourceStr}</span>
+                    </div>
+                  </div>
+                  <div style="flex-shrink:0;">
+                    <div style="display:inline-flex;align-items:center;gap:5px;font-size:0.72em;font-weight:800;padding:4px 10px;border-radius:20px;${isUnknown ? "background:#fef2f2;border:1px solid #fecaca;color:#dc2626;" : "background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;"}">
+                      <i class="fa-solid ${isUnknown ? "fa-triangle-exclamation" : "fa-circle-check"}"></i>${isUnknown ? "Unknown" : "Marked"}
+                    </div>
+                  </div>
+                </div>`;
+            }).join("") +
+            `</div>`;
+    } catch (e) {
+        console.error("Multi-ticker update error:", e);
+    }
+}
+</script>
+      </div>
+
+      <!-- ================= PAGE 4: LAPTOP CAMERA DETECTION ================= -->
+      <div id="camera-detect-view" class="page-view">
+        <div class="page-header">
+          <h1><i class="fa-solid fa-camera"></i> Local Webcam Live Detection</h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>Camera Ready</span>
+          </div>
+        </div>
+        <p class="page-subtitle">
+          Real-time local camera stream with instant AI face recognition
+        </p>
+
+        <div class="cctv-layout">
+          <!-- Camera Feed -->
+          <div>
+            <div
+              class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+            >
+              <h2><i class="fa-solid fa-camera"></i> Live Camera Feed</h2>
+
+              <div class="cctv-screen-wrapper">
+                <div class="cctv-badge">
+                  <span class="cctv-badge-dot"></span>
+                  <span id="cameraStatus">STANDBY</span>
+                </div>
+                <div
+                  class="cctv-viewport"
+                  style="position: relative; background: #000"
+                >
+                  <video
+                    id="cameraVideo"
+                    autoplay
+                    playsinline
+                    muted
+                    style="
+                      width: 100%;
+                      height: 100%;
+                      object-fit: cover;
+                      background: #000;
+                      display: block;
+                    "
+                  ></video>
+                  <canvas
+                    id="cameraCanvas"
+                    width="1280"
+                    height="720"
+                    style="display: none; position: absolute; top: 0; left: 0"
+                  ></canvas>
+                </div>
+              </div>
+
+              <div class="cctv-controls">
+                <button
+                  id="btnStartCamera"
+                  class="btn btn-success shadow-sm"
+                  onclick="startCamera()"
+                  style="flex: 1"
+                >
+                  <i class="fa-solid fa-play"></i> Start Camera
+                </button>
+                <button
+                  id="btnStopCamera"
+                  class="btn-outline btn-danger"
+                  onclick="stopCamera()"
+                  style="flex: 1; display: none"
+                >
+                  <i class="fa-solid fa-circle-stop"></i> Stop Camera
+                </button>
+              </div>
+
+              <div id="cameraMessage" style="margin-top: 20px"></div>
+            </div>
+          </div>
+
+          <!-- Detection Results Panel -->
+          <div class="ticker-card">
+            <div class="ticker-header">
+              <span>👤 Detection Results</span>
+              <i
+                class="fa-solid fa-face-smile"
+                style="color: var(--accent-success)"
+              ></i>
+            </div>
+            <div id="detectionResults" class="ticker-list">
+              <p
+                style="
+                  text-align: center;
+                  color: var(--text-secondary);
+                  margin-top: 30px;
+                  font-size: 0.85em;
+                "
+              >
+                Camera is off. Start camera to begin detection.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detection Stats -->
+        <div
+          class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+          style="margin-top: 30px"
+        >
+          <h2><i class="fa-solid fa-chart-bar"></i> Detection Statistics</h2>
+          <div class="stats-grid">
+            <div class="stat-box">
+              <div class="stat-icon">
+                <i class="fa-solid fa-face-grin"></i>
+              </div>
+              <div class="stat-content">
+                <div class="stat-value" id="statImran">0</div>
+                <div class="stat-label">Loading enrolled users...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= PAGE 5: PHOTO VERIFICATION TEST ================= -->
+      <div id="verify-view" class="page-view">
+        <div class="page-header">
+          <h1><i class="fa-solid fa-vial"></i> Face Recognition Testbed</h1>
+          <div class="system-status">
+            <span class="status-dot"></span>
+            <span>Testbed Active</span>
+          </div>
+        </div>
+        <p class="page-subtitle">
+          Upload a single verification frame or snapshot to test facial matching
+          thresholds
+        </p>
+
+        <div class="grid-2col">
+          <!-- Test upload form -->
+          <div
+            class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+          >
+            <h2><i class="fa-solid fa-file-image"></i> Upload Test Photo</h2>
+            <div id="recognitionMessage"></div>
+
+            <div class="form-group">
+              <label>Select Photo Frame</label>
+              <input
+                type="file"
+                class="form-control bg-dark text-white border-secondary"
+                id="photoFile"
+                accept="image/*"
+              />
+            </div>
+
+            <button
+              class="btn btn-primary shadow-sm"
+              onclick="recognizePhoto()"
+            >
+              <i class="fa-solid fa-shield-halved"></i> Verify Snapshot
+            </button>
+          </div>
+
+          <!-- RTSP Manual Test Card -->
+          <div
+            class="card bg-dark border-secondary shadow-lg p-4 mb-4 rounded-4"
+          >
+            <h2>
+              <i class="fa-solid fa-sliders"></i> RTSP Custom Feed Snapshot Test
+            </h2>
+            <div class="form-group">
+              <label>Custom RTSP Link</label>
+              <input
+                type="text"
+                class="form-control bg-dark text-white border-secondary"
+                id="rtspUrl"
+                placeholder="rtsp://username:password@ip_address:port/path"
+                value="rtsp://admin:admin1122@192.168.0.17:554/cam/realmonitor?channel=1&subtype=0"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Frames to Analyze</label>
+              <input
+                type="number"
+                class="form-control bg-dark text-white border-secondary"
+                id="framesToProcess"
+                value="10"
+                min="1"
+                max="100"
+              />
+            </div>
+
+            <button onclick="recognizeRTSP()" class="btn-outline">
+              <i class="fa-solid fa-magnifying-glass-chart"></i> Capture & Match
+              Snapshot
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Core Javascript Code -->
+    <script>
+      const API_BASE = window.location.origin + "/api";
+      let selectedCameraId = "nvr_office";
+      let isStreaming = false;
+      let tickerInterval = null;
+      let logSyncTimer = null;
+
+      // Initialize system on load
+      window.onload = async () => {
+        console.log("[*] Initializing system...");
+        addTerminalLine(
+          "Dashboard interface loaded. Initializing backend APIs...",
+          "system",
+        );
+        try {
+          const resp = await fetch(`${API_BASE}/init`, { method: "POST" });
+          const data = await resp.json();
+          if (resp.ok) {
+            addTerminalLine(
+              `System successfully initialized: ${data.message}`,
+              "success",
+            );
+            loadStats();
+            loadAttendanceLogs();
+            loadStaffDirectory();
+            loadEnrolledUsers(); // Load enrolled users for camera detection
+
+            // Periodically reload statistics & logs
+            logSyncTimer = setInterval(() => {
+              loadStats();
+              loadAttendanceLogs();
+            }, 10000);
+          } else {
+            addTerminalLine(`Initialize notice: ${data.message}`, "warning");
+          }
+        } catch (e) {
+          addTerminalLine(
+            `Connection check failed: ${e.message}`,
+            "error-line",
+          );
+        }
+      };
+
+      // Navigation tab switching
+      function switchTab(viewId, element) {
+        // Remove active status from all menu items
+        document
+          .querySelectorAll(".menu-item")
+          .forEach((item) => item.classList.remove("active"));
+        // Add active status to clicked element
+        element.classList.add("active");
+
+        // Hide all page views
+        document
+          .querySelectorAll(".page-view")
+          .forEach((view) => view.classList.remove("active"));
+        // Show target page view
+        document.getElementById(viewId).classList.add("active");
+
+        // Reload staff directory if switching to enroll view
+        if (viewId === "enroll-view") {
+          loadStaffDirectory();
+        }
+
+        // Turn off camera stream if switching away from live view
+        if (viewId !== "live-view" && isStreaming) {
+          stopLiveStream();
+        }
+      }
+
+      // Dropzone decoration helper
+      function updateDropzoneLabel(input) {
+        const container = input.parentElement;
+        if (input.files && input.files[0]) {
+          const file = input.files[0];
+          container.style.borderColor = "var(--accent-success)";
+          container.querySelector(".dropzone-icon").className =
+            "fa-solid fa-circle-check dropzone-icon";
+          container.querySelector(".dropzone-icon").style.color =
+            "var(--accent-success)";
+          container.querySelector(".dropzone-text").innerHTML =
+            `<strong>Selected file:</strong> ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+          addTerminalLine(`Selected video file: ${file.name}`, "system");
+        }
+      }
+
+      // Terminal Console Print log helper
+      function addTerminalLine(text, type = "system") {
+        const term = document.getElementById("terminalLog");
+        if (!term) return;
+        const line = document.createElement("div");
+        line.className = type;
+        line.innerHTML = `[${new Date().toLocaleTimeString()}] ${text}`;
+        term.appendChild(line);
+        term.scrollTop = term.scrollHeight;
+      }
+
+      // Show generic HTML alert messages
+      function showMessage(elementId, message, type) {
+        const elem = document.getElementById(elementId);
+        elem.innerHTML = `<div class="${type}">${message}</div>`;
+      }
+
+      // Create User Profile
+      async function createEnrollUser() {
+        const name = document.getElementById("enrollName").value;
+        const email = document.getElementById("enrollEmail").value;
+        const is_veiled = document.getElementById("enrollIsVeiled").value === 'true';
+
+        if (!name) {
+          showMessage("enrollmentMessage", "✗ Name is required", "error");
+          addTerminalLine(
+            "Create Profile Aborted: Name is empty.",
+            "error-line",
+          );
+          return;
+        }
+
+        addTerminalLine(`Creating user profile '${name}'...`, "system");
+
+        try {
+          const resp = await fetch(`${API_BASE}/enroll/create-user`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, email, is_veiled }),
+          });
+          const data = await resp.json();
+
+          if (resp.ok) {
+            document.getElementById("userIdEnroll").value = data.user_id;
+            showMessage(
+              "enrollmentMessage",
+              `✓ Profile Created: ${data.message}`,
+              "success",
+            );
+            addTerminalLine(
+              `[OK] User '${name}' created. ID assigned: ${data.user_id}`,
+              "success",
+            );
+            loadStaffDirectory();
+          } else {
+            showMessage("enrollmentMessage", `✗ ${data.error}`, "error");
+            addTerminalLine(
+              `[FAIL] Profile failed: ${data.error}`,
+              "error-line",
+            );
+          }
+        } catch (e) {
+          showMessage("enrollmentMessage", `✗ Error: ${e.message}`, "error");
+          addTerminalLine(
+            `[FAIL] Connection Error: ${e.message}`,
+            "error-line",
+          );
+        }
+      }
+
+      // Upload Enrollment video & process frames
+      async function uploadEnrollmentVideo() {
+        const userId = document.getElementById("userIdEnroll").value;
+        const videoFile = document.getElementById("videoFile").files[0];
+
+        if (!userId) {
+          showMessage(
+            "enrollmentMessage",
+            "✗ Initialize a User profile first",
+            "error",
+          );
+          addTerminalLine(
+            "Extraction failed: No associated User ID.",
+            "error-line",
+          );
+          return;
+        }
+        if (!videoFile) {
+          showMessage(
+            "enrollmentMessage",
+            "✗ Select a video file to proceed",
+            "error",
+          );
+          addTerminalLine(
+            "Extraction failed: No video file chosen.",
+            "error-line",
+          );
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("video", videoFile);
+        formData.append("user_id", userId);
+
+        showMessage(
+          "enrollmentMessage",
+          "⏳ Uploading video file & starting AI feature extractor. Keep an eye on the console monitor...",
+          "info",
+        );
+        addTerminalLine("Uploading enrollment video to server...", "system");
+        addTerminalLine(
+          "Inference pipeline running (YOLOv8 + InsightFace ResNet-50)...",
+          "system",
+        );
+
+        // Start a simulated progress reporter in terminal while waiting for CPU calculation
+        let frameCounter = 0;
+        const fakeTerminalTimer = setInterval(() => {
+          frameCounter += 10;
+          if (frameCounter <= 120) {
+            addTerminalLine(
+              `Extracting & analyzing frames ${frameCounter - 10} to ${frameCounter}...`,
+              "system",
+            );
+          }
+        }, 6000);
+
+        try {
+          const resp = await fetch(`${API_BASE}/enroll/upload-video`, {
+            method: "POST",
+            body: formData,
+          });
+          clearInterval(fakeTerminalTimer);
+          const data = await resp.json();
+
+          if (resp.ok) {
+            showMessage("enrollmentMessage", `✓ ${data.message}`, "success");
+            addTerminalLine(
+              `[COMPLETED] Face profile processed successfully!`,
+              "success",
+            );
+            addTerminalLine(
+              `Calculated and stored <strong>${data.message.split("stored ")[1]?.split(" ")[0] || "all"}</strong> high-quality face embeddings.`,
+              "success",
+            );
+            loadStats();
+            loadStaffDirectory();
+          } else {
+            showMessage("enrollmentMessage", `✗ ${data.error}`, "error");
+            addTerminalLine(
+              `[PIPELINE ABORTED] Error: ${data.error}`,
+              "error-line",
+            );
+          }
+        } catch (e) {
+          clearInterval(fakeTerminalTimer);
+          showMessage("enrollmentMessage", `✗ Error: ${e.message}`, "error");
+          addTerminalLine(
+            `[PIPELINE ERROR] Server timeout or disconnection: ${e.message}`,
+            "error-line",
+          );
+        }
+      }
+
+      // Toggle Live CCTV stream camera
+      function selectCamera(camId, btn) {
+        document
+          .querySelectorAll(".camera-tab-btn")
+          .forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedCameraId = camId;
+
+        if (isStreaming) {
+          // Instantly switch image route
+          document.getElementById("streamView").src =
+            `/api/stream/${selectedCameraId}?t=${new Date().getTime()}`;
+          showMessage(
+            "streamMessage",
+            `Connected to ${btn.textContent.trim()}`,
+            "success",
+          );
+        }
+      }
+
+      function toggleLiveStream() {
+        const streamView = document.getElementById("streamView");
+        const placeholder = document.getElementById("viewportPlaceholder");
+        const liveView = document.getElementById("viewportLive");
+        const badge = document.getElementById("cctvLiveBadge");
+
+        placeholder.style.display = "none";
+        liveView.style.display = "flex";
+        badge.style.display = "flex";
+
+        // Set MJPEG source
+        streamView.src = `/api/stream/${selectedCameraId}?t=${new Date().getTime()}`;
+        isStreaming = true;
+        showMessage(
+          "streamMessage",
+          `Monitoring active on ${selectedCameraId === "nvr_office" ? "NVR Office (Ch 3)" : selectedCameraId === "dvr_office" ? "DVR Corridor (Ch 2)" : "Local Webcam"}`,
+          "success",
+        );
+
+        // Start reading logs periodically to populate the Live Match Ticker
+        startTickerFeed();
+      }
+
+      function stopLiveStream() {
+        const streamView = document.getElementById("streamView");
+        const placeholder = document.getElementById("viewportPlaceholder");
+        const liveView = document.getElementById("viewportLive");
+        const badge = document.getElementById("cctvLiveBadge");
+
+        streamView.src = "";
+        placeholder.style.display = "flex";
+        liveView.style.display = "none";
+        badge.style.display = "none";
+        isStreaming = false;
+
+        showMessage("streamMessage", "Camera disconnected", "info");
+        stopTickerFeed();
+      }
+
+      // Live stream Attendance Match Ticker functions
+      function startTickerFeed() {
+        if (tickerInterval) clearInterval(tickerInterval);
+        const tickerList = document.getElementById("tickerList");
+        tickerList.innerHTML = "";
+
+        tickerInterval = setInterval(async () => {
+          try {
+            const resp = await fetch(`${API_BASE}/live-detections`);
+            const data = await resp.json();
+
+            if (data.detections && data.detections.length > 0) {
+              tickerList.innerHTML =
+                `<div style="display:flex;flex-direction:column;gap:10px;">` +
+                data.detections
+                  .map((log) => {
+                    const isUnknown = log.name === "Unknown";
+                    const initials = log.name
+                      .split(" ")
+                      .map((n) => n[0] || "?")
+                      .join("")
+                      .toUpperCase()
+                      .slice(0, 2);
+                    const pct = Math.round((log.confidence || 0) * 100);
+                    const time = new Date(log.timestamp).toLocaleTimeString(
+                      "en-US",
+                      { hour: "2-digit", minute: "2-digit", second: "2-digit" },
+                    );
+                    const userId = log.user_id;
+                    const dept = log.department || "";
+                    const accentColor = isUnknown
+                      ? "#94a3b8"
+                      : pct >= 80
+                        ? "#0d9488"
+                        : pct >= 60
+                          ? "#d97706"
+                          : "#dc2626";
+                    const avatarBg = isUnknown
+                      ? "background:linear-gradient(135deg,#94a3b8,#64748b);"
+                      : "background:linear-gradient(135deg,#0d9488,#059669);";
+                    const photoHTML = userId
+                      ? `<img src="/profile_photos/user_${userId}.jpg" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span style="display:none;width:100%;height:100%;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:0.9em;">${initials}</span>`
+                      : `<span style="font-weight:800;color:#fff;font-size:0.9em;">${initials}</span>`;
+
+                    return `
+                <div style="background:#ffffff;border:1.5px solid #e2e8f0;border-left:4px solid ${accentColor};border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(15,23,42,0.04);">
+                  <div style="position:relative;width:48px;height:48px;min-width:48px;border-radius:12px;${avatarBg}overflow:hidden;border:1.5px solid #cbd5e1;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    ${photoHTML}
+                    <span style="position:absolute;bottom:2px;right:2px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:${isUnknown ? "#94a3b8" : "#22c55e"};"></span>
+                  </div>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:0.88em;font-weight:800;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${log.name}</div>
+                    <div style="font-size:0.72em;color:#64748b;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:2px;display:flex;align-items:center;gap:6px;">
+                      <span>${userId ? `EMP-${String(userId).padStart(3, "0")}` : "N/A"}</span>
+                      ${dept ? `<span style="color:#0d9488;">• ${dept}</span>` : ""}
+                    </div>
+                    <div style="font-size:0.7em;color:#94a3b8;margin-top:3px;display:flex;align-items:center;gap:8px;">
+                      <span><i class="fa-solid fa-clock" style="color:#0d9488;margin-right:3px;"></i>${time}</span>
+                    </div>
+                  </div>
+                  <div style="flex-shrink:0;">
+                    <div style="display:inline-flex;align-items:center;gap:5px;font-size:0.72em;font-weight:800;padding:4px 10px;border-radius:20px;${isUnknown ? "background:#fef2f2;border:1px solid #fecaca;color:#dc2626;" : "background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;"}">
+                      <i class="fa-solid ${isUnknown ? "fa-circle-exclamation" : "fa-circle-check"}"></i>${isUnknown ? "Unknown" : "Marked"}
+                    </div>
+                  </div>
+                </div>`;
+                  })
+                  .join("") +
+                `</div>`;
+            } else {
+              tickerList.innerHTML = `
+                <div class="ai-radar-card">
+                  <div class="radar-icon-container">
+                    <div class="radar-ring"></div>
+                    <i class="fa-solid fa-expand"></i>
+                  </div>
+                  <div>
+                    <div class="ai-radar-title">AI Recognition Active</div>
+                    <div class="ai-radar-sub">
+                      <span class="status-pulse" style="width:6px;height:6px;"></span>
+                      Awaiting facial detection
+                      <span class="radar-dots-wave"><span>.</span><span>.</span><span>.</span></span>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }
+          } catch (e) {
+            console.error("Ticker sync error:", e);
+          }
+        }, 1000);
+      }
+
+      function stopTickerFeed() {
+        if (tickerInterval) {
+          clearInterval(tickerInterval);
+          tickerInterval = null;
+        }
+        document.getElementById("tickerList").innerHTML = `
+          <div class="ai-radar-card" style="border-color: #cbd5e1; background: #f8fafc;">
+            <div class="radar-icon-container" style="box-shadow: none; border-color: #cbd5e1;">
+              <i class="fa-solid fa-video-slash" style="color: #94a3b8; animation: none;"></i>
+            </div>
+            <div>
+              <div class="ai-radar-title" style="color: #64748b;">Feed Offline</div>
+              <div class="ai-radar-sub" style="color: #94a3b8;">Start stream to initiate AI scanning</div>
+            </div>
+          </div>
+        `;
+      }
+
+      // ============ LAPTOP CAMERA DETECTION FUNCTIONS ============
+      let cameraStream = null;
+      let cameraProcessingInterval = null;
+      let cameraStats = {};
+      let enrolledUsers = [];
+
+      // Load all enrolled users on page load
+      async function loadEnrolledUsers() {
+        try {
+          const resp = await fetch(`${API_BASE}/users`);
+          const data = await resp.json();
+          if (resp.ok && data.users) {
+            enrolledUsers = data.users;
+            // Initialize stats for all enrolled users
+            cameraStats = {};
+            enrolledUsers.forEach((user) => {
+              cameraStats[user.name] = 0;
+            });
+            cameraStats["unknown"] = 0;
+            console.log("Loaded enrolled users:", enrolledUsers);
+          }
+        } catch (e) {
+          console.error("Failed to load enrolled users:", e);
+        }
+      }
+
+      async function startCamera() {
+        try {
+          showMessage(
+            "cameraMessage",
+            "⏳ Requesting camera access...",
+            "info",
+          );
+          addTerminalLine("[CAMERA] Requesting camera access...", "system");
+
+          // Request camera access with better constraints
+          const constraints = {
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "user",
+            },
+            audio: false,
+          };
+
+          cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+          const video = document.getElementById("cameraVideo");
+          video.srcObject = cameraStream;
+
+          // Ensure video plays
+          video.onloadedmetadata = () => {
+            console.log("Video metadata loaded, attempting to play...");
+            video
+              .play()
+              .then(() => {
+                console.log("Video playing successfully");
+                showMessage(
+                  "cameraMessage",
+                  "✓ Camera started successfully",
+                  "success",
+                );
+                addTerminalLine(
+                  "[CAMERA] ✓ Camera stream activated",
+                  "success",
+                );
+
+                // Start processing frames
+                startCameraProcessing();
+              })
+              .catch((e) => {
+                console.error("Play error:", e);
+                showMessage(
+                  "cameraMessage",
+                  `✗ Error playing video: ${e.message}`,
+                  "error",
+                );
+                addTerminalLine(
+                  `[CAMERA ERROR] Play failed: ${e.message}`,
+                  "error-line",
+                );
+              });
+          };
+
+          // Fallback: try to play immediately
+          video.play().catch((e) => {
+            console.log("Immediate play failed, waiting for metadata:", e);
+          });
+
+          // Update UI
+          document.getElementById("btnStartCamera").style.display = "none";
+          document.getElementById("btnStopCamera").style.display = "block";
+          document.getElementById("cameraStatus").textContent = "LIVE";
+        } catch (error) {
+          showMessage(
+            "cameraMessage",
+            `✗ Camera access denied: ${error.message}`,
+            "error",
+          );
+          addTerminalLine(`[CAMERA ERROR] ${error.message}`, "error-line");
+          console.error("Camera error:", error);
+        }
+      }
+
+      function stopCamera() {
+        try {
+          // Stop stream
+          if (cameraStream) {
+            cameraStream.getTracks().forEach((track) => track.stop());
+            cameraStream = null;
+          }
+
+          // Stop processing
+          if (cameraProcessingInterval) {
+            clearInterval(cameraProcessingInterval);
+            cameraProcessingInterval = null;
+          }
+
+          // Update UI
+          const video = document.getElementById("cameraVideo");
+          video.srcObject = null;
+          document.getElementById("btnStartCamera").style.display = "block";
+          document.getElementById("btnStopCamera").style.display = "none";
+          document.getElementById("cameraStatus").textContent = "STANDBY";
+
+          showMessage("cameraMessage", "✓ Camera stopped", "success");
+          addTerminalLine("[CAMERA] Camera stream closed", "success");
+        } catch (error) {
+          showMessage(
+            "cameraMessage",
+            `✗ Error stopping camera: ${error.message}`,
+            "error",
+          );
+          addTerminalLine(`[CAMERA ERROR] ${error.message}`, "error-line");
+        }
+      }
+
+      function startCameraProcessing() {
+        // Process frames every 500ms (2 FPS for detection)
+        cameraProcessingInterval = setInterval(async () => {
+          try {
+            const video = document.getElementById("cameraVideo");
+            const canvas = document.getElementById("cameraCanvas");
+
+            if (
+              !video ||
+              !canvas ||
+              video.readyState !== video.HAVE_ENOUGH_DATA
+            ) {
+              return;
+            }
+
+            // Draw video frame to canvas with HIGHER resolution
+            const ctx = canvas.getContext("2d");
+            canvas.width = 1280; // Increased from 640
+            canvas.height = 720; // Increased from 480
+            ctx.drawImage(video, 0, 0, 1280, 720);
+
+            // Convert canvas to blob with HIGHER quality
+            canvas.toBlob(
+              async (blob) => {
+                try {
+                  const formData = new FormData();
+                  formData.append("image", blob, "frame.jpg");
+
+                  const resp = await fetch(`${API_BASE}/recognize/frame`, {
+                    method: "POST",
+                    body: formData,
+                  });
+
+                  const data = await resp.json();
+
+                  if (
+                    resp.ok &&
+                    data.detections &&
+                    data.detections.length > 0
+                  ) {
+                    updateCameraDetections(data.detections);
+                  }
+                } catch (e) {
+                  console.error("Frame processing error:", e);
+                }
+              },
+              "image/jpeg",
+              0.95,
+            ); // Increased quality from 0.8 to 0.95
+          } catch (error) {
+            console.error("Camera processing error:", error);
+          }
+        }, 500);
+      }
+
+      function updateCameraDetections(detections) {
+        let resultsHTML = "";
+
+        detections.forEach((detection, idx) => {
+          const name = detection.matched_user || "Unknown";
+          const similarity = (detection.similarity * 100).toFixed(1);
+          const isMatch = detection.is_match;
+
+          // Update stats for all enrolled users
+          if (isMatch && name !== "Unknown") {
+            if (cameraStats[name] !== undefined) {
+              cameraStats[name]++;
+            }
+          } else {
+            cameraStats["unknown"]++;
+          }
+
+          // Create detection item
+          const badgeClass = isMatch ? "badge-success" : "badge-info";
+          const icon = isMatch ? "✓" : "?";
+
+          resultsHTML += `
+                    <div class="ticker-item">
+                        <div class="ticker-avatar" style="background: ${isMatch ? "linear-gradient(135deg, #10b981 0%, #059669 100%)" : "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)"};">
+                            ${icon}
+                        </div>
+                        <div class="ticker-info">
+                            <div class="ticker-name">${name}</div>
+                            <div class="ticker-time">Confidence: ${similarity}%</div>
+                        </div>
+                        <span class="ticker-match ${badgeClass}">${isMatch ? "MATCH" : "UNKNOWN"}</span>
+                    </div>
+                `;
+        });
+
+        document.getElementById("detectionResults").innerHTML = resultsHTML;
+
+        // Update stats dynamically
+        updateStatsDisplay();
+      }
+
+      function updateStatsDisplay() {
+        // Clear existing stats
+        const statsGrid = document.querySelector(".stats-grid");
+        if (!statsGrid) return;
+
+        let statsHTML = "";
+
+        // Add stats for each enrolled user
+        enrolledUsers.forEach((user) => {
+          const count = cameraStats[user.name] || 0;
+          const icon = user.name.toLowerCase().includes("imran")
+            ? "😊"
+            : user.name.toLowerCase().includes("hooria")
+              ? "😍"
+              : "👤";
+
+          statsHTML += `
+                    <div class="stat-box">
+                        <div class="stat-icon green">
+                            <i class="fa-solid fa-face-grin"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-value">${count}</div>
+                            <div class="stat-label">${user.name} Detections</div>
+                        </div>
+                    </div>
+                `;
+        });
+
+        // Add unknown stats
+        const unknownCount = cameraStats["unknown"] || 0;
+        statsHTML += `
+                <div class="stat-box">
+                    <div class="stat-icon orange">
+                        <i class="fa-solid fa-question"></i>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value">${unknownCount}</div>
+                        <div class="stat-label">Unknown Faces</div>
+                    </div>
+                </div>
+            `;
+
+        // Update the stats grid
+        const statsContainer = document.querySelector(".stats-grid");
+        if (statsContainer) {
+          statsContainer.innerHTML = statsHTML;
+        }
+      }
+
+      // Verify photo snapshot in testbed
+      async function recognizePhoto() {
+        const photoFile = document.getElementById("photoFile").files[0];
+
+        if (!photoFile) {
+          showMessage(
+            "recognitionMessage",
+            "✗ Choose a photo file to analyze",
+            "error",
+          );
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("image", photoFile);
+
+        showMessage(
+          "recognitionMessage",
+          "⏳ Extracting faces and comparing against registered profiles...",
+          "info",
+        );
+
+        try {
+          const resp = await fetch(`${API_BASE}/recognize/frame`, {
+            method: "POST",
+            body: formData,
+          });
+          const data = await resp.json();
+
+          if (resp.ok) {
+            const results = data.detections || [];
+            let message = `<strong>Detections Analysis:</strong> Found ${data.total_faces_detected} face(s)<br><br>`;
+            results.forEach((r) => {
+              const styleClass =
+                r.matched_user === "Unknown"
+                  ? "color:#f87171;"
+                  : "color:#34d399; font-weight:bold;";
+              message += `<span style="${styleClass}">• Match Found: ${r.matched_user} (Similarity Score: ${(r.similarity * 100).toFixed(1)}%)</span><br>`;
+            });
+            showMessage("recognitionMessage", message, "success");
+            loadStats();
+          } else {
+            showMessage(
+              "recognitionMessage",
+              `✗ Error: ${data.error}`,
+              "error",
+            );
+          }
+        } catch (e) {
+          showMessage(
+            "recognitionMessage",
+            `✗ Exception: ${e.message}`,
+            "error",
+          );
+        }
+      }
+
+      // Verify RTSP manual capture
+      async function recognizeRTSP() {
+        const rtspUrl = document.getElementById("rtspUrl").value;
+        const frames = document.getElementById("framesToProcess").value;
+
+        if (!rtspUrl) {
+          showMessage(
+            "recognitionMessage",
+            "✗ Enter a valid RTSP stream URL",
+            "error",
+          );
+          return;
+        }
+
+        showMessage(
+          "recognitionMessage",
+          "⏳ Opening RTSP network socket and grabbing frames...",
+          "info",
+        );
+
+        try {
+          const resp = await fetch(`${API_BASE}/recognize/rtsp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              rtsp_url: rtspUrl,
+              frames: parseInt(frames),
+            }),
+          });
+          const data = await resp.json();
+
+          if (resp.ok) {
+            const users = data.recognized_users || [];
+            let message = `<strong>RTSP Capture Report:</strong> Analyzed ${data.frames_processed} frames<br><br>`;
+            if (users.length > 0) {
+              users.forEach(
+                (u) =>
+                  (message += `• Recognized User: <strong>${u}</strong><br>`),
+              );
+            } else {
+              message +=
+                "• No registered staff matches identified in frames.<br>";
+            }
+            showMessage("recognitionMessage", message, "success");
+            loadStats();
+          } else {
+            showMessage(
+              "recognitionMessage",
+              `✗ Capture Failed: ${data.error}`,
+              "error",
+            );
+          }
+        } catch (e) {
+          showMessage(
+            "recognitionMessage",
+            `✗ Connection Exception: ${e.message}`,
+            "error",
+          );
+        }
+      }
+
+      // Load metrics/statistics
+      async function loadStats() {
+        try {
+          const resp = await fetch(`${API_BASE}/stats`);
+          const data = await resp.json();
+
+          document.getElementById("valEnrolled").textContent = data.total_users;
+          document.getElementById("valAttendance").textContent =
+            data.today_attendance;
+          document.getElementById("valRecords").textContent = data.total_logs;
+        } catch (e) {
+          console.error("Failed to load stats:", e);
+        }
+      }
+
+      // Load logs into dashboard table
+      async function loadAttendanceLogs() {
+        try {
+          const resp = await fetch(`${API_BASE}/attendance/logs?limit=15`);
+          const data = await resp.json();
+
+          if (!data.logs || data.logs.length === 0) {
+            document.getElementById("logsContainer").innerHTML = `
+                        <p style="padding: 30px; text-align: center; color: var(--text-secondary);">No attendance logs recorded in the database yet.</p>
+                    `;
+            return;
+          }
+
+          let html =
+            '<table class="table table-dark table-hover table-borderless align-middle"><thead><tr><th>User Name</th><th>Confidence</th><th>Log Source</th><th>Timestamp</th></tr></thead><tbody>';
+          data.logs.forEach((log) => {
+            const isMatch = log.name !== "Unknown";
+            const badgeClass = isMatch ? "badge-success" : "badge-info";
+            const formattedDate = new Date(log.timestamp).toLocaleString();
+            const confidenceVal = (log.confidence * 100).toFixed(1);
+
+            html += `<tr>
+                        <td>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <div class="ticker-avatar" style="width:30px; height:30px; font-size:0.85em;">${log.name.charAt(0)}</div>
+                                <strong>${log.name}</strong>
+                            </div>
+                        </td>
+                        <td><span class="badge ${badgeClass}">${confidenceVal}%</span></td>
+                        <td><span class="badge badge-info" style="background-color:rgba(255,255,255,0.03); color:var(--text-primary); border-color:var(--border-color);">${log.source}</span></td>
+                        <td style="color:var(--text-secondary);">${formattedDate}</td>
+                    </tr>`;
+          });
+          html += "</tbody></table>";
+
+          document.getElementById("logsContainer").innerHTML = html;
+        } catch (e) {
+          showMessage(
+            "statsMessage",
+            `✗ Logs failed to load: ${e.message}`,
+            "error",
+          );
+        }
+      }
+
+      // ============================================
+      // STAFF DIRECTORY CRUD MANAGER JS
+      // ============================================
+      let allEnrolledUsers = [];
+
+      async function loadStaffDirectory() {
+        try {
+          const resp = await fetch(`${API_BASE}/users`);
+          const data = await resp.json();
+          allEnrolledUsers = data.users || [];
+
+          const tableBody = document.getElementById("directoryTableBody");
+          if (!tableBody) return;
+
+          if (allEnrolledUsers.length === 0) {
+            tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: var(--text-secondary); padding: 30px;">
+                                <i class="fa-solid fa-users-slash" style="font-size: 2em; margin-bottom: 10px; display: block;"></i>
+                                No staff members enrolled yet. Use the registration form above to create profiles.
+                            </td>
+                        </tr>
+                    `;
+            return;
+          }
+
+          let html = "";
+          allEnrolledUsers.forEach((user) => {
+            const formattedDate = user.enrollment_date
+              ? new Date(user.enrollment_date).toLocaleString()
+              : "N/A";
+            const dept =
+              user.department ||
+              '<span style="color:var(--text-secondary); font-style:italic;">None</span>';
+            const phone =
+              user.phone ||
+              '<span style="color:var(--text-secondary); font-style:italic;">None</span>';
+            const email =
+              user.email ||
+              '<span style="color:var(--text-secondary); font-style:italic;">None</span>';
+
+            const statusVal = user.status_today || "Absent";
+            const statusClass =
+              statusVal === "Present" ? "badge-success" : "badge-danger";
+            const statusIcon =
+              statusVal === "Present"
+                ? "fa-solid fa-circle-check"
+                : "fa-solid fa-circle-xmark";
+            const statusStyle =
+              statusVal === "Present"
+                ? ""
+                : "background-color: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.2);";
+            const statusBadge = `<span class="badge ${statusClass}" style="${statusStyle}"><i class="${statusIcon}"></i> ${statusVal}</span>`;
+
+            const toggleAction = statusVal === "Present" ? "absent" : "present";
+            const toggleBtnText =
+              statusVal === "Present"
+                ? '<i class="fa-solid fa-user-minus"></i> Mark Absent'
+                : '<i class="fa-solid fa-user-check"></i> Mark Present';
+            const toggleBtnClass =
+              statusVal === "Present"
+                ? "btn-outline btn-danger"
+                : "btn-outline";
+            const toggleBtnStyle =
+              statusVal === "Present"
+                ? "width:auto; padding: 6px 12px; font-size:0.8em;"
+                : "width:auto; padding: 6px 12px; font-size:0.8em; border-color:var(--accent-success, #10b981); color:var(--accent-success, #10b981);";
+
+            html += `<tr>
+                        <td><strong>${user.id}</strong></td>
+                        <td>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <div class="ticker-avatar" style="width:30px; height:30px; font-size:0.85em; background:linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);">${user.name.charAt(0)}</div>
+                                <strong>${user.name}</strong>
+                            </div>
+                        </td>
+                        <td>${email}</td>
+                        <td><span class="badge badge-info">${dept}</span></td>
+                        <td>${phone}</td>
+                        <td>${statusBadge}</td>
+                        <td style="color:var(--text-secondary); font-size:0.9em;">${formattedDate}</td>
+                        <td style="text-align: right;">
+                            <div style="display:inline-flex; gap:8px;">
+                                <button onclick="toggleUserAttendance(${user.id}, '${toggleAction}', '${user.name.replace(/'/g, "\'")}')" class="${toggleBtnClass}" style="${toggleBtnStyle}">${toggleBtnText}</button>
+                                <button onclick="openEditModal(${user.id})" class="btn-outline" style="width:auto; padding: 6px 12px; font-size:0.8em; border-color:var(--accent-primary); color:var(--accent-primary);"><i class="fa-solid fa-user-pen"></i> Edit</button>
+                                <button onclick="openPhotoUpload(${user.id}, '${user.name}')" 
+                                style="width:auto; padding: 6px 12px; font-size:0.8em;
+                                background:#f0fdfc; border:1.5px solid #99f6e4; 
+                                color:#0f766e; border-radius:8px; cursor:pointer; font-weight:700;">
+                                <i class="fa-solid fa-camera"></i> Photo</button>
+                                <button onclick="deleteUserProfile(${user.id}, '${user.name.replace(/'/g, "\'")}')" class="btn-outline btn-danger" style="width:auto; padding: 6px 12px; font-size:0.8em;"><i class="fa-solid fa-trash"></i> Delete</button>
+                            </div>
+                        </td>
+                    </tr>`;
+          });
+          tableBody.innerHTML = html;
+        } catch (e) {
+          console.error("Failed to load staff directory:", e);
+          document.getElementById("directoryTableBody").innerHTML = `
+                    <tr>
+                        <td colspan="8" style="text-align: center; color: var(--accent-danger); padding: 30px;">
+                            ✗ Failed to fetch directory: ${e.message}
+                        </td>
+                    </tr>
+                `;
+        }
+      }
+
+      function openEditModal(userId) {
+        const user = allEnrolledUsers.find((u) => u.id === userId);
+        if (!user) return;
+
+        document.getElementById("editUserId").value = user.id;
+        document.getElementById("editName").value = user.name;
+        document.getElementById("editEmail").value = user.email || "";
+        document.getElementById("editDepartment").value = user.department || "";
+        document.getElementById("editPhone").value = user.phone || "";
+        document.getElementById("editNotes").value = user.notes || "";
+
+        document.getElementById("editModalMessage").innerHTML = "";
+
+        const modal = document.getElementById("editUserModal");
+        modal.style.display = "flex";
+      }
+
+      function closeEditModal() {
+        document.getElementById("editUserModal").style.display = "none";
+      }
+
+      function openPhotoUpload(userId, userName) {
+        document.getElementById("photoModalUserId").value = userId;
+        document.getElementById("photoModalName").textContent = userName;
+        document.getElementById("photoUploadMsg").innerHTML = "";
+        document.getElementById("photoFileInput").value = "";
+        document.getElementById("photoPreviewImg").style.display = "none";
+        document.getElementById("photoPreviewIcon").style.display = "block";
+
+        // Existing photo dikhao agar hai
+        const existingImg = document.getElementById("photoPreviewImg");
+        existingImg.src = `/profile_photos/user_${userId}.jpg`;
+        existingImg.onload = function () {
+          this.style.display = "block";
+          document.getElementById("photoPreviewIcon").style.display = "none";
+        };
+        existingImg.onerror = function () {
+          this.style.display = "none";
+        };
+
+        document.getElementById("photoUploadModal").style.display = "flex";
+      }
+
+      function closePhotoModal() {
+        document.getElementById("photoUploadModal").style.display = "none";
+      }
+
+      function previewPhoto(input) {
+        if (input.files && input.files[0]) {
+          const reader = new FileReader();
+          reader.onload = function (e) {
+            const img = document.getElementById("photoPreviewImg");
+            img.src = e.target.result;
+            img.style.display = "block";
+            document.getElementById("photoPreviewIcon").style.display = "none";
+          };
+          reader.readAsDataURL(input.files[0]);
+        }
+      }
+
+      async function uploadProfilePhoto() {
+        const userId = document.getElementById("photoModalUserId").value;
+        const fileInput = document.getElementById("photoFileInput");
+
+        if (!fileInput.files[0]) {
+          document.getElementById("photoUploadMsg").innerHTML =
+            '<div style="color:#dc2626; font-size:0.85em; margin-bottom:10px;">✗ Pehle photo select karein</div>';
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("photo", fileInput.files[0]);
+
+        document.getElementById("photoUploadMsg").innerHTML =
+          '<div style="color:#0891b2; font-size:0.85em; margin-bottom:10px;">⏳ Uploading...</div>';
+
+        try {
+          const resp = await fetch(`${API_BASE}/users/${userId}/photo`, {
+            method: "POST",
+            body: formData,
+          });
+          const data = await resp.json();
+
+          if (resp.ok) {
+            document.getElementById("photoUploadMsg").innerHTML =
+              '<div style="color:#15803d; font-size:0.85em; margin-bottom:10px;">✓ Photo uploaded successfully!</div>';
+
+            // Directory mein bhi update karo
+            loadStaffDirectory();
+
+            setTimeout(() => closePhotoModal(), 1500);
+          } else {
+            document.getElementById("photoUploadMsg").innerHTML =
+              `<div style="color:#dc2626; font-size:0.85em; margin-bottom:10px;">✗ ${data.error}</div>`;
+          }
+        } catch (e) {
+          document.getElementById("photoUploadMsg").innerHTML =
+            `<div style="color:#dc2626; font-size:0.85em; margin-bottom:10px;">✗ Error: ${e.message}</div>`;
+        }
+      }
+
+      async function saveUserProfile() {
+        const userId = document.getElementById("editUserId").value;
+        const name = document.getElementById("editName").value.trim();
+        const email = document.getElementById("editEmail").value.trim();
+        const department = document
+          .getElementById("editDepartment")
+          .value.trim();
+        const phone = document.getElementById("editPhone").value.trim();
+        const notes = document.getElementById("editNotes").value.trim();
+
+        if (!name) {
+          showMessage("editModalMessage", "✗ Name is required", "error");
+          return;
+        }
+
+        try {
+          const resp = await fetch(`${API_BASE}/users/${userId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, email, department, phone, notes }),
+          });
+
+          const data = await resp.json();
+          if (resp.ok) {
+            closeEditModal();
+            showMessage(
+              "directoryMessage",
+              `✓ User profile '${name}' updated successfully`,
+              "success",
+            );
+            addTerminalLine(
+              `[CRUD] Updated details for User '${name}' (ID: ${userId})`,
+              "success",
+            );
+            loadStaffDirectory();
+            loadStats();
+          } else {
+            showMessage("editModalMessage", `✗ ${data.error}`, "error");
+          }
+        } catch (e) {
+          showMessage(
+            "editModalMessage",
+            `✗ Connection Error: ${e.message}`,
+            "error",
+          );
+        }
+      }
+
+      async function deleteUserProfile(userId, name) {
+        if (
+          !confirm(
+            `⚠️ WARNING:\nAre you absolutely sure you want to delete '${name}'?\n\nThis will permanently delete their profile, all trained face recognition data, and attendance logs. This action CANNOT be undone.`,
+          )
+        ) {
+          return;
+        }
+
+        addTerminalLine(
+          `Deleting profile for '${name}' (ID: ${userId})...`,
+          "warning",
+        );
+
+        try {
+          const resp = await fetch(`${API_BASE}/users/${userId}/delete`, {
+            method: "POST",
+          });
+
+          const data = await resp.json();
+          if (resp.ok) {
+            showMessage(
+              "directoryMessage",
+              `✓ Profile for '${name}' deleted successfully`,
+              "success",
+            );
+            addTerminalLine(
+              `[CRUD] Successfully deleted User '${name}' (ID: ${userId}) and cleared all training embeddings.`,
+              "success",
+            );
+            loadStaffDirectory();
+            loadStats();
+            loadAttendanceLogs();
+          } else {
+            showMessage(
+              "directoryMessage",
+              `✗ Deletion failed: ${data.error}`,
+              "error",
+            );
+            addTerminalLine(
+              `[CRUD FAIL] Failed to delete User '${name}': ${data.error}`,
+              "error-line",
+            );
+          }
+        } catch (e) {
+          showMessage(
+            "directoryMessage",
+            `✗ Connection Error: ${e.message}`,
+            "error",
+          );
+          addTerminalLine(
+            `[CRUD ERROR] Failed to connect for deleting user: ${e.message}`,
+            "error-line",
+          );
+        }
+      }
+
+      async function toggleUserAttendance(userId, action, name) {
+        const apiAction = action === "absent" ? "mark-absent" : "mark-present";
+        addTerminalLine(
+          `[CRUD] Manually marking '${name}' ${action}...`,
+          "warning",
+        );
+
+        try {
+          const resp = await fetch(`${API_BASE}/users/${userId}/${apiAction}`, {
+            method: "POST",
+          });
+
+          const data = await resp.json();
+          if (resp.ok) {
+            showMessage(
+              "directoryMessage",
+              `✓ '${name}' successfully marked ${action} for today`,
+              "success",
+            );
+            addTerminalLine(
+              `[CRUD] User '${name}' (ID: ${userId}) marked ${action} today.`,
+              "success",
+            );
+            loadStaffDirectory();
+            loadStats();
+            loadAttendanceLogs();
+          } else {
+            showMessage(
+              "directoryMessage",
+              `✗ Action failed: ${data.error}`,
+              "error",
+            );
+            addTerminalLine(
+              `[CRUD FAIL] Failed to mark user: ${data.error}`,
+              "error-line",
+            );
+          }
+        } catch (e) {
+          showMessage(
+            "directoryMessage",
+            `✗ Connection Error: ${e.message}`,
+            "error",
+          );
+          addTerminalLine(
+            `[CRUD ERROR] Failed to connect: ${e.message}`,
+            "error-line",
+          );
+        }
+      }
+    </script>
+  </body>
+</html>

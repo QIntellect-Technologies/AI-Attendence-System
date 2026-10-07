@@ -3965,20 +3965,25 @@ def _assert_unique_client_staff_person_code(
     exclude_staff_id: str | None = None,
 ) -> None:
     from support_db_staff import _normalize_people_type
-    query = (
-        get_supabase()
-        .table('client_staff')
-        .select('id, name, person_code')
-        .eq('org_id', str(org_id))
-        .eq('branch_id', str(branch_id))
-        .eq('people_type', _normalize_people_type(people_type))
-        .ilike('person_code', str(person_code).strip())
-        .eq('is_archived', False)
-        .limit(1)
-    )
-    if exclude_staff_id:
-        query = query.neq('id', str(exclude_staff_id))
-    result = query.execute()
+    from support_db_core import _execute_supabase
+
+    def _query():
+        q = (
+            get_supabase()
+            .table('client_staff')
+            .select('id, name, person_code')
+            .eq('org_id', str(org_id))
+            .eq('branch_id', str(branch_id))
+            .eq('people_type', _normalize_people_type(people_type))
+            .ilike('person_code', str(person_code).strip())
+            .eq('is_archived', False)
+            .limit(1)
+        )
+        if exclude_staff_id:
+            q = q.neq('id', str(exclude_staff_id))
+        return q
+
+    result = _execute_supabase('assert_unique_person_code', _query)
     if result.data:
         raise ValueError(f'{_person_code_label(people_type)} already exists in this branch.')
 
@@ -3987,53 +3992,50 @@ def _assert_unique_client_staff_login_identifier(
     email: str | None,
     phone: str | None,
     exclude_staff_id: str | None = None,
+    org_id: str | None = None,
 ) -> None:
-    """Two client_staff rows can never share an email or phone, checked
-    globally across every org — not scoped to one branch/org the way
-    person_code is.
-
-    This has to match the scope of authenticate_client_staff's lookup
-    (mobile portal login), which also searches client_staff by email OR
-    phone with no org_id filter, since a field worker's login request
-    carries no org context until after that lookup succeeds. If two staff
-    rows anywhere were allowed to share an identifier, authenticate_client_
-    staff would find both, refuse to guess which one is logging in, and
-    neither employee could log in at all — so this has to be prevented at
-    creation/edit time, not discovered later at someone's login attempt.
-
-    Only checks whichever of email/phone was actually supplied — a value
-    left blank isn't a collision candidate against other blank values,
-    since client_staff.email/phone are stored as NULL, not empty string,
-    when absent (see create_client_staff/update_client_staff).
-    """
-    sb = get_supabase()
+    from support_db_core import _execute_supabase
 
     if email:
-        query = (
-            sb.table('client_staff')
-            .select('id')
-            .eq('email', email)
-            .eq('is_archived', False)
-            .limit(1)
-        )
-        if exclude_staff_id:
-            query = query.neq('id', str(exclude_staff_id))
-        if query.execute().data:
+        def _email_query():
+            q = (
+                get_supabase()
+                .table('client_staff')
+                .select('id')
+                .eq('email', email)
+                .eq('is_archived', False)
+                .limit(1)
+            )
+            if org_id:
+                q = q.eq('org_id', str(org_id))
+            if exclude_staff_id:
+                q = q.neq('id', str(exclude_staff_id))
+            return q
+
+        res = _execute_supabase('assert_unique_email', _email_query)
+        if res.data:
             raise ValueError(
                 'This email is already used by another person. Please use a different email.'
             )
 
     if phone:
-        query = (
-            sb.table('client_staff')
-            .select('id')
-            .eq('phone', phone)
-            .eq('is_archived', False)
-            .limit(1)
-        )
-        if exclude_staff_id:
-            query = query.neq('id', str(exclude_staff_id))
-        if query.execute().data:
+        def _phone_query():
+            q = (
+                get_supabase()
+                .table('client_staff')
+                .select('id')
+                .eq('phone', phone)
+                .eq('is_archived', False)
+                .limit(1)
+            )
+            if org_id:
+                q = q.eq('org_id', str(org_id))
+            if exclude_staff_id:
+                q = q.neq('id', str(exclude_staff_id))
+            return q
+
+        res = _execute_supabase('assert_unique_phone', _phone_query)
+        if res.data:
             raise ValueError(
                 'This phone number is already used by another person. Please use a different number.'
             )

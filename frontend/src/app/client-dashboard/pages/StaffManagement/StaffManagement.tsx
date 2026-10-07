@@ -2730,6 +2730,12 @@ const StaffDirectory: FC = () => {
         {editMember !== null && (
           <StaffModal
             initial={editMember === "new" ? undefined : editMember}
+            existingStaffMembers={[
+              ...(completeStaffDirectory.length > 0
+                ? completeStaffDirectory
+                : scopedStaffItems),
+              ...(Array.isArray(archivedStaffItems) ? archivedStaffItems : []),
+            ]}
             onSave={handleSave}
             onClose={() => setEditMember(null)}
             scope={isBranchDashboard ? "branch" : "global"}

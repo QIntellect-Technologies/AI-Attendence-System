@@ -372,6 +372,34 @@ def _require_cnic_fields(people_type: str, payload: dict) -> dict:
         raise ValueError('Enter a valid 13-digit CNIC (e.g. 42101-1234567-1)')
     return {'cnic': cnic}
 
+def _generate_next_person_code(org_key: str, people_type: str) -> str:
+    """Generate the next sequential ID (e.g. STF-0009) if not provided by caller."""
+    prefix_map = {
+        'student': 'STD',
+        'teacher': 'TCH',
+        'worker': 'WRK',
+        'employee': 'EMP',
+        'doctor': 'DOC',
+    }
+    prefix = prefix_map.get(people_type, 'STF')
+    highest_num = 0
+    try:
+        supabase = get_supabase()
+        res = supabase.table('client_staff').select('person_code,employee_id').eq('org_id', org_key).execute()
+        rows = res.data or []
+        for r in rows:
+            for val in (r.get('person_code'), r.get('employee_id')):
+                if val:
+                    found = re.findall(r'(\d+)', str(val))
+                    if found:
+                        num = int(found[-1])
+                        if num > highest_num:
+                            highest_num = num
+    except Exception:
+        pass
+    next_num = highest_num + 1
+    return f"{prefix}-{str(next_num).zfill(4)}"
+
 def _client_staff_has_people_type_column() -> bool:
     """Return True when public.client_staff.people_type exists.
 
@@ -985,7 +1013,23 @@ def create_client_staff(
         or org.get('primary_people_type')
         or 'staff'
     )
-    person_code = _person_code_from_payload(payload, people_type)
+    raw_person_code = (
+        payload.get('person_code')
+        or payload.get('personCode')
+        or payload.get('registration_number')
+        or payload.get('registrationNumber')
+        or payload.get('employee_number')
+        or payload.get('employeeNumber')
+        or payload.get('worker_id')
+        or payload.get('workerId')
+        or payload.get('teacher_code')
+        or payload.get('teacherCode')
+        or payload.get('employee_id')
+    )
+    if not raw_person_code or not str(raw_person_code).strip():
+        person_code = _generate_next_person_code(org_key, people_type)
+    else:
+        person_code = _person_code_from_payload(payload, people_type)
     _assert_unique_client_staff_person_code(
         org_id=org_key,
         branch_id=branch_id,
@@ -1001,7 +1045,7 @@ def create_client_staff(
 
     email = str(payload.get('email') or '').strip().lower() or None
     phone = str(payload.get('phone') or '').strip() or None
-    _assert_unique_client_staff_login_identifier(email=email, phone=phone)
+    _assert_unique_client_staff_login_identifier(email=email, phone=phone, org_id=org_key)
 
     raw_password = str(payload.get('password') or '').strip()
     password_hash = _hash_password(raw_password) if raw_password else None
@@ -1066,7 +1110,10 @@ def create_client_staff(
         insert_data['people_type'] = people_type
 
     try:
-        result = sb.table('client_staff').insert(insert_data).execute()
+        from support_db_core import _execute_supabase
+        def _do_insert():
+            return get_supabase().table('client_staff').insert(insert_data)
+        result = _execute_supabase('create_client_staff_insert', _do_insert)
     except Exception as exc:
         message = _duplicate_client_staff_message(exc)
         if message:
@@ -1356,6 +1403,7 @@ def update_client_staff(
             email=update_data.get('email') if 'email' in update_data else None,
             phone=update_data.get('phone') if 'phone' in update_data else None,
             exclude_staff_id=str(staff_id),
+            org_id=org_id,
         )
 
     if 'salary' in update_data:

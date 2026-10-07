@@ -3429,30 +3429,36 @@ def api_add_staff():
 
     # Supabase-first staff path for Support-created client organizations.
     if raw_org_id and not numeric_org_id:
-        try:
-            user = support_cp_db.create_client_staff(
-                org_id=str(raw_org_id),
-                payload={**data, 'password': password},
-                created_by=str(data.get('created_by_user_id') or '') or None,
-                # Only an existing admin (this session's token) may create
-                # a new staff row with account_role='admin'; every other
-                # caller can still create account_role='staff' rows freely —
-                # see role_permissions.py and support_db_staff.create_client_staff.
-                granted_by_is_admin=bool(dashboard_user.get('is_admin')),
-            )
-            return jsonify({
-                'success': True,
-                'user': user,
-                'credentials': {
-                    'email': user.get('email') or data.get('email', ''),
-                    'password': password,
-                },
-            }), 201
-        except ValueError as e:
-            return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 400
-        except Exception as e:
-            logger.exception('Supabase staff creation failed')
-            return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
+        for _attempt in range(2):
+            try:
+                user = support_cp_db.create_client_staff(
+                    org_id=str(raw_org_id),
+                    payload={**data, 'password': password},
+                    created_by=str(data.get('created_by_user_id') or '') or None,
+                    # Only an existing admin (this session's token) may create
+                    # a new staff row with account_role='admin'; every other
+                    # caller can still create account_role='staff' rows freely —
+                    # see role_permissions.py and support_db_staff.create_client_staff.
+                    granted_by_is_admin=bool(dashboard_user.get('is_admin')),
+                )
+                return jsonify({
+                    'success': True,
+                    'user': user,
+                    'credentials': {
+                        'email': user.get('email') or data.get('email', ''),
+                        'password': password,
+                    },
+                }), 201
+            except ValueError as e:
+                return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 400
+            except Exception as e:
+                from support_db_core import _is_retryable_supabase_error
+                if _attempt == 0 and _is_retryable_supabase_error(e):
+                    from supabase_client import reset_supabase_client
+                    reset_supabase_client()
+                    continue
+                logger.exception('Supabase staff creation failed')
+                return jsonify({'success': False, 'message': str(e), 'error': str(e)}), 500
 
     organization_id = _resolve_organization_id(data)
 

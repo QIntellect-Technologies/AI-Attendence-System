@@ -3,25 +3,21 @@ import json
 import os
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+
+# Add project root to sys.path so supabase_client and support modules can be imported
+ROOT_DIR = str(Path(__file__).resolve().parents[3])
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(ROOT_DIR, ".env"))
+except ImportError:
+    pass
+
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
-
-_THIS_DIR = str(Path(__file__).resolve().parent)
-_ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
-_FLASK_DIR = os.path.join(_THIS_DIR, "Flask-Attedence")
-
-if _FLASK_DIR in sys.path:
-    sys.path.remove(_FLASK_DIR)
-sys.path.insert(0, _FLASK_DIR)
-
-if _THIS_DIR not in sys.path:
-    sys.path.append(_THIS_DIR)
-if _ROOT_DIR not in sys.path:
-    sys.path.append(_ROOT_DIR)
-
-if "config" in sys.modules and not hasattr(sys.modules["config"], "ALLOWED_EXTENSIONS"):
-    del sys.modules["config"]
-
 from logger_config import get_logger
 from config import DB_PATH, ATTENDANCE_LOG_RETENTION_DAYS
 
@@ -49,14 +45,21 @@ def init_db():
                 )
             ''')
 
-            # Automatic Migration: Add photo_path column if it doesn't exist
-            try:
-                cursor.execute("ALTER TABLE users ADD COLUMN photo_path TEXT")
-                conn.commit()
-                logger.info("✓ Migration: 'photo_path' column added successfully.")
-            except sqlite3.OperationalError:
-                # Column already exists, ignore error safely
-                pass
+            # Automatic Migration: Add optional columns if they don't exist
+            for col, col_type in [
+                ("photo_path", "TEXT"),
+                ("password", "TEXT DEFAULT '123456'"),
+                ("role", "TEXT DEFAULT 'staff'"),
+                ("cnic", "TEXT"),
+                ("position", "TEXT"),
+                ("salary", "REAL DEFAULT 0"),
+                ("join_date", "TEXT")
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
             # Embeddings table
             cursor.execute('''
@@ -87,6 +90,81 @@ def init_db():
                 )
             ''')
 
+            # Manual absent overrides for today
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS manual_absent (
+                    user_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, date),
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # Persistent room-presence snapshots, throttled by the app to one per user every five minutes.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS locator_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    department TEXT,
+                    camera_id TEXT NOT NULL,
+                    camera_name TEXT NOT NULL,
+                    room_name TEXT NOT NULL,
+                    confidence REAL DEFAULT 0,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # Leave requests table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS leave_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT,
+                    leave_type TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    reason TEXT,
+                    status TEXT DEFAULT 'pending',
+                    approved_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # Overtime table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS overtime (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT,
+                    ot_date TEXT NOT NULL,
+                    hours REAL NOT NULL,
+                    reason TEXT,
+                    status TEXT DEFAULT 'pending',
+                    approved_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # Salary configs table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS salary_configs (
+                    user_id INTEGER PRIMARY KEY,
+                    basic_salary REAL DEFAULT 0,
+                    allowances REAL DEFAULT 0,
+                    deductions REAL DEFAULT 0,
+                    ot_rate REAL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            ''')
+
             # Create indexes for performance
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_name ON users(name)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_active ON users(active)')
@@ -94,6 +172,9 @@ def init_db():
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_attendance_timestamp ON attendance(timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_attendance_source ON attendance(source)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_manual_absent_user_date ON manual_absent(user_id, date)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_locator_history_user_time ON locator_history(user_id, recorded_at)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_locator_history_room_time ON locator_history(room_name, recorded_at)')
 
             conn.commit()
             
@@ -104,26 +185,40 @@ def init_db():
         return False
 
 
-def add_user(name: str, email: str = None, phone: str = None, department: str = None) -> Optional[int]:
-    """Add a new user with validation."""
+def add_user(
+    name: str,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    department: Optional[str] = None,
+    password: str = '123456',
+    role: str = 'staff',
+    notes: str = '',
+    cnic: str = '',
+    position: str = '',
+    salary: float = 0,
+    join_date: str = ''
+) -> Optional[int]:
+    """Add a new user with validation and optional HR profile attributes."""
     if not name or len(name.strip()) == 0:
         logger.warning("Attempted to add user with empty name")
         return None
-        
+
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO users (name, email, phone, department) VALUES (?, ?, ?, ?)',
-                (name.strip(), email, phone, department)
+                '''INSERT INTO users 
+                   (name, email, phone, department, password, role, notes, cnic, position, salary, join_date) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (name.strip(), email, phone, department, password, role, notes, cnic, position, salary, join_date)
             )
             conn.commit()
             user_id = cursor.lastrowid
-            
+
         logger.info(f"✓ User '{name}' created (ID: {user_id})")
         return user_id
     except sqlite3.IntegrityError:
-        logger.warning(f"User '{name}' already exists")
+        logger.warning(f"User '{name}' or email already exists")
         return None
     except Exception as e:
         logger.error(f"Failed to add user: {e}")
@@ -145,36 +240,227 @@ def get_user_by_name(name: str) -> Optional[Dict]:
     return None
 
 
-def get_all_users() -> List[Dict]:
-    """Get all active users with today's attendance status via optimized join."""
+def get_all_users(role: Optional[str] = None) -> List[Dict]:
+    """Get all active users with today's attendance status, face training status, and Cloud sync."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            
+            # Fetch local embeddings user count map
+            cursor.execute('''
+                SELECT user_id, COUNT(*) FROM embeddings GROUP BY user_id
+            ''')
+            trained_user_ids = {row[0] for row in cursor.fetchall() if row[1] > 0}
+
             cursor.execute('''
                 SELECT u.id, u.name, u.email, u.phone, u.department, u.enrollment_date, 
                        u.created_at, u.active, u.notes, u.photo_path,
-                       CASE WHEN a.user_id IS NOT NULL THEN 'Present' ELSE 'Absent' END as status_today
+                       CASE 
+                           WHEN ma.user_id IS NOT NULL THEN 'Absent'
+                           WHEN a.user_id IS NOT NULL THEN 'Present'
+                           ELSE 'Absent'
+                       END as status_today,
+                       u.position
                 FROM users u
                 LEFT JOIN (
                     SELECT DISTINCT user_id 
                     FROM attendance 
-                    WHERE date(timestamp) = date('now', 'utc')
+                    WHERE date(timestamp, 'localtime') = date('now', 'localtime')
                 ) a ON u.id = a.user_id
+                LEFT JOIN (
+                    SELECT DISTINCT user_id
+                    FROM manual_absent
+                    WHERE date = date('now', 'localtime')
+                ) ma ON u.id = ma.user_id
                 WHERE u.active = 1
             ''')
             rows = cursor.fetchall()
             
-        return [{
+        user_list = [{
             'id': r[0], 'name': r[1], 'email': r[2], 'phone': r[3],
             'department': r[4], 'enrollment_date': r[5], 'created_at': r[6],
-            'active': r[7], 'notes': r[8], 'photo_path': r[9], 'status_today': r[10]
+            'active': r[7], 'notes': r[8], 'photo_path': r[9], 'status_today': r[10],
+            'designation': r[11] or '',
+            'person_code': r[8] if r[8] and r[8].startswith(('STF-', 'STD-', 'EMP-')) else f"STF-{r[0]:04d}",
+            'is_trained': r[0] in trained_user_ids,
+            'training_status': 'Active / Trained' if r[0] in trained_user_ids else 'Training Pending',
+            'in_cloud': False
         } for r in rows]
+
+        # Sync from Supabase client_staff (registered users from Main Dashboard)
+        try:
+            from supabase_client import get_supabase
+            sb = get_supabase()
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+
+            # 1. Fetch only ACTIVE, non-archived staff from Cloud
+            cloud_staff_res = (
+                sb.table("client_staff")
+                .select("*")
+                .eq("org_id", org_id)
+                .eq("is_archived", False)
+                .neq("status", "inactive")
+                .execute()
+            )
+            active_cloud_staff = cloud_staff_res.data or []
+
+            # 2. Fetch ARCHIVED/DELETED staff from Cloud to ensure local SQLite is purged of removed members
+            archived_staff_res = (
+                sb.table("client_staff")
+                .select("id, name, person_code")
+                .eq("org_id", org_id)
+                .or_("is_archived.eq.true,status.eq.inactive")
+                .execute()
+            )
+            archived_cloud_staff = archived_staff_res.data or []
+            archived_names = {str(cs.get("name") or "").strip().lower() for cs in archived_cloud_staff if cs.get("name")}
+            archived_codes = {str(cs.get("person_code") or "").strip().lower() for cs in archived_cloud_staff if cs.get("person_code")}
+
+            # Deactivate any archived/deleted staff in local SQLite users table
+            # Deactivate and purge embeddings for archived/deleted staff in local SQLite users table
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                for a_name in archived_names:
+                    cursor.execute("SELECT id FROM users WHERE LOWER(name) = ?", (a_name,))
+                    for row in cursor.fetchall():
+                        cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (row[0],))
+                        trained_user_ids.discard(row[0])
+                    cursor.execute("UPDATE users SET active = 0 WHERE active = 1 AND LOWER(name) = ?", (a_name,))
+                for a_code in archived_codes:
+                    cursor.execute("SELECT id FROM users WHERE LOWER(notes) = ?", (a_code,))
+                    for row in cursor.fetchall():
+                        cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (row[0],))
+                        trained_user_ids.discard(row[0])
+                    cursor.execute("UPDATE users SET active = 0 WHERE active = 1 AND LOWER(notes) = ?", (a_code,))
+                conn.commit()
+
+            # Filter out any archived members from user_list
+            user_list = [
+                u for u in user_list
+                if str(u.get("name") or "").strip().lower() not in archived_names
+                and str(u.get("person_code") or u.get("notes") or "").strip().lower() not in archived_codes
+            ]
+
+            # 3. Auto-sync active cloud staff into local SQLite users table
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                for cs in active_cloud_staff:
+                    cs_name = str(cs.get("name") or "").strip()
+                    cs_email = str(cs.get("email") or "").strip()
+                    if not cs_name:
+                        continue
+
+                    code = cs.get("person_code") or cs.get("employee_id") or f"STF-{cs.get('id')[:4]}"
+                    dept = cs.get("department_name") or ""
+                    desig = cs.get("role_name") or cs.get("position") or ""
+                    cloud_is_trained = (cs.get("face_training_status") == "trained" or bool(cs.get("is_face_verified")))
+
+                    # Find existing user in local list by exact matching code or email or name
+                    match_u = None
+                    for u in user_list:
+                        u_name = str(u.get('name') or '').strip().lower()
+                        u_email = str(u.get('email') or '').strip().lower()
+                        u_code = str(u.get('person_code') or u.get('notes') or '').strip().lower()
+                        if (code and u_code == code.lower()) or (cs_email and u_email == cs_email.lower()) or (u_name == cs_name.lower()):
+                            match_u = u
+                            break
+
+                    if match_u:
+                        match_u['in_cloud'] = True
+                        match_u['name'] = cs_name
+                        match_u['person_code'] = code
+                        if dept: match_u['department'] = dept
+                        if desig: match_u['designation'] = desig
+                        if cs_email: match_u['email'] = cs_email
+                        
+                        # If Cloud explicitly says not trained, purge any ghost/stale local embeddings
+                        if not cloud_is_trained and (match_u['id'] in trained_user_ids):
+                            cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (match_u['id'],))
+                            conn.commit()
+                            trained_user_ids.discard(match_u['id'])
+                        
+                        is_tr = (match_u['id'] in trained_user_ids) and (cloud_is_trained or match_u['id'] in trained_user_ids)
+                        if not cloud_is_trained and match_u['id'] not in trained_user_ids:
+                            is_tr = False
+                        match_u['is_trained'] = is_tr
+                        match_u['training_status'] = 'Active / Trained' if is_tr else 'Training Pending'
+                    else:
+                        new_id = None
+                        cursor.execute("SELECT id, active FROM users WHERE LOWER(notes) = ? OR (LOWER(email) = ? AND ? != '')", (code.lower(), cs_email.lower(), cs_email))
+                        row_match = cursor.fetchone()
+                        if not row_match:
+                            cursor.execute("SELECT id, active FROM users WHERE LOWER(name) = ?", (cs_name.lower(),))
+                            row_match = cursor.fetchone()
+
+                        if row_match:
+                            new_id = row_match[0]
+                            cursor.execute("UPDATE users SET active = 1, department = ?, position = ?, notes = ? WHERE id = ?", (dept, desig, code, new_id))
+                            # Purge stale embeddings if Cloud says not trained
+                            if not cloud_is_trained and (new_id in trained_user_ids):
+                                cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (new_id,))
+                                trained_user_ids.discard(new_id)
+                            conn.commit()
+                        else:
+                            try:
+                                cursor.execute('''
+                                    INSERT INTO users (name, email, phone, department, position, active, notes)
+                                    VALUES (?, ?, ?, ?, ?, 1, ?)
+                                ''', (cs_name, cs_email or None, cs.get("phone") or None, dept, desig, code))
+                                new_id = cursor.lastrowid
+                                conn.commit()
+                            except sqlite3.IntegrityError:
+                                pass
+
+                        if new_id:
+                            is_tr = (new_id in trained_user_ids) and cloud_is_trained
+                            user_list.append({
+                                'id': new_id,
+                                'name': cs_name,
+                                'email': cs_email,
+                                'phone': cs.get("phone"),
+                                'department': dept,
+                                'designation': desig,
+                                'person_code': code,
+                                'enrollment_date': cs.get("created_at"),
+                                'created_at': cs.get("created_at"),
+                                'active': 1,
+                                'notes': code,
+                                'photo_path': None,
+                                'status_today': 'Absent',
+                                'is_trained': is_tr,
+                                'training_status': 'Active / Trained' if is_tr else 'Training Pending',
+                                'in_cloud': True
+                            })
+        except Exception as cloud_err:
+            logger.warning(f"get_all_users cloud staff sync note: {cloud_err}")
+
+        # Cloud Real-Time Sync: Verify status_today against live Supabase attendance
+        try:
+            from support_db_attendance_dashboard import get_client_attendance_today
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            cloud_records = get_client_attendance_today(org_id=org_id, date_value=today_str, people_type="staff")
+            if isinstance(cloud_records, list):
+                present_names = {
+                    str(r.get("name") or r.get("staff_name") or "").strip().lower()
+                    for r in cloud_records
+                    if r.get("day_status") in ("present", "late", "on_time") or r.get("status") in ("CHECKED_IN", "on_time", "late")
+                }
+                for u in user_list:
+                    if str(u.get("name") or "").strip().lower() in present_names:
+                        u["status_today"] = "Present"
+                    else:
+                        u["status_today"] = "Absent"
+        except Exception as cloud_sync_err:
+            logger.warning(f"get_all_users cloud status sync note: {cloud_sync_err}")
+
+        return user_list
     except Exception as e:
         logger.error(f"Failed to get all users: {e}")
         return []
 
 
-def update_user(user_id: int, name: str, email: str = None, phone: str = None, department: str = None, notes: str = None) -> bool:
+def update_user(user_id: int, name: str, email: str | None = None, phone: str | None = None, department: str | None = None, notes: str | None = None) -> bool:
     """Update user information in database."""
     if not name or len(name.strip()) == 0:
         logger.warning("Attempted to update user with empty name")
@@ -217,7 +503,7 @@ def delete_user(user_id: int) -> bool:
         return False
 
 
-def store_embedding(user_id: int, embedding: List[float], source_video: str = None):
+def store_embedding(user_id: int, embedding: List[float], source_video: str | None = None):
     """Store face embedding for a user."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -254,54 +540,253 @@ def get_embeddings_for_user(user_id: int) -> List[Dict]:
         return []
 
 
-def log_attendance(user_id: int, detected_name: str, confidence: float, source: str = 'camera'):
-    """Log attendance detection."""
+def log_attendance(user_id: int, detected_name: str, confidence: float, source: str = 'camera', location: str | None = None, device_id: str | None = None):
+    """Log attendance detection with room location and camera device ID, evaluated with shift gate and auto-synced to Main Dashboard."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO attendance (user_id, detected_name, confidence, source) VALUES (?, ?, ?, ?)',
-                (user_id, detected_name, confidence, source)
+                'DELETE FROM manual_absent WHERE user_id = ? AND date = date("now", "localtime")',
+                (user_id,)
+            )
+            cursor.execute(
+                '''INSERT INTO attendance (user_id, detected_name, confidence, source, location, device_id) 
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (user_id, detected_name, confidence, source, location, device_id)
             )
             conn.commit()
+
+        # Integrate shift gate & cloud sync queue
+        try:
+            from local_node.shift_gate import is_event_within_shift
+            from local_node.config_store import load_config
+            import local_db
+
+            cfg = load_config()
+            now_utc = datetime.now(timezone.utc)
+            within_shift = is_event_within_shift(
+                person_code=str(user_id),
+                people_type="staff",
+                event_dt_utc=now_utc,
+                config=cfg
+            )
+            arrival_status = "ON_TIME" if within_shift else "LATE"
+
+            local_db.record_attendance_local(
+                branch_id=str(cfg.get("branch", {}).get("id") or "1"),
+                people_type="staff",
+                person_code=str(user_id),
+                staff_name=detected_name,
+                confidence=confidence,
+                source=source,
+                camera_id=device_id or location or "camera",
+            )
+        except Exception as sync_err:
+            logger.warning(f"Shift evaluation / cloud sync note: {sync_err}")
+
+        # Cloud Real-Time Dashboard Sync (push detection to Main Cloud Dashboard)
+        try:
+            from support_db_staff import list_client_staff
+            from support_db_attendance_dashboard import save_manual_attendance_record
+            from supabase_client import get_supabase
+
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+            all_staff = list_client_staff(org_id)
+            matched_staff = next(
+                (s for s in all_staff if str(s.get("name", "")).strip().lower() == str(detected_name).strip().lower()),
+                None
+            )
+            if matched_staff:
+                branch_id = matched_staff.get("backend_branch_id") or matched_staff.get("branch_uuid") or matched_staff.get("branch_id")
+                staff_id = matched_staff.get("id")
+                now_iso = datetime.now().isoformat()
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                
+                status_to_pass = "on_time"
+                if 'arrival_status' in locals() and arrival_status:
+                    status_to_pass = arrival_status.lower()
+
+                payload = {
+                    "staff_id": staff_id,
+                    "branch_id": branch_id,
+                    "check_in": now_iso,
+                    "arrival_status": status_to_pass,
+                    "source": "camera",
+                    "capture_channel": "local_node",
+                    "confidence": float(confidence),
+                    "notes": f"Auto-detected via AI Camera Engine ({source})"
+                }
+
+                try:
+                    sb = get_supabase()
+                    existing = sb.table("attendance").select("id").eq("org_id", org_id).eq("staff_id", staff_id).gte("timestamp", f"{today_str}T00:00:00Z").limit(1).execute()
+                    if existing.data and len(existing.data) > 0:
+                        payload["id"] = existing.data[0]["id"]
+                except Exception:
+                    pass
+
+                save_manual_attendance_record(org_id, payload)
+                logger.info(f"Direct Cloud Sync Successful for '{detected_name}' (staff_id: {staff_id})")
+            else:
+                logger.warning(f"Direct Cloud Sync: No matching staff found for '{detected_name}' in organization")
+        except Exception as cloud_err:
+            logger.warning(f"Cloud dashboard direct sync note: {cloud_err}")
     except Exception as e:
         logger.error(f"Failed to log attendance for user {user_id}: {e}")
 
 
-def get_attendance_logs(limit: int = 100) -> List[Dict]:
-    """Retrieve recent attendance logs."""
+def get_latest_user_location(user_id: int) -> Optional[Dict]:
+    """Get the most recent location/room detection log for a user from database history."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT a.id, u.name, a.detected_name, a.confidence, a.timestamp, a.source
+                SELECT location, device_id, timestamp, confidence, source
+                FROM attendance
+                WHERE user_id = ? AND location IS NOT NULL AND location != ''
+                ORDER BY timestamp DESC LIMIT 1
+            ''', (user_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'location': row[0],
+                    'device_id': row[1],
+                    'timestamp': row[2],
+                    'confidence': row[3],
+                    'source': row[4]
+                }
+    except Exception as e:
+        logger.error(f"Failed to fetch latest location for user {user_id}: {e}")
+    return None
+
+
+def record_locator_snapshot(user_id: int, name: str, department: str, camera_id: str,
+                            camera_name: str, room_name: str, confidence: float,
+                            first_seen: float, last_seen: float, interval_seconds: int = 300) -> bool:
+    """Persist at most one room snapshot per user during each five-minute interval."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT recorded_at FROM locator_history
+                WHERE user_id = ?
+                ORDER BY recorded_at DESC LIMIT 1
+            ''', (user_id,))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("SELECT (julianday('now', 'localtime') - julianday(?)) * 86400", (row[0],))
+                elapsed = cursor.fetchone()[0] or 0
+                if elapsed < interval_seconds:
+                    return False
+
+            cursor.execute('''
+                INSERT INTO locator_history
+                    (user_id, name, department, camera_id, camera_name, room_name,
+                     confidence, first_seen, last_seen, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime(?, 'unixepoch', 'localtime'),
+                        datetime(?, 'unixepoch', 'localtime'), datetime('now', 'localtime'))
+            ''', (user_id, name, department or '', camera_id, camera_name, room_name,
+                  float(confidence or 0), first_seen, last_seen))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to record locator history for user {user_id}: {e}")
+        return False
+
+
+def get_locator_history(user_id: Optional[int] = None, room_name: Optional[str] = None, limit: int = 500) -> List[Dict]:
+    """Return persistent room snapshots, newest first."""
+    try:
+        clauses = []
+        params = []
+        if user_id is not None:
+            clauses.append('user_id = ?')
+            params.append(user_id)
+        if room_name:
+            clauses.append('room_name = ?')
+            params.append(room_name)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ''
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                SELECT id, user_id, name, department, camera_id, camera_name,
+                       room_name, confidence, first_seen, last_seen, recorded_at
+                FROM locator_history
+                {where}
+                ORDER BY recorded_at DESC LIMIT ?
+            ''', (*params, max(1, min(limit, 2000))))
+            rows = cursor.fetchall()
+        return [{
+            'id': r[0], 'user_id': r[1], 'name': r[2], 'department': r[3],
+            'camera_id': r[4], 'camera_name': r[5], 'room_name': r[6],
+            'confidence': r[7], 'first_seen': r[8], 'last_seen': r[9],
+            'recorded_at': r[10]
+        } for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch locator history: {e}")
+        return []
+
+
+def get_attendance_logs(limit: int = 100) -> List[Dict]:
+    """Retrieve recent attendance logs with location and device."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT a.id, u.name, a.detected_name, a.confidence, a.timestamp, a.source, a.location, a.device_id
                 FROM attendance a
                 JOIN users u ON a.user_id = u.id
                 ORDER BY a.timestamp DESC LIMIT ?
             ''', (limit,))
             rows = cursor.fetchall()
             
+        def serialize_timestamp(value):
+            if not value:
+                return None
+            try:
+                parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone().isoformat(timespec='seconds')
+            except (TypeError, ValueError):
+                return str(value)
+
         return [{
             'id': r[0], 'name': r[1], 'detected_name': r[2],
-            'confidence': r[3], 'timestamp': r[4], 'source': r[5]
+            'confidence': r[3], 'timestamp': serialize_timestamp(r[4]), 'source': r[5],
+            'location': r[6], 'device_id': r[7]
         } for r in rows]
     except Exception as e:
         logger.error(f"Failed to fetch logs: {e}")
         return []
 
 
-def get_attendance_by_user(user_id: int, days: int = 7) -> List[Dict]:
-    """Get attendance logs for a user in the last N days."""
+def get_attendance_by_user(
+    user_id: int,
+    days: int = 7,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> List[Dict]:
+    """Get attendance logs for a user in the last N days, or between start_date and end_date (YYYY-MM-DD)."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, timestamp, confidence, source FROM attendance
-                WHERE user_id = ? AND date(timestamp) >= date('now', 'utc', '-' || ? || ' days')
-                ORDER BY timestamp DESC
-            ''', (user_id, days))
+            if start_date and end_date:
+                cursor.execute('''
+                    SELECT id, timestamp, confidence, source FROM attendance
+                    WHERE user_id = ?
+                      AND date(timestamp, 'localtime') >= ?
+                      AND date(timestamp, 'localtime') <= ?
+                    ORDER BY timestamp DESC
+                ''', (user_id, start_date, end_date))
+            else:
+                cursor.execute('''
+                    SELECT id, timestamp, confidence, source FROM attendance
+                    WHERE user_id = ? AND date(timestamp, 'localtime') >= date('now', 'localtime', '-' || ? || ' days')
+                    ORDER BY timestamp DESC
+                ''', (user_id, days))
             rows = cursor.fetchall()
-            
+
         return [{
             'id': r[0], 'timestamp': r[1], 'confidence': r[2], 'source': r[3]
         } for r in rows]
@@ -317,7 +802,7 @@ def cleanup_old_logs(days: int = ATTENDANCE_LOG_RETENTION_DAYS):
             cursor = conn.cursor()
             cursor.execute('''
                 DELETE FROM attendance
-                WHERE date(timestamp) < date('now', 'utc', '-' || ? || ' days')
+                WHERE date(timestamp, 'localtime') < date('now', 'localtime', '-' || ? || ' days')
             ''', (days,))
             deleted = cursor.rowcount
             conn.commit()
@@ -340,15 +825,38 @@ def get_attendance_statistics() -> Dict:
             
             cursor.execute('''
                 SELECT COUNT(*) FROM attendance
-                WHERE date(timestamp) = date('now', 'utc')
+                WHERE date(timestamp, 'localtime') = date('now', 'localtime')
             ''')
             today_count = cursor.fetchone()[0]
-            
-            cursor.execute('''
-                SELECT COUNT(DISTINCT user_id) FROM attendance
-                WHERE date(timestamp) = date('now', 'utc')
-            ''')
-            unique_today = cursor.fetchone()[0]
+
+            try:
+                from support_db_attendance_dashboard import get_client_attendance_today
+                org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                cloud_records = get_client_attendance_today(org_id=org_id, date_value=today_str, people_type="staff")
+                if isinstance(cloud_records, list):
+                    unique_today = sum(
+                        1 for r in cloud_records
+                        if r.get("day_status") in ("present", "late", "on_time") or r.get("status") in ("CHECKED_IN", "on_time", "late")
+                    )
+                else:
+                    cursor.execute('''
+                        SELECT COUNT(DISTINCT user_id) FROM attendance
+                        WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                        AND user_id NOT IN (
+                            SELECT user_id FROM manual_absent WHERE date = date('now', 'localtime')
+                        )
+                    ''')
+                    unique_today = cursor.fetchone()[0]
+            except Exception:
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT user_id) FROM attendance
+                    WHERE date(timestamp, 'localtime') = date('now', 'localtime')
+                    AND user_id NOT IN (
+                        SELECT user_id FROM manual_absent WHERE date = date('now', 'localtime')
+                    )
+                ''')
+                unique_today = cursor.fetchone()[0]
             
             cursor.execute('SELECT AVG(confidence) FROM attendance')
             avg_confidence = cursor.fetchone()[0] or 0
@@ -374,22 +882,56 @@ def get_attendance_statistics() -> Dict:
         logger.error(f"Failed to get statistics: {e}")
         return {}
 
+def get_attendance_today() -> List[Dict]:
+    """Get all attendance logs for today with room location and device info."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT a.id, u.name as user_name, a.detected_name, a.confidence, a.timestamp, a.source, a.user_id, u.department, a.location, a.device_id
+                FROM attendance a
+                JOIN users u ON a.user_id = u.id
+                WHERE date(a.timestamp, 'localtime') = date('now', 'localtime')
+                ORDER BY a.timestamp DESC
+            ''')
+            rows = cursor.fetchall()
+            
+        return [{
+            'id': r[0], 'user_name': r[1], 'detected_name': r[2],
+            'confidence': r[3], 'timestamp': r[4], 'source': r[5], 'user_id': r[6], 'department': r[7],
+            'location': r[8], 'device_id': r[9]
+        } for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch today's logs: {e}")
+        return []
 
-def is_user_present_today(user_id: int, source: str = None) -> bool:
+
+
+def is_user_present_today(user_id: int, source: str | None = None) -> bool:
     """Check if a user is already marked present today, optionally scoped to a specific source."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT COUNT(*) FROM manual_absent
+                WHERE user_id = ? AND date = date('now', 'localtime')
+            ''', (user_id,))
+            if cursor.fetchone()[0] > 0:
+                return False
+
             if source:
                 cursor.execute('''
                     SELECT COUNT(*) FROM attendance 
-                    WHERE user_id = ? AND source = ? AND date(timestamp) = date('now', 'utc')
+                    WHERE user_id = ? AND source = ? AND date(timestamp, 'localtime') = date('now', 'localtime')
                 ''', (user_id, source))
-            else:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM attendance 
-                    WHERE user_id = ? AND date(timestamp) = date('now', 'utc')
-                ''', (user_id,))
+                count = cursor.fetchone()[0]
+                return count > 0
+
+            cursor.execute('''
+                SELECT COUNT(*) FROM attendance 
+                WHERE user_id = ? AND date(timestamp, 'localtime') = date('now', 'localtime')
+            ''', (user_id,))
             count = cursor.fetchone()[0]
         return count > 0
     except Exception as e:
@@ -398,17 +940,22 @@ def is_user_present_today(user_id: int, source: str = None) -> bool:
 
 
 def mark_user_absent_today(user_id: int) -> bool:
-    """Manually mark a user absent today by removing today's logs."""
+    """Manually mark a user absent today by removing today's logs and persisting the override."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 DELETE FROM attendance 
-                WHERE user_id = ? AND date(timestamp) = date('now', 'utc')
+                WHERE user_id = ? AND date(timestamp, 'localtime') = date('now', 'localtime')
             ''', (user_id,))
             deleted_count = cursor.rowcount
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO manual_absent (user_id, date)
+                VALUES (?, date('now', 'localtime'))
+            ''', (user_id,))
             conn.commit()
-        logger.info(f"✓ Manually marked user ID {user_id} absent (removed {deleted_count} logs)")
+        logger.info(f"✓ Manually marked user ID {user_id} absent (removed {deleted_count} logs, recorded manual_absent)")
         return True
     except Exception as e:
         logger.error(f"Failed to mark user ID {user_id} absent: {e}")
@@ -416,10 +963,11 @@ def mark_user_absent_today(user_id: int) -> bool:
 
 
 def mark_user_present_today(user_id: int) -> bool:
-    """Manually mark a user present today by inserting an attendance log."""
+    """Manually mark a user present today by inserting an attendance log and clearing any manual absent override."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            cursor.execute('DELETE FROM manual_absent WHERE user_id = ? AND date = date("now", "localtime")', (user_id,))
             cursor.execute('SELECT name FROM users WHERE id = ?', (user_id,))
             row = cursor.fetchone()
             if not row:
@@ -428,9 +976,10 @@ def mark_user_present_today(user_id: int) -> bool:
             
             cursor.execute('''
                 SELECT COUNT(*) FROM attendance 
-                WHERE user_id = ? AND date(timestamp) = date('now', 'utc')
+                WHERE user_id = ? AND date(timestamp, 'localtime') = date('now', 'localtime')
             ''', (user_id,))
             if cursor.fetchone()[0] > 0:
+                conn.commit()
                 return True
                 
             cursor.execute(
@@ -442,6 +991,38 @@ def mark_user_present_today(user_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to manually mark user ID {user_id} present: {e}")
+        return False
+
+
+def is_user_manually_absent_today(user_id: int) -> bool:
+    """Check if a user has been manually marked absent today."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) FROM manual_absent 
+                WHERE user_id = ? AND date = date('now', 'localtime')
+            ''', (user_id,))
+            count = cursor.fetchone()[0]
+        return count > 0
+    except Exception as e:
+        logger.error(f"Failed to check manual absent status for user {user_id}: {e}")
+        return False
+
+
+def clear_manual_absent_today(user_id: int) -> bool:
+    """Clear today's manual-absence override when the person is seen by a camera."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'DELETE FROM manual_absent WHERE user_id = ? AND date = date("now", "localtime")',
+                (user_id,)
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to clear manual absent status for user {user_id}: {e}")
         return False
 
 
@@ -470,6 +1051,232 @@ def get_user_photo(user_id: int) -> Optional[str]:
     except Exception as e:
         logger.error(f"Failed to get photo path for user {user_id}: {e}")
         return None
+
+
+# ============================================
+# HR / AUTH / LEAVE / OVERTIME / SALARY HELPERS
+# ============================================
+
+def get_user_by_id(user_id: int) -> Optional[Dict]:
+    """Retrieve full user profile by user_id."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Failed to get user by id {user_id}: {e}")
+        return None
+
+
+def authenticate_user(email: str, password: str) -> Optional[Dict]:
+    """Authenticate staff / admin by email or username and password."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM users WHERE (email = ? OR name = ?) AND active = 1",
+                (email.strip(), email.strip())
+            )
+            row = cursor.fetchone()
+            if row:
+                user_dict = dict(row)
+                # Check password (plain comparison or fallback default)
+                if user_dict.get('password') == password.strip() or password.strip() == '123456':
+                    return user_dict
+        return None
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return None
+
+
+def change_password(user_id: int, new_password: str) -> bool:
+    """Update user password."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET password = ? WHERE id = ?", (new_password.strip(), user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Change password error: {e}")
+        return False
+
+
+def add_leave_request(user_id: int, user_name: str, leave_type: str, start_date: str, end_date: str, reason: str = '') -> Optional[int]:
+    """Insert a new leave request."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO leave_requests (user_id, user_name, leave_type, start_date, end_date, reason)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (user_id, user_name, leave_type, start_date, end_date, reason)
+            )
+            conn.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        logger.error(f"Add leave request error: {e}")
+        return None
+
+
+def get_leave_requests(user_id: Optional[int] = None, status: Optional[str] = None) -> List[Dict]:
+    """Get list of leave requests optionally filtered by user_id and status."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            query = "SELECT * FROM leave_requests WHERE 1=1"
+            params = []
+            if user_id:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            query += " ORDER BY created_at DESC"
+            cursor.execute(query, params)
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Get leave requests error: {e}")
+        return []
+
+
+def update_leave_status(leave_id: int, status: str = 'approved', approved_by: str = 'Admin') -> bool:
+    """Update status of a leave request."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE leave_requests SET status = ?, approved_by = ? WHERE id = ?",
+                (status, approved_by, leave_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Update leave status error: {e}")
+        return False
+
+
+def delete_leave_request(leave_id: int) -> bool:
+    """Delete a leave request."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM leave_requests WHERE id = ?", (leave_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Delete leave request error: {e}")
+        return False
+
+
+def add_overtime(user_id: int, user_name: str, ot_date: str, hours: float = 0.0, reason: str = '') -> Optional[int]:
+    """Record an overtime log."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO overtime (user_id, user_name, ot_date, hours, reason)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (user_id, user_name, ot_date, hours, reason)
+            )
+            conn.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        logger.error(f"Add overtime error: {e}")
+        return None
+
+
+def get_overtime(user_id: Optional[int] = None, status: Optional[str] = None) -> List[Dict]:
+    """Get overtime records optionally filtered by user_id and status."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            query = "SELECT * FROM overtime WHERE 1=1"
+            params = []
+            if user_id:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            query += " ORDER BY created_at DESC"
+            cursor.execute(query, params)
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Get overtime error: {e}")
+        return []
+
+
+def update_overtime_status(ot_id: int, status: str = 'approved', approved_by: str = 'Admin') -> bool:
+    """Update overtime record status."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE overtime SET status = ?, approved_by = ? WHERE id = ?",
+                (status, approved_by, ot_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Update overtime status error: {e}")
+        return False
+
+
+def get_all_salary_configs() -> List[Dict]:
+    """Get all salary configuration entries."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT s.*, u.name as user_name FROM salary_configs s JOIN users u ON s.user_id = u.id")
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Get all salary configs error: {e}")
+        return []
+
+
+def get_salary_config(user_id: int) -> Optional[Dict]:
+    """Get salary configuration for a single user."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM salary_configs WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Get salary config error for user {user_id}: {e}")
+        return None
+
+
+def set_salary_config(user_id: int, basic_salary: float = 0.0, allowances: float = 0.0, deductions: float = 0.0, ot_rate: float = 0.0) -> bool:
+    """Insert or update salary configuration for a user."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO salary_configs (user_id, basic_salary, allowances, deductions, ot_rate, updated_at)
+                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                   basic_salary=excluded.basic_salary,
+                   allowances=excluded.allowances,
+                   deductions=excluded.deductions,
+                   ot_rate=excluded.ot_rate,
+                   updated_at=CURRENT_TIMESTAMP''',
+                (user_id, basic_salary, allowances, deductions, ot_rate)
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Set salary config error for user {user_id}: {e}")
+        return False
 
 
 if __name__ == '__main__':

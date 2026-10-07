@@ -2697,8 +2697,50 @@ import {
 
 // ─── Add / Edit Modal ─────────────────────────────────────────────────────────
 
+export function generateNextPersonCode(
+  existingMembers?: StaffMember[],
+  peopleType?: string,
+): string {
+  const normalizedType = normalizePeopleType(peopleType);
+  let prefix = "STF-";
+  if (normalizedType === "student") prefix = "STD-";
+  else if (normalizedType === "teacher") prefix = "TCH-";
+  else if (normalizedType === "worker") prefix = "WRK-";
+  else if (normalizedType === "employee") prefix = "EMP-";
+
+  let maxNum = 0;
+  let padLength = 4;
+
+  if (Array.isArray(existingMembers) && existingMembers.length > 0) {
+    for (const m of existingMembers) {
+      const code = String(
+        m.personCode || m.employeeId || m.registrationNumber || ""
+      ).trim();
+      if (!code) continue;
+
+      const matches = code.match(/\d+/g);
+      if (matches) {
+        for (const numStr of matches) {
+          const num = parseInt(numStr, 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+            if (numStr.length >= 3) {
+              padLength = Math.max(padLength, numStr.length);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const nextNum = maxNum + 1;
+  const finalPad = Math.max(padLength, String(nextNum).length, 4);
+  return `${prefix}${String(nextNum).padStart(finalPad, "0")}`;
+}
+
 export const StaffModal: FC<{
   initial?: StaffMember;
+  existingStaffMembers?: StaffMember[];
   onSave: (data: StaffFormData, files: StaffMediaFiles) => void | Promise<void>;
   onClose: () => void;
   scope: "global" | "branch";
@@ -2742,6 +2784,7 @@ export const StaffModal: FC<{
   onHierarchyChanged?: () => void | Promise<void>;
 }> = ({
   initial,
+  existingStaffMembers,
   onSave,
   onClose,
   scope,
@@ -2758,6 +2801,23 @@ export const StaffModal: FC<{
     const profileImageFileRef = useRef<File | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [mediaError, setMediaError] = useState<string | null>(null);
+
+    const initialPersonCode = useMemo(
+      () =>
+        generateNextPersonCode(
+          existingStaffMembers,
+          peopleModel.peopleType,
+        ),
+      [existingStaffMembers, peopleModel.peopleType],
+    );
+
+    const [touched, setTouched] = useState<Record<string, boolean>>({});
+    const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
+
+    const markTouched = useCallback((field: string) => {
+      setTouched((prev) => ({ ...prev, [field]: true }));
+    }, []);
+
     const [form, setForm] = useState<StaffFormData>(
       initial
         ? {
@@ -2824,6 +2884,7 @@ export const StaffModal: FC<{
         }
         : {
           ...EMPTY_FORM,
+          personCode: initialPersonCode,
           branchId: branchId ?? cfg.branches[0]?.id ?? 0,
           shift: shiftDefinitions[0]?.id ?? "morning",
         },
@@ -2913,6 +2974,22 @@ export const StaffModal: FC<{
         salaryBlocked,
       ],
     );
+
+    const shouldShowError = useCallback(
+      (field: keyof typeof formErrors) => {
+        return Boolean(
+          (hasAttemptedSubmit || touched[field]) && formErrors[field],
+        );
+      },
+      [hasAttemptedSubmit, touched, formErrors],
+    );
+
+    const shouldShowContactError = useCallback(() => {
+      return Boolean(
+        (hasAttemptedSubmit || touched.phone || touched.email) &&
+        formErrors.contact,
+      );
+    }, [hasAttemptedSubmit, touched.phone, touched.email, formErrors.contact]);
 
     const formFieldKeys = useMemo(
       () => new Set(templateFormFields.map((field) => field.key)),
@@ -3843,15 +3920,19 @@ export const StaffModal: FC<{
                 <input
                   style={{
                     ...inputStyle,
-                    ...(formErrors.name ? { borderColor: "#dc2626" } : null),
+                    ...(shouldShowError("name") ? { borderColor: "#dc2626" } : null),
                   }}
                   value={form.name}
-                  onChange={(e) => set("name", e.target.value)}
-                  placeholder="Ahmed Khan"
+                  onChange={(e) => {
+                    set("name", e.target.value);
+                    markTouched("name");
+                  }}
+                  onBlur={() => markTouched("name")}
+                  placeholder="e.g. Muhammad Ahmed"
                   maxLength={NAME_MAX_LENGTH}
-                  aria-invalid={Boolean(formErrors.name)}
+                  aria-invalid={shouldShowError("name")}
                 />
-                {formErrors.name && (
+                {shouldShowError("name") && (
                   <div
                     style={{
                       marginTop: 6,
@@ -3864,25 +3945,36 @@ export const StaffModal: FC<{
                 )}
               </div>
               <div>
-                <label style={labelStyle}>
-                  {peopleCodeModel(peopleModel.peopleType).label} *
-                </label>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
+                  <label style={{ ...labelStyle, marginBottom: 0 }}>
+                    {peopleCodeModel(peopleModel.peopleType).label} *
+                  </label>
+                  {!initial && (
+                    <span style={{ fontSize: 10, color: "#2563eb", fontWeight: 700, background: "#eff6ff", padding: "1px 6px", borderRadius: 4 }}>
+                      Auto-generated ID
+                    </span>
+                  )}
+                </div>
                 <input
                   style={{
                     ...inputStyle,
-                    ...(formErrors.personCode
+                    ...(shouldShowError("personCode")
                       ? { borderColor: "#dc2626" }
                       : null),
                   }}
                   value={form.personCode}
-                  onChange={(e) => set("personCode", e.target.value.trim())}
+                  onChange={(e) => {
+                    set("personCode", e.target.value.trim());
+                    markTouched("personCode");
+                  }}
+                  onBlur={() => markTouched("personCode")}
                   placeholder={
-                    peopleCodeModel(peopleModel.peopleType).placeholder
+                    initialPersonCode || peopleCodeModel(peopleModel.peopleType).placeholder
                   }
                   maxLength={PERSON_CODE_MAX_LENGTH}
-                  aria-invalid={Boolean(formErrors.personCode)}
+                  aria-invalid={shouldShowError("personCode")}
                 />
-                {formErrors.personCode && (
+                {shouldShowError("personCode") && (
                   <div
                     style={{
                       marginTop: 6,
@@ -3897,10 +3989,6 @@ export const StaffModal: FC<{
             </div>
 
             {/* Phone + Email */}
-            {/* Neither is individually required, but at least one must be
-              present — see the save-guard in the footer below. Login
-              credentials use whichever is available: email takes priority,
-              phone is the fallback identifier when there's no email. */}
             <div
               style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}
             >
@@ -3909,15 +3997,20 @@ export const StaffModal: FC<{
                 <input
                   style={{
                     ...inputStyle,
-                    ...(formErrors.phone ? { borderColor: "#dc2626" } : null),
+                    ...(shouldShowError("phone") ? { borderColor: "#dc2626" } : null),
                   }}
                   value={form.phone}
-                  onChange={(e) => set("phone", e.target.value.trim())}
-                  placeholder="0300-1234567"
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/[^\d+ -]/g, "").slice(0, PHONE_MAX_LENGTH);
+                    set("phone", cleaned);
+                    markTouched("phone");
+                  }}
+                  onBlur={() => markTouched("phone")}
+                  placeholder="e.g. 0300-1234567"
                   maxLength={PHONE_MAX_LENGTH}
-                  aria-invalid={Boolean(formErrors.phone)}
+                  aria-invalid={shouldShowError("phone")}
                 />
-                {formErrors.phone && (
+                {shouldShowError("phone") && (
                   <p
                     style={{
                       margin: "5px 0 0",
@@ -3935,22 +4028,20 @@ export const StaffModal: FC<{
                 <input
                   style={{
                     ...inputStyle,
-                    ...(formErrors.email ? { borderColor: "#dc2626" } : null),
+                    ...(shouldShowError("email") ? { borderColor: "#dc2626" } : null),
                   }}
                   type="email"
                   value={form.email ?? ""}
-                  // Lower-cased at entry, not just trimmed: the backend match
-                  // against client_staff.email is case-sensitive, so this is
-                  // what actually keeps the generated login working — see
-                  // validateStaffForm's comment above.
-                  onChange={(e) =>
-                    set("email", e.target.value.trim().toLowerCase())
-                  }
-                  placeholder="ahmed@company.com"
+                  onChange={(e) => {
+                    set("email", e.target.value.trim().toLowerCase());
+                    markTouched("email");
+                  }}
+                  onBlur={() => markTouched("email")}
+                  placeholder="e.g. staff@company.com"
                   maxLength={EMAIL_MAX_LENGTH}
-                  aria-invalid={Boolean(formErrors.email)}
+                  aria-invalid={shouldShowError("email")}
                 />
-                {formErrors.email && (
+                {shouldShowError("email") && (
                   <p
                     style={{
                       margin: "5px 0 0",
@@ -3964,7 +4055,7 @@ export const StaffModal: FC<{
                 )}
               </div>
             </div>
-            {formErrors.contact && (
+            {shouldShowContactError() && (
               <p
                 style={{
                   margin: "-8px 0 0",
@@ -3986,15 +4077,27 @@ export const StaffModal: FC<{
                 <input
                   style={{
                     ...inputStyle,
-                    ...(formErrors.cnic ? { borderColor: "#dc2626" } : null),
+                    ...(shouldShowError("cnic") ? { borderColor: "#dc2626" } : null),
                   }}
                   value={form.cnic}
-                  onChange={(e) => set("cnic", e.target.value.trim())}
-                  placeholder="42101-1234567-1"
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const digits = raw.replace(/\D/g, "").slice(0, 13);
+                    let formatted = digits;
+                    if (digits.length > 5 && digits.length <= 12) {
+                      formatted = `${digits.slice(0, 5)}-${digits.slice(5)}`;
+                    } else if (digits.length > 12) {
+                      formatted = `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}`;
+                    }
+                    set("cnic", formatted);
+                    markTouched("cnic");
+                  }}
+                  onBlur={() => markTouched("cnic")}
+                  placeholder="e.g. 42101-1234567-1 (13 digits)"
                   maxLength={CNIC_MAX_LENGTH}
-                  aria-invalid={Boolean(formErrors.cnic)}
+                  aria-invalid={shouldShowError("cnic")}
                 />
-                {formErrors.cnic && (
+                {shouldShowError("cnic") && (
                   <p
                     style={{
                       margin: "5px 0 0",
@@ -4017,17 +4120,21 @@ export const StaffModal: FC<{
                   <input
                     style={{
                       ...inputStyle,
-                      ...(formErrors.fatherName
+                      ...(shouldShowError("fatherName")
                         ? { borderColor: "#dc2626" }
                         : null),
                     }}
                     value={form.fatherName}
-                    onChange={(e) => set("fatherName", e.target.value)}
-                    placeholder="Muhammad Khan"
+                    onChange={(e) => {
+                      set("fatherName", e.target.value);
+                      markTouched("fatherName");
+                    }}
+                    onBlur={() => markTouched("fatherName")}
+                    placeholder="e.g. Muhammad Khan"
                     maxLength={NAME_MAX_LENGTH}
-                    aria-invalid={Boolean(formErrors.fatherName)}
+                    aria-invalid={shouldShowError("fatherName")}
                   />
-                  {formErrors.fatherName && (
+                  {shouldShowError("fatherName") && (
                     <p
                       style={{
                         margin: "5px 0 0",
@@ -4052,17 +4159,22 @@ export const StaffModal: FC<{
                     <input
                       style={{
                         ...inputStyle,
-                        ...(formErrors.fatherPhone
+                        ...(shouldShowError("fatherPhone")
                           ? { borderColor: "#dc2626" }
                           : null),
                       }}
                       value={form.fatherPhone}
-                      onChange={(e) => set("fatherPhone", e.target.value.trim())}
-                      placeholder="0300-1234567"
+                      onChange={(e) => {
+                        const cleaned = e.target.value.replace(/[^\d+ -]/g, "").slice(0, PHONE_MAX_LENGTH);
+                        set("fatherPhone", cleaned);
+                        markTouched("fatherPhone");
+                      }}
+                      onBlur={() => markTouched("fatherPhone")}
+                      placeholder="e.g. 0300-1234567"
                       maxLength={PHONE_MAX_LENGTH}
-                      aria-invalid={Boolean(formErrors.fatherPhone)}
+                      aria-invalid={shouldShowError("fatherPhone")}
                     />
-                    {formErrors.fatherPhone && (
+                    {shouldShowError("fatherPhone") && (
                       <p
                         style={{
                           margin: "5px 0 0",
@@ -4080,17 +4192,29 @@ export const StaffModal: FC<{
                     <input
                       style={{
                         ...inputStyle,
-                        ...(formErrors.fatherCnic
+                        ...(shouldShowError("fatherCnic")
                           ? { borderColor: "#dc2626" }
                           : null),
                       }}
                       value={form.fatherCnic}
-                      onChange={(e) => set("fatherCnic", e.target.value.trim())}
-                      placeholder="42101-1234567-1"
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const digits = raw.replace(/\D/g, "").slice(0, 13);
+                        let formatted = digits;
+                        if (digits.length > 5 && digits.length <= 12) {
+                          formatted = `${digits.slice(0, 5)}-${digits.slice(5)}`;
+                        } else if (digits.length > 12) {
+                          formatted = `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}`;
+                        }
+                        set("fatherCnic", formatted);
+                        markTouched("fatherCnic");
+                      }}
+                      onBlur={() => markTouched("fatherCnic")}
+                      placeholder="e.g. 42101-1234567-1 (13 digits)"
                       maxLength={CNIC_MAX_LENGTH}
-                      aria-invalid={Boolean(formErrors.fatherCnic)}
+                      aria-invalid={shouldShowError("fatherCnic")}
                     />
-                    {formErrors.fatherCnic && (
+                    {shouldShowError("fatherCnic") && (
                       <p
                         style={{
                           margin: "5px 0 0",
@@ -4828,19 +4952,15 @@ export const StaffModal: FC<{
               loading={isSaving}
               disabled={
                 Boolean(mediaError) ||
-                salaryBlocked ||
-                Object.keys(formErrors).length > 0
+                salaryBlocked
               }
               onClick={async () => {
+                setHasAttemptedSubmit(true);
                 if (isSaving) return;
                 if (mediaError) return;
                 if (salaryBlocked) return;
 
-                if (!form.name || !form.personCode) return;
-
                 if (Object.keys(formErrors).length > 0) {
-                  // Inline messages next to Phone/Email already show what's
-                  // wrong; nothing further to say here.
                   return;
                 }
 

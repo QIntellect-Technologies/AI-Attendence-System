@@ -1,6 +1,21 @@
 import sqlite3
 import json
 import os
+import sys
+from pathlib import Path
+
+# Add project root to sys.path so supabase_client and support modules can be imported
+ROOT_DIR = str(Path(__file__).resolve().parents[3])
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(ROOT_DIR, ".env"))
+except ImportError:
+    pass
+
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 from logger_config import get_logger
@@ -226,10 +241,17 @@ def get_user_by_name(name: str) -> Optional[Dict]:
 
 
 def get_all_users(role: Optional[str] = None) -> List[Dict]:
-    """Get all active users with today's attendance status via optimized join and Cloud sync."""
+    """Get all active users with today's attendance status, face training status, and Cloud sync."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            
+            # Fetch local embeddings user count map
+            cursor.execute('''
+                SELECT user_id, COUNT(*) FROM embeddings GROUP BY user_id
+            ''')
+            trained_user_ids = {row[0] for row in cursor.fetchall() if row[1] > 0}
+
             cursor.execute('''
                 SELECT u.id, u.name, u.email, u.phone, u.department, u.enrollment_date, 
                        u.created_at, u.active, u.notes, u.photo_path,
@@ -237,7 +259,8 @@ def get_all_users(role: Optional[str] = None) -> List[Dict]:
                            WHEN ma.user_id IS NOT NULL THEN 'Absent'
                            WHEN a.user_id IS NOT NULL THEN 'Present'
                            ELSE 'Absent'
-                       END as status_today
+                       END as status_today,
+                       u.position
                 FROM users u
                 LEFT JOIN (
                     SELECT DISTINCT user_id 
@@ -256,8 +279,160 @@ def get_all_users(role: Optional[str] = None) -> List[Dict]:
         user_list = [{
             'id': r[0], 'name': r[1], 'email': r[2], 'phone': r[3],
             'department': r[4], 'enrollment_date': r[5], 'created_at': r[6],
-            'active': r[7], 'notes': r[8], 'photo_path': r[9], 'status_today': r[10]
+            'active': r[7], 'notes': r[8], 'photo_path': r[9], 'status_today': r[10],
+            'designation': r[11] or '',
+            'person_code': r[8] if r[8] and r[8].startswith(('STF-', 'STD-', 'EMP-')) else f"STF-{r[0]:04d}",
+            'is_trained': r[0] in trained_user_ids,
+            'training_status': 'Active / Trained' if r[0] in trained_user_ids else 'Training Pending',
+            'in_cloud': False
         } for r in rows]
+
+        # Sync from Supabase client_staff (registered users from Main Dashboard)
+        try:
+            from supabase_client import get_supabase
+            sb = get_supabase()
+            org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+
+            # 1. Fetch only ACTIVE, non-archived staff from Cloud
+            cloud_staff_res = (
+                sb.table("client_staff")
+                .select("*")
+                .eq("org_id", org_id)
+                .eq("is_archived", False)
+                .neq("status", "inactive")
+                .execute()
+            )
+            active_cloud_staff = cloud_staff_res.data or []
+
+            # 2. Fetch ARCHIVED/DELETED staff from Cloud to ensure local SQLite is purged of removed members
+            archived_staff_res = (
+                sb.table("client_staff")
+                .select("id, name, person_code")
+                .eq("org_id", org_id)
+                .or_("is_archived.eq.true,status.eq.inactive")
+                .execute()
+            )
+            archived_cloud_staff = archived_staff_res.data or []
+            archived_names = {str(cs.get("name") or "").strip().lower() for cs in archived_cloud_staff if cs.get("name")}
+            archived_codes = {str(cs.get("person_code") or "").strip().lower() for cs in archived_cloud_staff if cs.get("person_code")}
+
+            # Deactivate any archived/deleted staff in local SQLite users table
+            # Deactivate and purge embeddings for archived/deleted staff in local SQLite users table
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                for a_name in archived_names:
+                    cursor.execute("SELECT id FROM users WHERE LOWER(name) = ?", (a_name,))
+                    for row in cursor.fetchall():
+                        cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (row[0],))
+                        trained_user_ids.discard(row[0])
+                    cursor.execute("UPDATE users SET active = 0 WHERE active = 1 AND LOWER(name) = ?", (a_name,))
+                for a_code in archived_codes:
+                    cursor.execute("SELECT id FROM users WHERE LOWER(notes) = ?", (a_code,))
+                    for row in cursor.fetchall():
+                        cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (row[0],))
+                        trained_user_ids.discard(row[0])
+                    cursor.execute("UPDATE users SET active = 0 WHERE active = 1 AND LOWER(notes) = ?", (a_code,))
+                conn.commit()
+
+            # Filter out any archived members from user_list
+            user_list = [
+                u for u in user_list
+                if str(u.get("name") or "").strip().lower() not in archived_names
+                and str(u.get("person_code") or u.get("notes") or "").strip().lower() not in archived_codes
+            ]
+
+            # 3. Auto-sync active cloud staff into local SQLite users table
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                for cs in active_cloud_staff:
+                    cs_name = str(cs.get("name") or "").strip()
+                    cs_email = str(cs.get("email") or "").strip()
+                    if not cs_name:
+                        continue
+
+                    code = cs.get("person_code") or cs.get("employee_id") or f"STF-{cs.get('id')[:4]}"
+                    dept = cs.get("department_name") or ""
+                    desig = cs.get("role_name") or cs.get("position") or ""
+                    cloud_is_trained = (cs.get("face_training_status") == "trained" or bool(cs.get("is_face_verified")))
+
+                    # Find existing user in local list by exact matching code or email or name
+                    match_u = None
+                    for u in user_list:
+                        u_name = str(u.get('name') or '').strip().lower()
+                        u_email = str(u.get('email') or '').strip().lower()
+                        u_code = str(u.get('person_code') or u.get('notes') or '').strip().lower()
+                        if (code and u_code == code.lower()) or (cs_email and u_email == cs_email.lower()) or (u_name == cs_name.lower()):
+                            match_u = u
+                            break
+
+                    if match_u:
+                        match_u['in_cloud'] = True
+                        match_u['name'] = cs_name
+                        match_u['person_code'] = code
+                        if dept: match_u['department'] = dept
+                        if desig: match_u['designation'] = desig
+                        if cs_email: match_u['email'] = cs_email
+                        
+                        # If Cloud explicitly says not trained, purge any ghost/stale local embeddings
+                        if not cloud_is_trained and (match_u['id'] in trained_user_ids):
+                            cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (match_u['id'],))
+                            conn.commit()
+                            trained_user_ids.discard(match_u['id'])
+                        
+                        is_tr = (match_u['id'] in trained_user_ids) and (cloud_is_trained or match_u['id'] in trained_user_ids)
+                        if not cloud_is_trained and match_u['id'] not in trained_user_ids:
+                            is_tr = False
+                        match_u['is_trained'] = is_tr
+                        match_u['training_status'] = 'Active / Trained' if is_tr else 'Training Pending'
+                    else:
+                        new_id = None
+                        cursor.execute("SELECT id, active FROM users WHERE LOWER(notes) = ? OR (LOWER(email) = ? AND ? != '')", (code.lower(), cs_email.lower(), cs_email))
+                        row_match = cursor.fetchone()
+                        if not row_match:
+                            cursor.execute("SELECT id, active FROM users WHERE LOWER(name) = ?", (cs_name.lower(),))
+                            row_match = cursor.fetchone()
+
+                        if row_match:
+                            new_id = row_match[0]
+                            cursor.execute("UPDATE users SET active = 1, department = ?, position = ?, notes = ? WHERE id = ?", (dept, desig, code, new_id))
+                            # Purge stale embeddings if Cloud says not trained
+                            if not cloud_is_trained and (new_id in trained_user_ids):
+                                cursor.execute("DELETE FROM embeddings WHERE user_id = ?", (new_id,))
+                                trained_user_ids.discard(new_id)
+                            conn.commit()
+                        else:
+                            try:
+                                cursor.execute('''
+                                    INSERT INTO users (name, email, phone, department, position, active, notes)
+                                    VALUES (?, ?, ?, ?, ?, 1, ?)
+                                ''', (cs_name, cs_email or None, cs.get("phone") or None, dept, desig, code))
+                                new_id = cursor.lastrowid
+                                conn.commit()
+                            except sqlite3.IntegrityError:
+                                pass
+
+                        if new_id:
+                            is_tr = (new_id in trained_user_ids) and cloud_is_trained
+                            user_list.append({
+                                'id': new_id,
+                                'name': cs_name,
+                                'email': cs_email,
+                                'phone': cs.get("phone"),
+                                'department': dept,
+                                'designation': desig,
+                                'person_code': code,
+                                'enrollment_date': cs.get("created_at"),
+                                'created_at': cs.get("created_at"),
+                                'active': 1,
+                                'notes': code,
+                                'photo_path': None,
+                                'status_today': 'Absent',
+                                'is_trained': is_tr,
+                                'training_status': 'Active / Trained' if is_tr else 'Training Pending',
+                                'in_cloud': True
+                            })
+        except Exception as cloud_err:
+            logger.warning(f"get_all_users cloud staff sync note: {cloud_err}")
 
         # Cloud Real-Time Sync: Verify status_today against live Supabase attendance
         try:

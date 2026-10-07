@@ -8,6 +8,21 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
+import sys
+from pathlib import Path
+
+# Add project root to sys.path so supabase_client and support modules can be imported
+ROOT_DIR = str(Path(__file__).resolve().parents[3])
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(ROOT_DIR, ".env"))
+except ImportError:
+    pass
+
 import json
 import base64
 import threading
@@ -23,6 +38,9 @@ import cv2
 # IMPORTANT: add CUDA/Torch DLL directories before any InsightFace / ONNX Runtime import.
 # This is required on Windows when CUDA provider DLLs depend on torch CUDA libraries.
 for _dll_dir in [
+    r'C:\Users\Imran\anaconda3\envs\env310tfgpu\Library\bin',
+    r'C:\Users\Imran\anaconda3\envs\env310tfgpu\Lib\site-packages\torch\lib',
+    r'C:\Users\Imran\anaconda3\envs\env310tfgpu\Lib\site-packages\onnxruntime\capi',
     r'C:\Users\Fafcom Technology\anaconda3\envs\env310tfgpu\Library\bin',
     r'C:\Users\Fafcom Technology\anaconda3\envs\env310tfgpu\Lib\site-packages\torch\lib',
     r'C:\Users\Fafcom Technology\anaconda3\envs\env310tfgpu\Lib\site-packages\onnxruntime\capi',
@@ -40,9 +58,15 @@ for _dll_dir in [
 import sys
 _THIS_DIR = str(Path(__file__).resolve().parent)
 _ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
-for _p in [_THIS_DIR, _ROOT_DIR]:
-    if os.path.isdir(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
+
+# Guarantee _THIS_DIR has highest priority so local config/database are never shadowed
+if _THIS_DIR in sys.path:
+    sys.path.remove(_THIS_DIR)
+sys.path.insert(0, _THIS_DIR)
+
+# Append _ROOT_DIR as fallback for shared root utilities (e.g. supabase_client)
+if os.path.isdir(_ROOT_DIR) and _ROOT_DIR not in sys.path:
+    sys.path.append(_ROOT_DIR)
 
 import database as db
 import face_processor as fp
@@ -68,7 +92,17 @@ logger = get_logger(__name__)
 
 # Initialize Flask app with absolute template & static folders
 TEMPLATE_DIR = os.path.join(_THIS_DIR, "templates")
+if not os.path.isfile(os.path.join(TEMPLATE_DIR, "index.html")):
+    _alt = os.path.join(_THIS_DIR, "Flask-Attedence", "templates")
+    if os.path.isfile(os.path.join(_alt, "index.html")):
+        TEMPLATE_DIR = _alt
+
 STATIC_DIR = os.path.join(_THIS_DIR, "static")
+if not os.path.isdir(STATIC_DIR):
+    _alt = os.path.join(_THIS_DIR, "Flask-Attedence", "static")
+    if os.path.isdir(_alt):
+        STATIC_DIR = _alt
+
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 CORS(app)
 
@@ -258,6 +292,8 @@ def refresh_embedding_cache():
 
         all_users = db.get_all_users()
         for user in all_users:
+            if not user.get('in_cloud'):
+                continue
             user_embeddings = db.get_embeddings_for_user(user['id'])
             if len(user_embeddings) == 0:
                 continue
@@ -451,6 +487,15 @@ def upload_enrollment_video():
                     'issues': result.get('issues', [])
                 }), 400
             
+            # Clear previous embeddings for user to ensure fresh biometric profile
+            try:
+                import sqlite3
+                with sqlite3.connect(db.DB_PATH) as _conn:
+                    _conn.execute("DELETE FROM embeddings WHERE user_id = ?", (user_id,))
+                    _conn.commit()
+            except Exception as _clear_err:
+                logger.warning(f"Note clearing previous embeddings for user {user_id}: {_clear_err}")
+
             # Store embeddings with quality scores
             for embedding in embeddings:
                 embedding_list = embedding.tolist()
@@ -460,6 +505,35 @@ def upload_enrollment_video():
             
             # Refresh cache dynamically
             refresh_embedding_cache()
+
+            # Sync training completion status to Main Cloud Dashboard (Supabase client_staff)
+            try:
+                from supabase_client import get_supabase
+                from datetime import timezone
+                sb = get_supabase()
+                all_users = db.get_all_users()
+                trained_u = next((u for u in all_users if u.get('id') == user_id), None)
+                if trained_u:
+                    t_name = trained_u.get('name')
+                    t_email = trained_u.get('email')
+                    t_code = trained_u.get('person_code')
+                    now_utc = datetime.now(timezone.utc).isoformat()
+                    
+                    org_id = "1517402c-54f2-46c0-98ba-242703e5d816"
+                    update_data = {
+                        'face_training_status': 'trained',
+                        'is_face_verified': True,
+                        'face_trained_at': now_utc
+                    }
+                    if t_code:
+                        sb.table('client_staff').update(update_data).eq('org_id', org_id).eq('person_code', t_code).execute()
+                    elif t_email:
+                        sb.table('client_staff').update(update_data).eq('org_id', org_id).eq('email', t_email).execute()
+                    elif t_name:
+                        sb.table('client_staff').update(update_data).eq('org_id', org_id).ilike('name', t_name).execute()
+                    logger.info(f"✓ Synced face training status to Cloud for user '{t_name}' ({t_code})")
+            except Exception as cloud_tr_err:
+                logger.warning(f"Cloud face training status sync note: {cloud_tr_err}")
             
             return jsonify({
                 'success': True,
