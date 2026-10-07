@@ -263,6 +263,78 @@ def apply_face_verification_hold(fields: dict, *, pending_face_review: bool) -> 
 
 
 
+def notify_attendance_marked(
+    *,
+    org_id: str,
+    branch_id: Optional[str],
+    staff_id: str,
+    staff_name: str,
+    attendance_id,
+    event_local_str: str,
+    leg: str,           # "check_in" or "check_out"
+    source: str = "",   # e.g. "mobile_field", "mobile_office", "mobile_fallback"
+) -> None:
+    """Fire a real-time dashboard notification whenever ANY attendance mark
+    succeeds — on-time check-in, on-time check-out, field or office — so the
+    admin always sees who just marked attendance without having to wait for an
+    exception.
+
+    Broadcast to all active admins in the org (same as notify_check_in_exception's
+    also_broadcast=True path).  Soft-fail: a notification error never blocks
+    the attendance write that triggered it.
+
+    target_route is set to '/admin/attendance' so clicking the notification in
+    the dashboard bell/Notifications page takes the admin straight to the
+    attendance view for that person.
+    """
+    try:
+        branch_name = get_branch_name_for_notification(org_id, branch_id)
+        where = f" at {branch_name}" if branch_name else ""
+        source_label = {
+            "mobile_field": " (field)",
+            "mobile_office": " (office)",
+            "mobile_fallback": " (offline sync)",
+            "mobile_cloud": " (cloud)",
+        }.get(source, "")
+
+        if leg == "check_in":
+            event_type = "attendance.check_in.marked"
+            title = f"Check-in marked — {staff_name}"
+            body = (
+                f"{staff_name} checked in{where} at {event_local_str}{source_label}."
+            )
+        else:
+            event_type = "attendance.check_out.marked"
+            title = f"Check-out marked — {staff_name}"
+            body = (
+                f"{staff_name} checked out{where} at {event_local_str}{source_label}."
+            )
+
+        notifications_db.create_notification(
+            org_id,
+            branch_id=branch_id,
+            module_key="attendance",
+            event_type=event_type,
+            title=title,
+            body=body,
+            actor_name=staff_name,
+            target_entity_id=str(attendance_id),
+            target_entity_type="attendance",
+            target_route="/admin/attendance",
+            metadata={
+                "staff_id": str(staff_id),
+                "leg": leg,
+                "source": source,
+            },
+            # Broadcast to all org admins — no manager-only scope for a
+            # plain on-time mark; any admin reviewing the board should see it.
+            also_broadcast=True,
+        )
+    except Exception:
+        # Soft-fail: notification must never block the attendance write.
+        pass
+
+
 def notify_check_in_exception(
     *, org_id: str, branch_id: Optional[str], staff_id: str, staff_name: str,
     attendance_id, event_local_str: str, reason: str = "late",
