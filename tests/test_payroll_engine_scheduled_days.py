@@ -392,13 +392,22 @@ def test_pending_late_decisions_follow_capture_channel_and_exclude_resolved_rows
                 'attendanceId': 'mobile-pending',
                 'date': '2024-02-01',
                 'checkInStatus': 'late',
+                'dayStatus': 'late',
                 'captureChannel': 'mobile_app',
             },
             {
                 'attendanceId': 'mobile-excluded',
                 'date': '2024-02-01',
                 'checkInStatus': 'late',
+                'dayStatus': 'late',
                 'checkInPayrollDecision': 'exclude',
+                'captureChannel': 'mobile_app',
+            },
+            {
+                'attendanceId': 'mobile-unresolved',
+                'date': '2024-02-01',
+                'checkInStatus': 'late',
+                'dayStatus': 'present',
                 'captureChannel': 'mobile_app',
             },
             {

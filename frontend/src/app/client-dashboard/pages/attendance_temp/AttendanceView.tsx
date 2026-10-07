@@ -2053,6 +2053,7 @@ export default function AttendanceView() {
     setLoadingAction(staffName);
     try {
       await markAttendanceAbsentForStaff(staffMember, targetDate);
+      window.dispatchEvent(new CustomEvent("payroll-data-invalidated"));
       toastSuccess(
         `${staffName} has been marked as absent on ${formattedDate}.`,
       );

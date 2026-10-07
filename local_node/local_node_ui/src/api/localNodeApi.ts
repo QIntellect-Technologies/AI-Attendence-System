@@ -210,7 +210,10 @@ export const localNodeApi = {
       },
     ),
 
-  liveEvents: () => requestJson<LiveEventsResponse>("/api/live-events"),
+  liveEvents: (all = false) =>
+    requestJson<LiveEventsResponse>(
+      all ? "/api/live-events?all=1" : "/api/live-events",
+    ),
 
   cameras: () =>
     requestJson<{ success: true; cameras: CameraInfo[] }>("/api/cameras"),

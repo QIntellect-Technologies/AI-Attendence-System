@@ -44,7 +44,11 @@ MODEL_NAME = "buffalo_l"
 # outcome than a busier CPU. If a CPU-only box needs to trade range for
 # speed, that should be a deliberate per-install decision (e.g. an env
 # override), not a silent default baked in here.
-DETECTION_SIZE = (640, 640)
+_detection_size_override = os.getenv("QINTELLECT_FACE_DETECTION_SIZE", "").strip()
+_detection_size = int(_detection_size_override) if _detection_size_override else 640
+if _detection_size < 1:
+    raise ValueError("QINTELLECT_FACE_DETECTION_SIZE must be a positive integer")
+DETECTION_SIZE = (_detection_size, _detection_size)
 
 DEFAULT_PROVIDERS = [
     "CUDAExecutionProvider",

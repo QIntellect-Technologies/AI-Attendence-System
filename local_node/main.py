@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import logging
 import os
 import socket
 import sys
 import time
 import webbrowser
-from threading import Thread, Timer
+from threading import Thread
 
 # PyInstaller's --windowed build (build_pyinstaller.py's onefile target)
 # runs with no console attached, so sys.stdout/sys.stderr are None rather
@@ -26,6 +27,11 @@ if getattr(sys, "frozen", False):
         sys.stdout = open(os.devnull, "w")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
+
+# Retain more facial detail from the Local Node camera stream. The shared
+# engine reads this before loading InsightFace; other consumers keep its
+# 640px default unless they explicitly set this process-level override.
+os.environ.setdefault("QINTELLECT_FACE_DETECTION_SIZE", "960")
 
 import cv2
 
@@ -129,6 +135,18 @@ def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
     return False
 
 
+def _open_browser_when_ready(host: str, port: int, url: str) -> None:
+    if not _wait_for_port(host, port, timeout=60.0):
+        logging.getLogger(__name__).error(
+            "Local node UI did not start listening on %s:%s; browser was not opened",
+            host,
+            port,
+        )
+        return
+    if not webbrowser.open(url):
+        logging.getLogger(__name__).error("Unable to open local node UI at %s", url)
+
+
 def main() -> None:
     setup_logging()
 
@@ -160,7 +178,12 @@ def main() -> None:
         sys.exit(0)
 
     if not args.no_browser:
-        Timer(1.0, lambda: webbrowser.open(url)).start()
+        Thread(
+            target=_open_browser_when_ready,
+            args=(args.host, port, url),
+            name="node-ui-launcher",
+            daemon=True,
+        ).start()
 
     app = create_app()
     if serve is not None:

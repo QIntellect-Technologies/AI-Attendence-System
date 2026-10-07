@@ -76,6 +76,7 @@ import {
   pendingPayrollSalaryDialog,
   toastSuccess,
   toastError,
+  toastInfo,
 } from "../../utils/notifications";
 import { saveWithPendingPayrollSalaryDecision } from "../../utils/pendingPayrollSalary";
 import { setPayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
@@ -1308,12 +1309,7 @@ export default function PayrollModule() {
     async (attendanceId: string, decision: PayrollDecision) => {
       if (!organizationId || !lateDecisionRow?.breakdown) return;
       setDecidingAttendanceId(attendanceId);
-      try {
-        await setPayrollDecision({
-          organizationId,
-          attendanceId,
-          decision,
-        });
+      const removePendingDecision = () =>
         setLateDecisionRow((current) =>
           current?.breakdown
             ? {
@@ -1328,6 +1324,13 @@ export default function PayrollModule() {
               }
             : current,
         );
+      try {
+        await setPayrollDecision({
+          organizationId,
+          attendanceId,
+          decision,
+        });
+        removePendingDecision();
         toastSuccess(
           decision === "include"
             ? "Late arrival included in payroll."
@@ -1339,6 +1342,21 @@ export default function PayrollModule() {
           );
         });
       } catch (error) {
+        const staleDecisionMessages = new Set([
+          "Attendance record not found for this organization",
+          "This attendance row has no resolved classification to decide on yet",
+        ]);
+        if (
+          error instanceof Error &&
+          staleDecisionMessages.has(error.message)
+        ) {
+          removePendingDecision();
+          toastInfo(
+            "This late-arrival decision is no longer available. Payroll is being refreshed.",
+          );
+          await refresh({ force: true });
+          return;
+        }
         toastError(
           error instanceof Error
             ? error.message

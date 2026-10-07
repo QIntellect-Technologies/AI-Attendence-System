@@ -679,9 +679,12 @@ def compute_payroll_breakdown(
     pending_late_decisions = [
         {'attendance_id': row.get('attendanceId'), 'date': row['date']}
         for row in scheduled_late_rows
-        if row.get('captureChannel') in ('local_node', 'mobile_app')
-        and row.get(_late_decision_key(row)) is None
-        and row.get('attendanceId')
+        if (
+            row.get('dayStatus') == 'late'
+            and row.get('captureChannel') in ('local_node', 'mobile_app')
+            and row.get(_late_decision_key(row)) is None
+            and row.get('attendanceId')
+        )
     ]
     deductible_late_count = sum(
         1 for row in scheduled_late_rows

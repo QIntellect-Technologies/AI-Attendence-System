@@ -10,6 +10,7 @@ import {
   Info,
   Loader2,
   LogOut,
+  Eye,
   RefreshCw,
   ShieldAlert,
   Sparkles,
@@ -26,6 +27,7 @@ interface Props {
   clearing?: boolean;
   onClear?: () => void;
   onOpenHeldReview?: () => void;
+  onViewAllDetections?: () => void;
 }
 
 const TOKEN = {
@@ -163,10 +165,9 @@ function noteForLeg(
   return status === "checked_out" ? `Checked out at ${time}.` : null;
 }
 
-function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
+export function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
   const failed = event.status.toLowerCase() === "failed";
   const status = event.status.toLowerCase();
-  const pct = Math.round((Number(event.confidence) || 0) * 100);
   const eventDate = new Date(event.marked_at);
   const time = eventDate.toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -220,11 +221,6 @@ function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
           <div style={styles.cardInfo}>
             <div style={styles.cardHeaderFlex}>
               <span style={styles.cardName}>{event.name}</span>
-              {pct > 0 && (
-                <span style={styles.confidencePill}>
-                  {pct}% match
-                </span>
-              )}
             </div>
 
             <div style={styles.metaRow}>
@@ -325,6 +321,7 @@ export default function LiveAttendancePanel({
   clearing = false,
   onClear,
   onOpenHeldReview,
+  onViewAllDetections,
 }: Props) {
   const todayDateStr = useMemo(() => new Date().toDateString(), []);
 
@@ -465,9 +462,21 @@ export default function LiveAttendancePanel({
           <span style={styles.toolbarLabel}>Today's Detections</span>
           <span style={styles.toolbarBadge}>{todayEvents.length}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.74em", fontWeight: 700, color: TOKEN.muted }}>
-          <Calendar size={13} color={TOKEN.teal} />
-          {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {onViewAllDetections && todayEvents.length > 0 && (
+            <button
+              type="button"
+              style={styles.viewAllButton}
+              onClick={onViewAllDetections}
+            >
+              <Eye size={13} />
+              View all
+            </button>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.74em", fontWeight: 700, color: TOKEN.muted }}>
+            <Calendar size={13} color={TOKEN.teal} />
+            {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </div>
         </div>
       </div>
 
@@ -484,7 +493,9 @@ export default function LiveAttendancePanel({
             </p>
           </div>
         ) : (
-          todayEvents.map((event) => <DetectionCard key={event.id} event={event} />)
+          todayEvents
+            .slice(0, 10)
+            .map((event) => <DetectionCard key={event.id} event={event} />)
         )}
       </div>
     </section>
@@ -494,6 +505,8 @@ export default function LiveAttendancePanel({
 const styles: Record<string, React.CSSProperties> = {
   panel: {
     width: "100%",
+    height: "100%",
+    minHeight: 0,
     border: `1px solid ${TOKEN.border}`,
     borderRadius: 20,
     background: "#ffffff",
@@ -632,10 +645,26 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
   },
   feed: {
+    flex: 1,
+    minHeight: 0,
     padding: 16,
     display: "grid",
     gap: 14,
     alignContent: "start",
+    overflowY: "auto",
+  },
+  viewAllButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    border: `1px solid ${TOKEN.tealBorder}`,
+    borderRadius: 8,
+    background: TOKEN.tealLight,
+    color: TOKEN.tealDark,
+    padding: "6px 9px",
+    fontSize: "0.72em",
+    fontWeight: 800,
+    cursor: "pointer",
   },
   card: {
     display: "flex",
@@ -694,17 +723,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
-  },
-  confidencePill: {
-    fontSize: "0.7em",
-    fontWeight: 800,
-    color: TOKEN.tealDark,
-    background: TOKEN.tealLight,
-    border: `1px solid ${TOKEN.tealBorder}`,
-    padding: "2px 7px",
-    borderRadius: 6,
-    fontFamily: "monospace",
-    whiteSpace: "nowrap",
   },
   metaRow: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 },
   metaBadge: {

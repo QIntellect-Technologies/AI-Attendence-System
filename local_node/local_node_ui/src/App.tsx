@@ -27,6 +27,7 @@ import {
 import LiveAttendancePanel from "./live-attendance/LiveAttendancePanel";
 import ImportPanel from "./live-attendance/ImportPanel";
 import CameraGrid from "./live-attendance/CameraGrid";
+import AllDetectionModal from "./live-attendance/AllDetectionModal";
 import HeldReviewPanel from "./live-attendance/HeldReviewPanel";
 import SplashScreen from "./SplashScreen";
 import WelcomeScreen from "./WelcomeScreen";
@@ -44,17 +45,14 @@ const RESPONSIVE_CSS = `
   .qia-page { overflow-x: hidden; }
   .qia-top-bar { flex-wrap: wrap; row-gap: 8px; }
   .qia-pill-row { flex-wrap: wrap; row-gap: 8px; }
-  /* .qia-main-row is the SINGLE scroll container for the camera grid and
-     the attendance sidebar together (see mainRow's overflowY in styles
-     below). Neither child scrolls on its own anymore — CameraGrid's own
-     grid and LiveAttendancePanel's own feed both grow to their natural
-     content height, and once that combined height exceeds the row's
-     available space, this is the one scrollbar that appears. */
-  .qia-main-row { display: flex; gap: 14px; min-width: 0; }
-  .qia-camera-col { flex: 1 1 auto; min-width: 0; display: flex; }
+  /* Keep camera streams inside the space left by the header. Scrolling
+     belongs inside the camera grid/feed, not on the page. */
+  .qia-main-row { display: flex; gap: 14px; min-width: 0; overflow: hidden; }
+  .qia-camera-col { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
   .qia-sidebar-col {
-    flex-shrink: 0;
+    flex: 0 0 410px;
     min-width: 0;
+    min-height: 0;
     display: flex;
     width: 410px;
   }
@@ -66,8 +64,8 @@ const RESPONSIVE_CSS = `
   }
   @media (max-width: 900px) {
     .qia-main-row { flex-direction: column; }
-    .qia-sidebar-col { width: 100% !important; }
-    .qia-camera-col { min-height: 320px; }
+    .qia-sidebar-col { width: 100% !important; flex: 1 1 0; }
+    .qia-camera-col { flex: 1 1 0; }
   }
   @media (max-width: 620px) {
     .qia-brand-org { max-width: 60vw; font-size: 17px !important; }
@@ -147,6 +145,7 @@ export default function App() {
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [heldReviewOpen, setHeldReviewOpen] = useState(false);
+  const [allDetectionsOpen, setAllDetectionsOpen] = useState(false);
   const lastCameraChangeAtRef = useRef<string | null>(null);
 
   // Shown on cold start (initial state: true — plain refresh gets the same
@@ -584,6 +583,7 @@ export default function App() {
             onSync={() => void syncAttendance()}
             clearing={busy === "clear"}
             onClear={() => void clearTodayAttendance()}
+            onViewAllDetections={() => setAllDetectionsOpen(true)}
             onOpenHeldReview={
               hasScenarioBasedWorkflow ? () => setHeldReviewOpen(true) : undefined
             }
@@ -595,6 +595,10 @@ export default function App() {
         open={heldReviewOpen}
         onClose={() => setHeldReviewOpen(false)}
         onChanged={() => void load()}
+      />
+      <AllDetectionModal
+        open={allDetectionsOpen}
+        onClose={() => setAllDetectionsOpen(false)}
       />
     </main>
   );
@@ -871,16 +875,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 14,
     padding: 16,
     boxSizing: "border-box",
-    // The single shared scrollbar for the camera grid + sidebar (see the
-    // .qia-main-row comment above the RESPONSIVE_CSS block). Bounded by
-    // flex:1/minHeight:0 above (the remaining viewport height under the
-    // header), so once CameraGrid's or LiveAttendancePanel's natural
-    // content height exceeds that, this scrolls both together as one.
-    overflowY: "auto",
+    overflow: "hidden",
     overflowX: "hidden",
   },
-  cameraColumn: { flex: 1, minWidth: 0, display: "flex" },
-  sidebarColumn: { flexShrink: 0, minWidth: 0, display: "flex" },
+  cameraColumn: { minWidth: 0, minHeight: 0, display: "flex" },
+  sidebarColumn: { minWidth: 0, minHeight: 0, display: "flex" },
   cloudModeNotice: {
     flex: 1,
     display: "flex",

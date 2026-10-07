@@ -38,14 +38,6 @@ const LIVE_WINDOW_MS = 60_000;
 // its connection back.
 const HIDDEN_TILE_TEARDOWN_DELAY_MS = 5000;
 
-// Every tile — grid or single-camera tab — is sized off this ratio instead
-// of a parent-height fraction (the old `1fr`/`minmax` grid-row approach).
-// That's what lets tiles stay a constant, comfortable size no matter how
-// many cameras are enrolled: the grid's own height simply grows by one row
-// per pair of cameras and the page scrolls, rather than every tile
-// shrinking to keep the whole grid inside the viewport.
-const TILE_ASPECT_RATIO = "16 / 9";
-
 // Grid view no longer streams every enabled camera at once. Past ~6
 // simultaneous MJPEG connections, the browser's per-origin connection cap
 // (HTTP/1.1, ~6 concurrent) starves /api/status and /api/live-events
@@ -313,6 +305,15 @@ export default function CameraGrid({ events }: Props) {
     const start = currentPage * pageSize;
     return new Set(cameras.slice(start, start + pageSize).map((c) => c.id));
   }, [cameras, currentPage, pageSize]);
+  const visibleGridRows =
+    viewMode === "grid"
+      ? Math.max(
+          1,
+          Math.ceil(
+            Math.min(pageSize, cameras.length - currentPage * pageSize) / 2,
+          ),
+        )
+      : 1;
 
   const matchByCamera = useMemo(() => {
     const map = new Map<string, LiveAttendanceEventView>();
@@ -550,7 +551,10 @@ export default function CameraGrid({ events }: Props) {
       */}
       <div
         className={`qia-cam-grid${viewMode === "tabs" ? " qia-cam-grid--single" : ""}`}
-        style={viewMode === "grid" ? styles.grid : styles.singleGrid}
+        style={{
+          ...(viewMode === "grid" ? styles.grid : styles.singleGrid),
+          gridTemplateRows: `repeat(${visibleGridRows}, minmax(0, 1fr))`,
+        }}
       >
         {cameras.map((camera) => {
           const isVisible =
@@ -560,7 +564,7 @@ export default function CameraGrid({ events }: Props) {
           return (
             <div
               key={camera.id}
-              style={isVisible ? undefined : styles.hiddenTile}
+              style={isVisible ? styles.gridItem : styles.hiddenTile}
             >
               <CameraTile
                 camera={camera}
@@ -580,11 +584,8 @@ export default function CameraGrid({ events }: Props) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  // No `flex: 1` / `minHeight: 0` here anymore: this column used to be a
-  // bounded box with its own internal scrollbar (styles.grid below used to
-  // set overflowY: "auto"). It's now an ordinary block that grows to fit
-  // however many camera rows exist, and the shared scrollbar lives one
-  // level up on App.tsx's main row.
+  // Fill the viewport-constrained camera column so grid rows share its
+  // available height instead of extending the page below the fold.
   wrap: {
     display: "flex",
     flexDirection: "column",
@@ -596,6 +597,9 @@ const styles: Record<string, React.CSSProperties> = {
     // panel. This is what was making tiles look wrong AND made the
     // Tabs view visibly "grow into" its final size once a frame arrived.
     width: "100%",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
     gap: 10,
   },
   toolbar: { flexShrink: 0, display: "flex", alignItems: "center", gap: 10 },
@@ -690,25 +694,27 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #fecdd3",
   },
   count: { fontSize: 12, color: TOKEN.muted },
-  // Always 2 fixed columns — no more branching on a selected layout count.
-  // No flex/minHeight/overflow: height is purely the sum of however many
-  // aspect-ratio-sized rows the camera count needs.
   grid: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
+    flex: 1,
+    minHeight: 0,
     gap: 10,
+    overflow: "hidden",
   },
-  // Tabs view: a single column, single tile — still aspect-ratio sized (via
-  // CameraTile's own styles.tile), just full-width instead of half-width.
   singleGrid: {
     display: "grid",
     gridTemplateColumns: "1fr",
+    flex: 1,
+    minHeight: 0,
     gap: 10,
+    overflow: "hidden",
   },
   // Keeps a camera's tile (and its live <img> connection) mounted while
   // it's just not the one currently on screen — see the render comment
   // above. display:none removes it from layout without unmounting it.
   hiddenTile: { display: "none" },
+  gridItem: { display: "flex", minWidth: 0, minHeight: 0 },
   tile: {
     position: "relative",
     borderRadius: 12,
@@ -718,7 +724,10 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 0 0 1px rgba(58,175,169,0.10), 0 8px 24px rgba(0,0,0,0.18)",
     display: "flex",
     flexDirection: "column",
-    aspectRatio: TILE_ASPECT_RATIO,
+    width: "100%",
+    height: "100%",
+    minWidth: 0,
+    minHeight: 0,
   },
   corner: { position: "absolute", width: 18, height: 18, zIndex: 4 },
   liveBadge: {

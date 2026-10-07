@@ -1325,7 +1325,7 @@ def mark_attendance_failed(local_event_ids: list[str], error: str) -> None:
         conn.commit()
 
 
-def recent_attendance(branch_id: str, limit: int = 50, include_held: bool = False, date_str: str | None = None) -> list[dict[str, Any]]:
+def recent_attendance(branch_id: str, limit: int | None = 50, include_held: bool = False, date_str: str | None = None) -> list[dict[str, Any]]:
     """Feeds /api/live-events' "attendance" array. include_held defaults to
     False so this stays consistent with the rest of the pipeline treating
     held_for_review as invisible-until-reviewed: camera_stream_manager.py
@@ -1347,8 +1347,10 @@ def recent_attendance(branch_id: str, limit: int = 50, include_held: bool = Fals
         params.append(str(date_str))
     if not include_held:
         query += " AND sync_status NOT IN ('held_for_review', 'checkout_pending_window')"
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(int(limit or 50))
+    query += " ORDER BY id DESC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(int(limit or 50))
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()

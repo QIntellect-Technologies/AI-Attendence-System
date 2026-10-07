@@ -2416,7 +2416,7 @@ def mark_client_staff_absent_today(
     people_type: str | None = None,
     date_value: str | None = None,
 ) -> dict:
-    """Remove today's attendance rows for one tenant-owned person.
+    """Remove attendance rows for one tenant-owned person on the selected date.
 
     This is the UUID/Supabase counterpart of the legacy SQLite absent action.
     It validates organization ownership and optional people_type before deleting
@@ -2465,6 +2465,9 @@ def mark_client_staff_absent_today(
         query = query.eq('branch_id', str(backend_branch_id))
 
     result = query.execute()
+
+    from support_db_payroll import _invalidate_payroll_breakdown_cache
+    _invalidate_payroll_breakdown_cache(org_key)
 
     # Queue manual instruction so local node syncs the absent/deletion status
     try:

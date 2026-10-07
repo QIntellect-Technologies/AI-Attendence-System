@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from local_node import local_db
+from local_node.config import FACE_MATCHING_THRESHOLD
 from local_node.config_store import load_config
 from local_node.logging_config import log_on_change
 from shared_face_engine import (
@@ -94,7 +95,11 @@ def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str,
     branch_id = str(cfg.get("branch_id") or "")
     if not branch_id:
         return None
-    min_score = float(threshold if threshold is not None else cfg.get("match_threshold") or 0.45)
+    min_score = float(
+        threshold
+        if threshold is not None
+        else cfg.get("match_threshold") or FACE_MATCHING_THRESHOLD
+    )
     candidate = np.asarray(test_embedding, dtype=float)
 
     with _cache_lock:

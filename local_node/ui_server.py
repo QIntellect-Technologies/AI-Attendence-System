@@ -155,6 +155,36 @@ model; camera-processor-* means frame copying and JPEG encoding.</p>
     )
 
 
+def _attendance_row_to_event(row: dict) -> dict:
+    is_check_out = bool(row.get("check_out_confirmed"))
+    check_out_metadata = json.loads(row.get("check_out_metadata") or "{}")
+    camera_name = (
+        check_out_metadata.get("camera_name")
+        if is_check_out
+        else (row.get("metadata") or {}).get("camera_name")
+    )
+    return {
+        "id": row["local_event_id"],
+        "name": row.get("staff_name") or row["person_code"],
+        "staff_id": row["person_code"],
+        "status": "checked_out" if is_check_out else "checked_in",
+        "confidence": (
+            row.get("check_out_confidence") if is_check_out else row.get("confidence")
+        ),
+        "message": "Checked out." if is_check_out else "Checked in.",
+        "marked_at": (
+            row.get("check_out_marked_at") if is_check_out else row["marked_at"]
+        ),
+        "check_out_marked_at": row.get("check_out_marked_at"),
+        "sync_status": row.get("sync_status", "pending"),
+        "camera_id": (
+            row.get("check_out_camera_id") if is_check_out else row.get("camera_id")
+        ),
+        "camera_name": camera_name,
+        "notes": row.get("notes"),
+    }
+
+
 def _seed_events_from_persisted_attendance() -> None:
     """Rehydrate the in-memory live-events feed from attendance_buffer on
     startup, since live_events._events is an in-process deque that starts
@@ -165,23 +195,7 @@ def _seed_events_from_persisted_attendance() -> None:
     still-pending ones — instead of a false all-zero reset."""
     today = local_db._today()
     for row in local_db.recent_attendance(_current_branch_id(), 100, date_str=today):
-        is_check_out = bool(row.get("check_out_confirmed"))
-        check_out_metadata = json.loads(row.get("check_out_metadata") or "{}")
-        camera_name = check_out_metadata.get("camera_name") if is_check_out else (row.get("metadata") or {}).get("camera_name")
-        publish_event({
-            "id": row["local_event_id"],
-            "name": row.get("staff_name") or row["person_code"],
-            "staff_id": row["person_code"],
-            "status": "checked_out" if is_check_out else "checked_in",
-            "confidence": row.get("check_out_confidence") if is_check_out else row.get("confidence"),
-            "message": "Checked out." if is_check_out else "Checked in.",
-            "marked_at": row.get("check_out_marked_at") if is_check_out else row["marked_at"],
-            "check_out_marked_at": row.get("check_out_marked_at"),
-            "sync_status": row.get("sync_status", "pending"),
-            "camera_id": row.get("check_out_camera_id") if is_check_out else row.get("camera_id"),
-            "camera_name": camera_name,
-            "notes": row.get("notes"),
-        })
+        publish_event(_attendance_row_to_event(row))
 
 
 def create_app() -> Flask:
@@ -229,17 +243,28 @@ def create_app() -> Flask:
         date_param = request.args.get("date")
         today_str = local_db._today()
         date_filter = date_param if date_param else (today_str if today_only else None)
-        
-        raw_events = list_events(100)
-        filtered_events = (
-            [e for e in raw_events if str(e.get("marked_at") or "").startswith(today_str)]
-            if today_only
-            else raw_events
-        )
+        if request.args.get("all") == "1":
+            all_rows = local_db.recent_attendance(
+                _current_branch_id(),
+                limit=None,
+                date_str=today_str,
+            )
+            filtered_events = [_attendance_row_to_event(row) for row in all_rows]
+            attendance_rows = all_rows
+        else:
+            raw_events = list_events(100)
+            filtered_events = (
+                [e for e in raw_events if str(e.get("marked_at") or "").startswith(today_str)]
+                if today_only
+                else raw_events
+            )
+            attendance_rows = local_db.recent_attendance(
+                _current_branch_id(), 50, date_str=date_filter
+            )
         return jsonify({
             "success": True,
             "events": filtered_events,
-            "attendance": local_db.recent_attendance(_current_branch_id(), 50, date_str=date_filter),
+            "attendance": attendance_rows,
         })
 
     @app.get("/api/cameras")
