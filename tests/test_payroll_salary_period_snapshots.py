@@ -39,6 +39,9 @@ class SnapshotQuery:
         return self
 
     def execute(self):
+        self.client.query_executions[self.table_name] = (
+            self.client.query_executions.get(self.table_name, 0) + 1
+        )
         return SimpleNamespace(data=self.rows)
 
 
@@ -49,6 +52,7 @@ class SnapshotClient:
             "payroll_salary_period_snapshots": existing_rows,
         }
         self.upserts = []
+        self.query_executions = {}
 
     def table(self, table_name):
         return SnapshotQuery(self, table_name)
@@ -57,6 +61,12 @@ class SnapshotClient:
 def _run_snapshot_save(monkeypatch, action):
     client = SnapshotClient(
         [
+            {
+                "org_id": "org-1",
+                "staff_id": "staff-1",
+                "period_start": "2026-01-01",
+                "period_end": "2026-01-15",
+            },
             {
                 "org_id": "org-1",
                 "staff_id": "staff-1",
@@ -96,11 +106,11 @@ def _run_snapshot_save(monkeypatch, action):
         60000,
         action,
     )
-    return client.upserts[0][1]
+    return client.upserts[0][1], client.query_executions
 
 
 def test_preserve_action_keeps_paid_and_pending_period_salaries(monkeypatch):
-    snapshots = _run_snapshot_save(monkeypatch, "preserve")
+    snapshots, query_executions = _run_snapshot_save(monkeypatch, "preserve")
 
     assert [row["basic_salary"] for row in snapshots] == [48000, 50000, 45000]
     assert [row["period_start"] for row in snapshots] == [
@@ -108,10 +118,11 @@ def test_preserve_action_keeps_paid_and_pending_period_salaries(monkeypatch):
         "2026-02-01",
         "2026-03-01",
     ]
+    assert query_executions["payroll_payments"] == 1
 
 
 def test_update_action_changes_only_pending_months(monkeypatch):
-    snapshots = _run_snapshot_save(monkeypatch, "update")
+    snapshots, query_executions = _run_snapshot_save(monkeypatch, "update")
 
     assert [row["basic_salary"] for row in snapshots] == [48000, 60000, 60000]
     assert [row["period_start"] for row in snapshots] == [
@@ -119,11 +130,18 @@ def test_update_action_changes_only_pending_months(monkeypatch):
         "2026-02-01",
         "2026-03-01",
     ]
+    assert query_executions["payroll_payments"] == 1
 
 
 def test_paid_period_snapshot_uses_prechange_salary_when_breakdown_missing(monkeypatch):
     client = SnapshotClient(
         [
+            {
+                "org_id": "org-1",
+                "staff_id": "staff-1",
+                "period_start": "2026-01-01",
+                "period_end": "2026-01-15",
+            },
             {
                 "org_id": "org-1",
                 "staff_id": "staff-1",
@@ -198,6 +216,12 @@ def test_pending_period_lookup_includes_partial_month_but_omits_paid_and_current
             {
                 "org_id": "org-1",
                 "staff_id": "staff-1",
+                "period_start": "2026-01-01",
+                "period_end": "2026-01-15",
+            },
+            {
+                "org_id": "org-1",
+                "staff_id": "staff-1",
                 "period_start": "2026-03-01",
                 "period_end": "2026-03-31",
             }
@@ -211,15 +235,18 @@ def test_pending_period_lookup_includes_partial_month_but_omits_paid_and_current
         lambda _label, query_builder: query_builder().execute(),
     )
 
-    assert payroll_db.get_pending_payroll_salary_periods(
+    pending_periods = payroll_db.get_pending_payroll_salary_periods(
         "org-1",
         "staff-1",
         "2026-01-10",
         "2026-04-01",
-    ) == [
+    )
+
+    assert pending_periods == [
         {"period_start": "2026-01-01", "period_end": "2026-01-31"},
         {"period_start": "2026-02-01", "period_end": "2026-02-28"},
     ]
+    assert client.query_executions["payroll_payments"] == 1
 
 
 def test_snapshot_migration_missing_blocks_salary_history_save(monkeypatch):

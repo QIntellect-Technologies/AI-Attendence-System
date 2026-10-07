@@ -941,13 +941,11 @@ export function usePayrollData(
         organizationId: scope.organizationId,
         branchId: scope.apiBranchId,
       });
-      // A salary edit changes the row's whole breakdown (per-day rate, every
-      // deduction derived from it), not just one field — unlike markPaid/
-      // markPending there's no single value to patch in optimistically, so
-      // this still waits on the real page refetch. force:true so that
-      // refetch isn't served the pre-write cache.
+      // The backend owns the full salary breakdown. Start an authoritative
+      // refresh after the save, but don't block the form on recomputing every
+      // payroll row; the refresh updates this page when it completes.
       invalidatePayrollPageCache(scope.organizationId);
-      await refresh({ force: true });
+      void refresh({ force: true });
     },
     [refresh, scope?.apiBranchId, scope?.organizationId],
   );

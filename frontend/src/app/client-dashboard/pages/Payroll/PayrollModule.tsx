@@ -9,7 +9,13 @@
  * frontend until the backend is connected.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ModernSelect, {
   ModernSelectOption,
@@ -102,6 +108,10 @@ import { listBranchDepartments } from "../StaffManagement/api/attendanceSettings
 import GroupedBarChartCard from "../../components/ui/charts/GroupedBarChartCard";
 import LineChartCard from "../../components/ui/charts/LineChartCard";
 import PayrollPayslipDialog from "./components/PayrollPayslipDialog";
+import {
+  isStudentPeopleType,
+  resolveActivePeopleTypes,
+} from "../../utils/templateRendering";
 const T = {
   teal600: "#0d9488",
   teal200: "#99f6e4",
@@ -232,6 +242,7 @@ const StatCard: React.FC<{
     iconBg={iconBg}
     iconColor={iconColor}
     onClick={onClick}
+    minHeight={124}
   />
 );
 
@@ -282,9 +293,7 @@ const PayrollCompositionCard: React.FC<{
   const items = [
     { label: "Base salary", amount: totals.baseSalary },
     { label: "Allowances", amount: totals.allowances },
-    ...(hasOvertime
-      ? [{ label: "Overtime", amount: totals.overtime }]
-      : []),
+    ...(hasOvertime ? [{ label: "Overtime", amount: totals.overtime }] : []),
     { label: "Deductions", amount: totals.deductions },
     { label: "Net pay", amount: totals.netPay },
   ];
@@ -292,7 +301,9 @@ const PayrollCompositionCard: React.FC<{
   return (
     <div style={cardStyle}>
       <h3 style={cardTitleStyle}>Payroll Composition</h3>
-      <p style={cardSubStyle}>Earnings, deductions, and net pay for filtered records</p>
+      <p style={cardSubStyle}>
+        Earnings, deductions, and net pay for filtered records
+      </p>
       {rows.length === 0 ? (
         <EmptyState text="No payroll data matches the selected filters." />
       ) : (
@@ -415,17 +426,16 @@ const PayrollMonthlyTrendCard: React.FC<{
       };
     });
   }, [branches, monthsWithPayroll, trend]);
-  const chartData = useMemo(
-    () => series[0]?.data ?? [],
-    [series],
-  );
+  const chartData = useMemo(() => series[0]?.data ?? [], [series]);
 
   return (
     <div style={cardStyle}>
       <h3 style={cardTitleStyle}>
         {branchId ? "Monthly Payroll Trend" : "Monthly Payroll by Branch"}
       </h3>
-      <p style={cardSubStyle}>Paid payroll · processed months through {anchorMonth}</p>
+      <p style={cardSubStyle}>
+        Paid payroll · processed months through {anchorMonth}
+      </p>
       {loading ? (
         <div
           role="status"
@@ -474,39 +484,37 @@ const SalaryConfigTab: React.FC<{
   rows: PayrollRow[];
   branches: { id: number; name: string }[];
   selectedBranchId?: number;
+  hasOvertime: boolean;
+  searchQuery: string;
+  departmentFilter: string;
+  filterToolbar: React.ReactNode;
   onEditRow?: (row: PayrollRow) => void;
-}> = ({ rows, branches, selectedBranchId, onEditRow }) => {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [departmentFilter, setDepartmentFilter] = useState("all");
-  const [branchFilter, setBranchFilter] = useState<number | "all">(
-    selectedBranchId ?? "all",
-  );
+}> = ({
+  rows,
+  branches,
+  selectedBranchId,
+  hasOvertime,
+  searchQuery,
+  departmentFilter,
+  filterToolbar,
+  onEditRow,
+}) => {
   const [pageSize, setPageSize] = useState(25);
-
-  useEffect(() => {
-    if (selectedBranchId !== undefined) {
-      setBranchFilter(selectedBranchId);
-    }
-  }, [selectedBranchId]);
-
-  const departments = useMemo(() => {
-    const set = new Set<string>();
-    rows.forEach((r) => {
-      const d = r.department?.trim();
-      if (d) set.add(d);
-    });
-    return Array.from(set).sort();
-  }, [rows]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (
-        branchFilter !== "all" &&
-        Number(row.branchId) !== Number(branchFilter)
+        selectedBranchId !== undefined &&
+        Number(row.branchId) !== Number(selectedBranchId)
       ) {
         return false;
       }
-      if (departmentFilter !== "all" && row.department !== departmentFilter) {
+      if (
+        departmentFilter !== "all" &&
+        (departmentFilter === "Unassigned"
+          ? Boolean(row.department?.trim()) && row.department !== "Unassigned"
+          : row.department !== departmentFilter)
+      ) {
         return false;
       }
       if (searchQuery.trim()) {
@@ -521,7 +529,7 @@ const SalaryConfigTab: React.FC<{
       }
       return true;
     });
-  }, [rows, branchFilter, departmentFilter, searchQuery]);
+  }, [rows, selectedBranchId, departmentFilter, searchQuery]);
 
   const pager = useStatefulPagination({
     items: filteredRows,
@@ -554,382 +562,39 @@ const SalaryConfigTab: React.FC<{
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {/* ── SUMMARY STAT CARDS ── */}
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 14,
-        }}
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
       >
-        <div
-          style={{
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 14,
-            padding: "16px 18px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: "#f0fdfa",
-              border: "1px solid #ccfbf1",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <Users size={22} color="#0d9488" />
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: "#64748b",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              Total Staff Configured
-            </div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 900,
-                color: "#0f172a",
-                marginTop: 2,
-              }}
-            >
-              {filteredRows.length}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 14,
-            padding: "16px 18px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: "#eff6ff",
-              border: "1px solid #dbeafe",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <DollarSign size={22} color="#2563eb" />
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: "#64748b",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              Base Salary Budget
-            </div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 900,
-                color: "#0f172a",
-                marginTop: 2,
-              }}
-            >
-              {fmtPKR(totalBaseBudget)}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 14,
-            padding: "16px 18px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: "#ecfdf5",
-              border: "1px solid #d1fae5",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <TrendingUp size={22} color="#059669" />
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: "#64748b",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              Monthly Allowances
-            </div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 900,
-                color: "#0f172a",
-                marginTop: 2,
-              }}
-            >
-              {fmtPKR(totalAllowancesBudget)}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 14,
-            padding: "16px 18px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: "#faf5ff",
-              border: "1px solid #f3e8ff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <BarChart2 size={22} color="#7c3aed" />
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: "#64748b",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              Average Base Salary
-            </div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 900,
-                color: "#0f172a",
-                marginTop: 2,
-              }}
-            >
-              {fmtPKR(avgBaseSalary)}
-            </div>
-          </div>
-        </div>
+        <StatCard
+          label="Total Staff Configured"
+          value={filteredRows.length}
+          icon={Users}
+          iconBg={T.teal100}
+          iconColor={T.teal600}
+        />
+        <StatCard
+          label="Base Salary Budget"
+          value={fmtPKR(totalBaseBudget)}
+          icon={DollarSign}
+          iconBg={T.blue100}
+          iconColor={T.blue500}
+        />
+        <StatCard
+          label="Monthly Allowances"
+          value={fmtPKR(totalAllowancesBudget)}
+          icon={TrendingUp}
+          iconBg={T.green100}
+          iconColor={T.green600}
+        />
+        <StatCard
+          label="Average Base Salary"
+          value={fmtPKR(avgBaseSalary)}
+          icon={BarChart2}
+          iconBg="#f3e8ff"
+          iconColor="#7c3aed"
+        />
       </div>
 
-      {/* ── FILTER TOOLBAR ── */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          padding: "14px 18px",
-          background: "#ffffff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 12,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 10,
-            flex: 1,
-            minWidth: 260,
-          }}
-        >
-          {/* Search Box */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "#f8fafc",
-              border: "1px solid #cbd5e1",
-              borderRadius: 8,
-              padding: "0 10px",
-              height: 36,
-              minWidth: 220,
-              maxWidth: 320,
-              flex: 1,
-            }}
-          >
-            <Search size={15} color="#64748b" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search staff, ID, CNIC..."
-              aria-label="Search staff in salary configuration"
-              style={{
-                border: "none",
-                background: "transparent",
-                outline: "none",
-                fontSize: 12,
-                width: "100%",
-                color: T.textHeading,
-              }}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  padding: 0,
-                  color: "#94a3b8",
-                }}
-              >
-                <X size={13} />
-              </button>
-            )}
-          </div>
-
-          {/* Department Filter */}
-          <select
-            value={departmentFilter}
-            onChange={(e) => setDepartmentFilter(e.target.value)}
-            style={{
-              height: 36,
-              borderRadius: 8,
-              border: "1px solid #cbd5e1",
-              background: "#f8fafc",
-              padding: "0 10px",
-              fontSize: 12,
-              fontWeight: 600,
-              color: T.textHeading,
-              outline: "none",
-              cursor: "pointer",
-            }}
-          >
-            <option value="all">All Departments ({departments.length})</option>
-            {departments.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
-              </option>
-            ))}
-          </select>
-
-          {/* Branch Filter (if multi-branch) */}
-          {isMultiBranch && (
-            <select
-              value={branchFilter}
-              onChange={(e) =>
-                setBranchFilter(
-                  e.target.value === "all" ? "all" : Number(e.target.value),
-                )
-              }
-              style={{
-                height: 36,
-                borderRadius: 8,
-                border: "1px solid #cbd5e1",
-                background: "#f8fafc",
-                padding: "0 10px",
-                fontSize: 12,
-                fontWeight: 600,
-                color: T.textHeading,
-                outline: "none",
-                cursor: "pointer",
-              }}
-            >
-              <option value="all">All Branches</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {(searchQuery ||
-            departmentFilter !== "all" ||
-            (isMultiBranch && branchFilter !== "all")) && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery("");
-                setDepartmentFilter("all");
-                setBranchFilter("all");
-              }}
-              style={{
-                height: 36,
-                padding: "0 12px",
-                borderRadius: 8,
-                border: "1px solid #e2e8f0",
-                background: "#ffffff",
-                color: "#64748b",
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              Clear Filters
-            </button>
-          )}
-        </div>
-
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>
-          Showing <strong>{filteredRows.length}</strong>{" "}
-          {filteredRows.length === 1 ? "member" : "members"}
-        </div>
-      </div>
+      {filterToolbar}
 
       {/* ── STANDARD SALARY CONFIGURATION DATA TABLE ── */}
       <div
@@ -962,7 +627,9 @@ const SalaryConfigTab: React.FC<{
                 { key: "department", label: "DEPARTMENT", align: "left" },
                 { key: "baseSalary", label: "BASE SALARY", align: "right" },
                 { key: "allowances", label: "ALLOWANCES", align: "right" },
-                { key: "otRate", label: "OT RATE / HR", align: "right" },
+                ...(hasOvertime
+                  ? [{ key: "otRate", label: "OT RATE / HR", align: "right" }]
+                  : []),
                 { key: "action", label: "ACTION", align: "center" },
               ].map((col) => (
                 <th
@@ -989,7 +656,9 @@ const SalaryConfigTab: React.FC<{
             {pager.paginatedItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={isMultiBranch ? 9 : 8}
+                  colSpan={
+                    isMultiBranch ? (hasOvertime ? 9 : 8) : hasOvertime ? 8 : 7
+                  }
                   style={{
                     padding: 36,
                     textAlign: "center",
@@ -1125,16 +794,18 @@ const SalaryConfigTab: React.FC<{
                   >
                     {fmtPKR(member.allowances)}
                   </td>
-                  <td
-                    style={{
-                      ...configTableCellStyle,
-                      textAlign: "right",
-                      color: "#64748b",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {fmtPKR(member.otRate)}
-                  </td>
+                  {hasOvertime && (
+                    <td
+                      style={{
+                        ...configTableCellStyle,
+                        textAlign: "right",
+                        color: "#64748b",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {fmtPKR(member.otRate)}
+                    </td>
+                  )}
                   <td
                     style={{
                       ...configTableCellStyle,
@@ -1255,6 +926,12 @@ export default function PayrollModule() {
   const hasOvertime = gates.overtime;
   const hasLeave = gates.leave;
   const hasIncomeTax = cfg.modules.includes("income_tax");
+  const activePeopleTypes = resolveActivePeopleTypes(
+    cfg as unknown as Record<string, unknown>,
+  );
+  const hasMixedPeopleTypes =
+    activePeopleTypes.some(isStudentPeopleType) &&
+    activePeopleTypes.some((peopleType) => !isStudentPeopleType(peopleType));
 
   // Route param takes highest priority (branch dashboard pages).
   // Falls back to sidebar-selected branch (activeBranchId from OrgConfigContext).
@@ -1267,6 +944,8 @@ export default function PayrollModule() {
   const isGlobal = scopedBranchId === undefined;
   const branchSelector = useBranchSelector("filter");
   const payrollDateFilter = useDateFilter("monthly");
+  const showSalaryBranchFilter =
+    isGlobal && branchSelector.hasMultipleBranches;
 
   const otRatePerHour = cfg.payrollPolicy.otRatePerHour;
 
@@ -1283,6 +962,9 @@ export default function PayrollModule() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+  const [rulesPeopleType, setRulesPeopleType] = useState<"staff" | "student">(
+    "staff",
+  );
   const [isIncomeTaxModalOpen, setIsIncomeTaxModalOpen] = useState(false);
   const [draftIncomeTaxEnabled, setDraftIncomeTaxEnabled] = useState(false);
   const [draftIncomeTaxSlabs, setDraftIncomeTaxSlabs] = useState<
@@ -1405,18 +1087,35 @@ export default function PayrollModule() {
     currentDate.getMonth() + 1,
   ).padStart(2, "0")}`;
   const isPastPayrollMonth = periodMonth < currentCalendarMonth;
-  const monthCalendar: PayrollMonthCalendar =
-    draftPolicy.payrollCalendarsByMonth[periodMonth] ?? {};
+  const isStudentCalendar =
+    hasMixedPeopleTypes && rulesPeopleType === "student";
+  const studentWorkingDayCalendar =
+    draftPolicy.workingDayCalendarsByPeopleType.student ?? {};
+  const studentMonthCalendar =
+    studentWorkingDayCalendar.calendarsByMonth?.[periodMonth] ?? {};
+  const monthCalendar: PayrollMonthCalendar = isStudentCalendar
+    ? studentMonthCalendar
+    : (draftPolicy.payrollCalendarsByMonth[periodMonth] ?? {});
   const monthHolidayDates = Array.isArray(monthCalendar.holidayDates)
     ? monthCalendar.holidayDates
     : [];
   const monthHolidaysConfirmed =
     monthCalendar.holidaysConfirmed === true || monthHolidayDates.length > 0;
-  const selectedMonthWeeklyOffDays: PayrollWeekday[] =
-    periodMonth >= draftPolicy.payrollWeeklyOffDaysEffectiveFrom
+  const selectedMonthWeeklyOffDays: PayrollWeekday[] = isStudentCalendar
+    ? periodMonth >=
+      (studentWorkingDayCalendar.weeklyOffDaysEffectiveFrom ??
+        currentCalendarMonth)
+      ? (studentWorkingDayCalendar.weeklyOffDays ?? ["sunday"])
+      : (monthCalendar.weeklyOffDays ??
+        (monthCalendar.weeklyOffDay
+          ? [monthCalendar.weeklyOffDay]
+          : ["sunday"]))
+    : periodMonth >= draftPolicy.payrollWeeklyOffDaysEffectiveFrom
       ? draftPolicy.payrollWeeklyOffDays
       : (monthCalendar.weeklyOffDays ??
-        (monthCalendar.weeklyOffDay ? [monthCalendar.weeklyOffDay] : ["sunday"]));
+        (monthCalendar.weeklyOffDay
+          ? [monthCalendar.weeklyOffDay]
+          : ["sunday"]));
   const monthEndDay = new Date(
     Number(periodMonth.slice(0, 4)),
     Number(periodMonth.slice(5, 7)),
@@ -1425,6 +1124,28 @@ export default function PayrollModule() {
   const monthEndDate = `${periodMonth}-${String(monthEndDay).padStart(2, "0")}`;
   const updateMonthCalendar = (changes: Partial<PayrollMonthCalendar>) =>
     setDraftPolicy((current) => {
+      if (isStudentCalendar) {
+        const workingDayCalendar =
+          current.workingDayCalendarsByPeopleType.student ?? {};
+        const currentCalendar = workingDayCalendar.calendarsByMonth?.[
+          periodMonth
+        ] ?? {
+          holidayDates: [],
+        };
+        return {
+          ...current,
+          workingDayCalendarsByPeopleType: {
+            ...current.workingDayCalendarsByPeopleType,
+            student: {
+              ...workingDayCalendar,
+              calendarsByMonth: {
+                ...workingDayCalendar.calendarsByMonth,
+                [periodMonth]: { ...currentCalendar, ...changes },
+              },
+            },
+          },
+        };
+      }
       const currentCalendar = current.payrollCalendarsByMonth[periodMonth] ?? {
         holidayDates: [],
       };
@@ -1437,11 +1158,25 @@ export default function PayrollModule() {
       };
     });
   const updateWeeklyOffDays = (weeklyOffDays: PayrollWeekday[]) =>
-    setDraftPolicy((current) => ({
-      ...current,
-      payrollWeeklyOffDays: weeklyOffDays,
-      payrollWeeklyOffDaysEffectiveFrom: periodMonth,
-    }));
+    setDraftPolicy((current) =>
+      isStudentCalendar
+        ? {
+            ...current,
+            workingDayCalendarsByPeopleType: {
+              ...current.workingDayCalendarsByPeopleType,
+              student: {
+                ...(current.workingDayCalendarsByPeopleType.student ?? {}),
+                weeklyOffDays,
+                weeklyOffDaysEffectiveFrom: periodMonth,
+              },
+            },
+          }
+        : {
+            ...current,
+            payrollWeeklyOffDays: weeklyOffDays,
+            payrollWeeklyOffDaysEffectiveFrom: periodMonth,
+          },
+    );
   const nextMonthDate = new Date(
     currentDate.getFullYear(),
     currentDate.getMonth() + 1,
@@ -1465,8 +1200,7 @@ export default function PayrollModule() {
       cfg.branches
         .filter(
           (branch) =>
-            effectiveBranchId === undefined ||
-            branch.id === effectiveBranchId,
+            effectiveBranchId === undefined || branch.id === effectiveBranchId,
         )
         .map((branch) => getBackendBranchId(branch) ?? String(branch.id))
         .filter(Boolean),
@@ -1660,19 +1394,16 @@ export default function PayrollModule() {
   // payrollDateFilter.label (which collapses to just "January 2026" for
   // the monthly view — the export always wants both hard boundaries).
   const todayDate = formatDate(new Date());
-  const reportPeriodLabel = useMemo(
-    () => {
-      const { startDate, endDate } = payrollDateFilter.range;
-      const reportEndDate =
-        startDate.slice(0, 7) === todayDate.slice(0, 7) ? todayDate : endDate;
-      return `${formatReportDate(startDate)} – ${formatReportDate(reportEndDate)}`;
-    },
-    [
-      payrollDateFilter.range.startDate,
-      payrollDateFilter.range.endDate,
-      todayDate,
-    ],
-  );
+  const reportPeriodLabel = useMemo(() => {
+    const { startDate, endDate } = payrollDateFilter.range;
+    const reportEndDate =
+      startDate.slice(0, 7) === todayDate.slice(0, 7) ? todayDate : endDate;
+    return `${formatReportDate(startDate)} – ${formatReportDate(reportEndDate)}`;
+  }, [
+    payrollDateFilter.range.startDate,
+    payrollDateFilter.range.endDate,
+    todayDate,
+  ]);
 
   // Org identity fed into ExportButton — rendered in the header band of
   // both the Excel workbook and the PDF.
@@ -1951,12 +1682,42 @@ export default function PayrollModule() {
     payrollDateFilter.setMode("monthly");
   }, [branchSelector, payrollDateFilter]);
 
-  const payrollFilterSections = useMemo<DynamicFilterSection[]>(
+  const resetSalaryFilters = useCallback(() => {
+    setSearchQuery("");
+    setDepartmentFilter("all");
+    setSelectedPeopleType(null);
+    branchSelector.reset();
+  }, [branchSelector]);
+
+  const departmentFilterOptions = useMemo(
     () => [
-      {
+      { value: "all", label: "All Departments" },
+      ...Array.from(
+        new Set([
+          ...configuredDepartments,
+          ...rows.map((row) =>
+            row.department?.trim() ? row.department : "Unassigned",
+          ),
+        ]),
+      )
+        .sort((a, b) => a.localeCompare(b))
+        .map((department) => ({
+          value: department,
+          label: department,
+        })),
+    ],
+    [configuredDepartments, rows],
+  );
+
+  const payrollFilterSections = useMemo<DynamicFilterSection[]>(
+    () => {
+      const branchFilterSection: DynamicFilterSection = {
         id: "branch",
         type: "custom",
-        hidden: !isGlobal || !branchSelector.hasMultipleBranches,
+        hidden:
+          activeTab === "salary"
+            ? !showSalaryBranchFilter
+            : !isGlobal || !branchSelector.hasMultipleBranches,
         render: (
           <BranchSelector
             branches={branchSelector.selectorBranches}
@@ -1964,175 +1725,209 @@ export default function PayrollModule() {
             onChange={branchSelector.onChange}
           />
         ),
-      },
-      {
-        id: "date",
-        type: "custom",
-        // Payroll only ever pays out on a monthly cycle — no daily/weekly/
-        // custom filtering makes sense here. Restricting `modes` hides
-        // those buttons for this instance only; every other page's
-        // DateFilterBar/useDateFilter is untouched.
-        render: (
-          <DateFilterBar
-            filter={payrollDateFilter}
-            modes={["monthly"]}
-            compact
-          />
-        ),
-      },
-      {
-        id: "peopleType",
-        type: "select",
-        label: "People",
-        hidden: modulePeopleTypes.length <= 1,
-        value: peopleType,
-        options: peopleOptions,
-        minWidth: 160,
-        onChange: (value: string) => setSelectedPeopleType(value),
-      },
-      {
-        id: "department",
-        type: "select",
-        label: "Department",
-        value: departmentFilter,
-        options: [
-          { value: "all", label: "Departments" },
-          ...Array.from(
-            new Set(
-              [
-                ...configuredDepartments,
-                ...rows.map((row) =>
-                  row.department?.trim() ? row.department : "Unassigned",
-                ),
-              ],
-            ),
-          )
-            .sort((a, b) => a.localeCompare(b))
-            .map((department) => ({
-              value: department,
-              label: department,
-            })),
-        ],
-        minWidth: 160,
-        onChange: setDepartmentFilter,
-      },
-      {
-        id: "amountOperator",
-        type: "select",
-        label: "Net Salary Filter",
-        value: amountOperator,
-        minWidth: 156,
-        options: [
-          { value: "all", label: "All", description: "No salary filter" },
-          { value: "lt", label: "Less than", description: "Below amount" },
+      };
+      if (activeTab === "salary") {
+        return [
+          branchFilterSection,
           {
-            value: "lte",
-            label: "Less or equal",
-            description: "At most amount",
-          },
-          { value: "eq", label: "Equal to", description: "Exact amount" },
-          {
-            value: "gte",
-            label: "Greater or equal",
-            description: "At least amount",
-          },
-          { value: "gt", label: "Greater than", description: "Above amount" },
-        ],
-        onChange: (value: string) => setAmountOperator(value as AmountOperator),
-      },
-      {
-        id: "amountValue",
-        type: "custom",
-        render: (
-          <input
-            type="number"
-            min={0}
-            value={amountValue}
-            onChange={(event) => setAmountValue(event.target.value)}
-            placeholder="Net Salary"
-            disabled={amountOperator === "all"}
-            style={{
-              height: 38,
-              width: 132,
-              border: `1px solid ${T.border}`,
-              borderRadius: 12,
-              background: amountOperator === "all" ? T.slate50 : T.bgCard,
-              color: T.textBody,
-              fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
-              fontSize: 12,
-              fontWeight: 700,
-              outline: "none",
-              padding: "0 12px",
-              opacity: amountOperator === "all" ? 0.55 : 1,
-              boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
-            }}
-          />
-        ),
-      },
-      {
-        id: "sortKey",
-        type: "select",
-        label: "Sort By",
-        value: sortKey,
-        minWidth: 150,
-        options: gates
-          .filterByGate(PAYROLL_SORT_OPTIONS)
-          .map(({ value, label }) => ({ value, label })),
-        onChange: (value: string) => setSortKey(value as PayrollSortKey),
-      },
-      {
-        id: "sortDirection",
-        type: "select",
-        label: "Sort Direction",
-        value: sortDirection,
-        minWidth: 176,
-        options: [
-          {
-            value: "none",
-            label: "No sort",
-            description: "Keep original order",
+            id: "peopleType",
+            type: "select",
+            label: "People",
+            hidden: modulePeopleTypes.length <= 1,
+            value: peopleType,
+            options: peopleOptions,
+            minWidth: 160,
+            onChange: (value: string) => setSelectedPeopleType(value),
           },
           {
-            value: "asc",
-            label: "Ascending",
-            description: "A → Z / Low → High",
+            id: "department",
+            type: "select",
+            label: "Department",
+            value: departmentFilter,
+            options: departmentFilterOptions,
+            minWidth: 160,
+            onChange: setDepartmentFilter,
           },
           {
-            value: "desc",
-            label: "Descending",
-            description: "Z → A / High → Low",
+            id: "search",
+            type: "search",
+            value: searchQuery,
+            onChange: setSearchQuery,
+            placeholder: "Search staff, ID, CNIC...",
+            grow: true,
+            minWidth: 240,
           },
-        ],
-        onChange: (value: string) => setSortDirection(value as SortDirection),
-      },
-      {
-        id: "search",
-        type: "search",
-        value: searchQuery,
-        onChange: setSearchQuery,
-        placeholder: "Search name, ID, department, branch, status...",
-        grow: true,
-        minWidth: 300,
-      },
-      {
-        id: "reset",
-        type: "reset",
-        label: "Clear",
-        onClick: resetListFilters,
-      },
-    ],
+          {
+            id: "reset",
+            type: "reset",
+            label: "Clear",
+            onClick: resetSalaryFilters,
+          },
+        ];
+      }
+      return [
+        branchFilterSection,
+        {
+          id: "date",
+          type: "custom",
+          // Payroll only ever pays out on a monthly cycle — no daily/weekly/
+          // custom filtering makes sense here. Restricting `modes` hides
+          // those buttons for this instance only; every other page's
+          // DateFilterBar/useDateFilter is untouched.
+          render: (
+            <DateFilterBar
+              filter={payrollDateFilter}
+              modes={["monthly"]}
+              compact
+            />
+          ),
+        },
+        {
+          id: "peopleType",
+          type: "select",
+          label: "People",
+          hidden: modulePeopleTypes.length <= 1,
+          value: peopleType,
+          options: peopleOptions,
+          minWidth: 160,
+          onChange: (value: string) => setSelectedPeopleType(value),
+        },
+        {
+          id: "department",
+          type: "select",
+          label: "Department",
+          value: departmentFilter,
+          options: [
+            { value: "all", label: "Departments" },
+            ...departmentFilterOptions.slice(1),
+          ],
+          minWidth: 160,
+          onChange: setDepartmentFilter,
+        },
+        {
+          id: "amountOperator",
+          type: "select",
+          label: "Net Salary Filter",
+          value: amountOperator,
+          minWidth: 156,
+          options: [
+            { value: "all", label: "All", description: "No salary filter" },
+            { value: "lt", label: "Less than", description: "Below amount" },
+            {
+              value: "lte",
+              label: "Less or equal",
+              description: "At most amount",
+            },
+            { value: "eq", label: "Equal to", description: "Exact amount" },
+            {
+              value: "gte",
+              label: "Greater or equal",
+              description: "At least amount",
+            },
+            { value: "gt", label: "Greater than", description: "Above amount" },
+          ],
+          onChange: (value: string) =>
+            setAmountOperator(value as AmountOperator),
+        },
+        {
+          id: "amountValue",
+          type: "custom",
+          render: (
+            <input
+              type="number"
+              min={0}
+              value={amountValue}
+              onChange={(event) => setAmountValue(event.target.value)}
+              placeholder="Net Salary"
+              disabled={amountOperator === "all"}
+              style={{
+                height: 38,
+                width: 132,
+                border: `1px solid ${T.border}`,
+                borderRadius: 12,
+                background: amountOperator === "all" ? T.slate50 : T.bgCard,
+                color: T.textBody,
+                fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
+                fontSize: 12,
+                fontWeight: 700,
+                outline: "none",
+                padding: "0 12px",
+                opacity: amountOperator === "all" ? 0.55 : 1,
+                boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
+              }}
+            />
+          ),
+        },
+        {
+          id: "sortKey",
+          type: "select",
+          label: "Sort By",
+          value: sortKey,
+          minWidth: 150,
+          options: gates
+            .filterByGate(PAYROLL_SORT_OPTIONS)
+            .map(({ value, label }) => ({ value, label })),
+          onChange: (value: string) => setSortKey(value as PayrollSortKey),
+        },
+        {
+          id: "sortDirection",
+          type: "select",
+          label: "Sort Direction",
+          value: sortDirection,
+          minWidth: 176,
+          options: [
+            {
+              value: "none",
+              label: "No sort",
+              description: "Keep original order",
+            },
+            {
+              value: "asc",
+              label: "Ascending",
+              description: "A → Z / Low → High",
+            },
+            {
+              value: "desc",
+              label: "Descending",
+              description: "Z → A / High → Low",
+            },
+          ],
+          onChange: (value: string) =>
+            setSortDirection(value as SortDirection),
+        },
+        {
+          id: "search",
+          type: "search",
+          value: searchQuery,
+          onChange: setSearchQuery,
+          placeholder: "Search name, ID, department, branch, status...",
+          grow: true,
+          minWidth: 300,
+        },
+        {
+          id: "reset",
+          type: "reset",
+          label: "Clear",
+          onClick: resetListFilters,
+        },
+      ];
+    },
     [
+      activeTab,
       amountOperator,
       amountValue,
       branchSelector,
       departmentFilter,
+      departmentFilterOptions,
       isGlobal,
       modulePeopleTypes,
       payrollDateFilter,
       peopleOptions,
       peopleType,
+      showSalaryBranchFilter,
       rows,
       resetListFilters,
+      resetSalaryFilters,
       searchQuery,
       sortDirection,
       sortKey,
@@ -2271,8 +2066,7 @@ export default function PayrollModule() {
         if (row.status === "Paid") {
           await markPending(row.staffId);
         } else {
-          const pendingCount =
-            row.breakdown?.pendingLateDecisions.length ?? 0;
+          const pendingCount = row.breakdown?.pendingLateDecisions.length ?? 0;
           if (pendingCount > 0) {
             const confirmation = await confirmDialog({
               title: "Late-arrival decisions are pending",
@@ -2413,25 +2207,17 @@ export default function PayrollModule() {
       };
       const saveResult = await saveWithPendingPayrollSalaryDecision(
         (pendingSalaryAction) =>
-          updateBaseSalary(
-            editingRow.staffId,
-            Number(draftSalary),
-            undefined,
-            {
-              ...salaryOverrides,
-              ...(pendingSalaryAction ? { pendingSalaryAction } : {}),
-            },
-          ),
+          updateBaseSalary(editingRow.staffId, Number(draftSalary), undefined, {
+            ...salaryOverrides,
+            ...(pendingSalaryAction ? { pendingSalaryAction } : {}),
+          }),
         pendingPayrollSalaryDialog,
       );
       if (saveResult.cancelled) return;
-      await refreshSalaryConfiguration().catch((error: unknown) => {
-        toastError(
-          error instanceof Error
-            ? `Salary was saved, but Salary Configuration could not be refreshed: ${error.message}`
-            : "Salary was saved, but Salary Configuration could not be refreshed.",
-        );
-      });
+      setConfiguredBaseSalaries((current) => ({
+        ...current,
+        [String(editingRow.staffId)]: Number(draftSalary),
+      }));
       setIsEditModalOpen(false);
       setEditingRow(null);
     } catch (err) {
@@ -2513,6 +2299,7 @@ export default function PayrollModule() {
 
   const openRulesModal = useCallback(() => {
     setDraftPolicy(policy);
+    setRulesPeopleType("staff");
     setIsRulesModalOpen(true);
   }, [policy]);
 
@@ -2543,7 +2330,9 @@ export default function PayrollModule() {
       toastSuccess("Income tax settings saved");
     } catch (err) {
       setIncomeTaxSaveError(
-        err instanceof Error ? err.message : "Failed to save income tax settings.",
+        err instanceof Error
+          ? err.message
+          : "Failed to save income tax settings.",
       );
     }
   }, [
@@ -2675,8 +2464,21 @@ export default function PayrollModule() {
             <DollarSign size={22} color={T.teal600} />
             Payroll Management
           </h1>
-          <p style={{ margin: "4px 0 0 0", fontSize: 12, fontWeight: 500, color: "#64748B", fontFamily: "'DM Sans', 'Inter', sans-serif" }}>
-            {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "short", day: "numeric" })}
+          <p
+            style={{
+              margin: "4px 0 0 0",
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#64748B",
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
+            }}
+          >
+            {new Date().toLocaleDateString("en-US", {
+              weekday: "long",
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            })}
           </p>
         </div>
 
@@ -2781,7 +2583,9 @@ export default function PayrollModule() {
           }}
         >
           <div>
-            <div style={{ color: T.textHeading, fontSize: 13, fontWeight: 800 }}>
+            <div
+              style={{ color: T.textHeading, fontSize: 13, fontWeight: 800 }}
+            >
               Prepare {nextCalendarMonthLabel}’s payroll calendar
             </div>
             <div
@@ -2846,12 +2650,7 @@ export default function PayrollModule() {
 
       {activeTab !== "salary" && (
         <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${hasOvertime ? 5 : 4}, minmax(0, 1fr))`,
-            gap: 16,
-            marginBottom: 16,
-          }}
+          className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
         >
           <StatCard
             label="Total Pay-out"
@@ -2913,11 +2712,13 @@ export default function PayrollModule() {
         </div>
       )}
 
-      <DynamicFilterToolbar
-        sections={payrollFilterSections}
-        bordered
-        style={{ marginBottom: activeTab !== "salary" ? 24 : 20 }}
-      />
+      {activeTab !== "salary" && (
+        <DynamicFilterToolbar
+          sections={payrollFilterSections}
+          bordered
+          style={{ marginBottom: 24 }}
+        />
+      )}
 
       {activeTab === "records" && (
         <div
@@ -3035,7 +2836,8 @@ export default function PayrollModule() {
               background: "#ffffff",
               border: "1px solid #d2dce4",
               borderRadius: 12,
-              boxShadow: "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
+              boxShadow:
+                "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
             }}
           >
             <table
@@ -3046,7 +2848,12 @@ export default function PayrollModule() {
               }}
             >
               <thead>
-                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                <tr
+                  style={{
+                    background: "#f8fafc",
+                    borderBottom: "1px solid #e2e8f0",
+                  }}
+                >
                   <th
                     style={{
                       padding: "12px 14px",
@@ -3116,10 +2923,12 @@ export default function PayrollModule() {
                       transition: "background 0.12s ease",
                     }}
                     onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLElement).style.background = "#f8fafc";
+                      (e.currentTarget as HTMLElement).style.background =
+                        "#f8fafc";
                     }}
                     onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.background = "transparent";
+                      (e.currentTarget as HTMLElement).style.background =
+                        "transparent";
                     }}
                   >
                     <td style={{ ...tableCellStyle, textAlign: "center" }}>
@@ -3162,13 +2971,20 @@ export default function PayrollModule() {
                       </span>
                     </td>
                     <td style={tableCellStyle}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                        }}
+                      >
                         <div
                           style={{
                             width: 28,
                             height: 28,
                             borderRadius: "50%",
-                            background: "linear-gradient(135deg, #118d97, #173f67)",
+                            background:
+                              "linear-gradient(135deg, #118d97, #173f67)",
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -3181,7 +2997,13 @@ export default function PayrollModule() {
                         >
                           {row.name.charAt(0).toUpperCase()}
                         </div>
-                        <div style={{ fontWeight: 700, fontSize: 13, color: "#102a3f" }}>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontSize: 13,
+                            color: "#102a3f",
+                          }}
+                        >
                           {row.name}
                         </div>
                       </div>
@@ -3393,7 +3215,13 @@ export default function PayrollModule() {
                       </button>
                     </td>
                     <td style={tableCellStyle}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
                         <button
                           type="button"
                           aria-label={`View ${row.name}'s payslip`}
@@ -3490,7 +3318,10 @@ export default function PayrollModule() {
       {activeTab === "trend" && (
         <div className="payroll-trend-grid">
           <DepartmentSplitCard data={filteredDepartmentSummary} />
-          <PayrollCompositionCard rows={visibleRows} hasOvertime={hasOvertime} />
+          <PayrollCompositionCard
+            rows={visibleRows}
+            hasOvertime={hasOvertime}
+          />
           <PayrollMonthlyTrendCard
             organizationId={organizationId}
             anchorMonth={periodMonth}
@@ -3511,6 +3342,16 @@ export default function PayrollModule() {
           rows={salaryConfigurationRows}
           branches={branchOptions}
           selectedBranchId={effectiveBranchId}
+          hasOvertime={hasOvertime}
+          searchQuery={searchQuery}
+          departmentFilter={departmentFilter}
+          filterToolbar={
+            <DynamicFilterToolbar
+              sections={payrollFilterSections}
+              bordered
+              style={{ marginBottom: 0 }}
+            />
+          }
           onEditRow={openEditModal}
         />
       )}
@@ -3637,13 +3478,38 @@ export default function PayrollModule() {
           onClose={() => !policySaving && setIsRulesModalOpen(false)}
         >
           <h2 style={modalTitleStyle}>
-            {isGlobal
-              ? "Company Payroll Rules"
-              : `Payroll Rules — ${rulesBranch?.name ?? "Branch"}`}
+            {isStudentCalendar
+              ? "Student Working-Day Calendar"
+              : isGlobal
+                ? "Company Payroll Rules"
+                : `Payroll Rules — ${rulesBranch?.name ?? "Branch"}`}
           </h2>
-          <p style={modalSubStyle}>{rulesScopeSummary}</p>
+          <p style={modalSubStyle}>
+            {isStudentCalendar
+              ? "Configure student weekly days off and monthly holidays."
+              : rulesScopeSummary}
+          </p>
 
-          {hasOvertime && (
+          {hasMixedPeopleTypes && (
+            <div style={{ marginBottom: 20 }}>
+              <Field label="People type">
+                <ModernSelect
+                  value={rulesPeopleType}
+                  onChange={(value) =>
+                    setRulesPeopleType(value as "staff" | "student")
+                  }
+                  ariaLabel="Payroll rules people type"
+                  width="100%"
+                  options={[
+                    { value: "staff", label: "Staff" },
+                    { value: "student", label: "Students" },
+                  ]}
+                />
+              </Field>
+            </div>
+          )}
+
+          {hasOvertime && !isStudentCalendar && (
             <div
               style={{
                 display: "grid",
@@ -3714,7 +3580,8 @@ export default function PayrollModule() {
                 marginBottom: 8,
               }}
             >
-              Payroll Calendar · {selectedMonth} {selectedYear}
+              {isStudentCalendar ? "Student Calendar" : "Payroll Calendar"} ·{" "}
+              {selectedMonth} {selectedYear}
             </span>
             <p
               style={{
@@ -3860,7 +3727,9 @@ export default function PayrollModule() {
                     max={monthEndDate}
                     value={holidayDateDraft}
                     disabled={isPastPayrollMonth}
-                    onChange={(event) => setHolidayDateDraft(event.target.value)}
+                    onChange={(event) =>
+                      setHolidayDateDraft(event.target.value)
+                    }
                     style={{ ...inputStyle, flex: 1 }}
                   />
                   <button
@@ -3872,7 +3741,10 @@ export default function PayrollModule() {
                     }
                     onClick={() => {
                       updateMonthCalendar({
-                        holidayDates: [...monthHolidayDates, holidayDateDraft].sort(),
+                        holidayDates: [
+                          ...monthHolidayDates,
+                          holidayDateDraft,
+                        ].sort(),
                         holidaysConfirmed: true,
                       });
                       setHolidayDateDraft("");
@@ -3892,7 +3764,14 @@ export default function PayrollModule() {
                   </button>
                 </div>
                 {monthHolidayDates.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      marginTop: 8,
+                    }}
+                  >
                     {monthHolidayDates.map((holiday) => (
                       <span
                         key={holiday}
@@ -3924,7 +3803,9 @@ export default function PayrollModule() {
                             border: 0,
                             background: "transparent",
                             color: T.red600,
-                            cursor: isPastPayrollMonth ? "not-allowed" : "pointer",
+                            cursor: isPastPayrollMonth
+                              ? "not-allowed"
+                              : "pointer",
                             padding: 0,
                             fontWeight: 800,
                             opacity: isPastPayrollMonth ? 0.5 : 1,
@@ -3960,25 +3841,7 @@ export default function PayrollModule() {
                       <button
                         type="button"
                         onClick={() =>
-                          setDraftPolicy((current) => {
-                            const calendars = { ...current.payrollCalendarsByMonth };
-                            const savedCalendar = calendars[periodMonth];
-                            if (
-                              savedCalendar &&
-                              (savedCalendar.weeklyOffDays ||
-                                savedCalendar.weeklyOffDay)
-                            ) {
-                              const {
-                                holidayDates: _holidayDates,
-                                holidaysConfirmed: _holidaysConfirmed,
-                                ...legacyWeeklySchedule
-                              } = savedCalendar;
-                              calendars[periodMonth] = legacyWeeklySchedule;
-                            } else {
-                              delete calendars[periodMonth];
-                            }
-                            return { ...current, payrollCalendarsByMonth: calendars };
-                          })
+                          updateMonthCalendar({ holidaysConfirmed: false })
                         }
                         style={{
                           border: 0,
@@ -4015,415 +3878,454 @@ export default function PayrollModule() {
             </div>
           </div>
 
-          <div style={{ marginTop: 20 }}>
-            <Field label="Late Arrival Deduction">
-              <ModernSelect
-                value={draftPolicy.lateComingPolicy.mode}
-                onChange={(value) =>
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    lateComingPolicy: {
-                      ...p.lateComingPolicy,
-                      mode: value as LateComingMode,
-                    },
-                  }))
-                }
-                ariaLabel="Late-coming policy"
-                width="100%"
-                options={LATE_COMING_MODE_OPTIONS}
-              />
-            </Field>
-
-            {draftPolicy.lateComingPolicy.mode === "occurrence_threshold" && (
-              <div style={{ marginTop: 16 }}>
-                <Field label="Number of late arrivals for one day's pay deduction">
-                  <input
-                    type="number"
-                    min={1}
-                    value={
-                      draftPolicy.lateComingPolicy.thresholdOccurrences ?? 3
-                    }
-                    onChange={(event) =>
+          {!isStudentCalendar && (
+            <>
+              <div style={{ marginTop: 20 }}>
+                <Field label="Late Arrival Deduction">
+                  <ModernSelect
+                    value={draftPolicy.lateComingPolicy.mode}
+                    onChange={(value) =>
                       setDraftPolicy((p) => ({
                         ...p,
                         lateComingPolicy: {
                           ...p.lateComingPolicy,
-                          thresholdOccurrences: Math.max(
-                            1,
-                            Number(event.target.value) || 1,
-                          ),
+                          mode: value as LateComingMode,
                         },
                       }))
                     }
-                    style={{ ...inputStyle, marginTop: 10 }}
+                    ariaLabel="Late-coming policy"
+                    width="100%"
+                    options={LATE_COMING_MODE_OPTIONS}
                   />
                 </Field>
-              </div>
-            )}
 
-            {draftPolicy.lateComingPolicy.mode === "flat_per_occurrence" && (
-              <div style={{ marginTop: 16 }}>
-                <Field label="Amount to deduct for each late arrival (Rs.)">
-                  <input
-                    type="number"
-                    min={0}
-                    value={
-                      draftPolicy.lateComingPolicy.flatAmountPerOccurrence ?? 0
-                    }
-                    onChange={(event) =>
-                      setDraftPolicy((p) => ({
-                        ...p,
-                        lateComingPolicy: {
-                          ...p.lateComingPolicy,
-                          flatAmountPerOccurrence: Math.max(
-                            0,
-                            Number(event.target.value) || 0,
-                          ),
-                        },
-                      }))
-                    }
-                    style={{ ...inputStyle, marginTop: 10 }}
-                  />
-                </Field>
-              </div>
-            )}
-          </div>
-
-          {hasLeave && (
-            <div style={{ marginTop: 20, marginBottom: 24 }}>
-              <span
-                style={{
-                  display: "block",
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  color: T.textMuted,
-                  marginBottom: 8,
-                }}
-              >
-                Leave Type — Paid / Unpaid / Annual Quota
-              </span>
-
-              {Object.entries(draftPolicy.leaveTypeRules).map(
-                ([leaveType, status]) => (
-                  <div
-                    key={leaveType}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "8px 10px",
-                      border: `1px solid ${T.border}`,
-                      borderRadius: 8,
-                      marginBottom: 6,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 700,
-                        color: T.textBody,
-                      }}
-                    >
-                      {leaveType}
-                    </span>
-                    <div
-                      style={{ display: "flex", gap: 6, alignItems: "center" }}
-                    >
-                      <ModernSelect
-                        value={status}
-                        onChange={(value) =>
+                {draftPolicy.lateComingPolicy.mode ===
+                  "occurrence_threshold" && (
+                  <div style={{ marginTop: 16 }}>
+                    <Field label="Number of late arrivals for one day's pay deduction">
+                      <input
+                        type="number"
+                        min={1}
+                        value={
+                          draftPolicy.lateComingPolicy.thresholdOccurrences ?? 3
+                        }
+                        onChange={(event) =>
                           setDraftPolicy((p) => ({
                             ...p,
-                            leaveTypeRules: {
-                              ...p.leaveTypeRules,
-                              [leaveType]: value as "paid" | "unpaid",
+                            lateComingPolicy: {
+                              ...p.lateComingPolicy,
+                              thresholdOccurrences: Math.max(
+                                1,
+                                Number(event.target.value) || 1,
+                              ),
                             },
                           }))
                         }
-                        ariaLabel={`${leaveType} pay status`}
-                        width={110}
-                        minWidth={110}
-                        options={LEAVE_PAY_STATUS_OPTIONS}
+                        style={{ ...inputStyle, marginTop: 10 }}
                       />
+                    </Field>
+                  </div>
+                )}
+
+                {draftPolicy.lateComingPolicy.mode ===
+                  "flat_per_occurrence" && (
+                  <div style={{ marginTop: 16 }}>
+                    <Field label="Amount to deduct for each late arrival (Rs.)">
                       <input
                         type="number"
                         min={0}
-                        step={1}
-                        title="Annual paid-day quota for this leave type"
-                        aria-label={`${leaveType} annual quota`}
-                        value={draftPolicy.leaveTypeQuotas[leaveType] ?? 0}
-                        onChange={(event) => {
-                          const quota = Math.max(
-                            0,
-                            Number(event.target.value) || 0,
-                          );
+                        value={
+                          draftPolicy.lateComingPolicy
+                            .flatAmountPerOccurrence ?? 0
+                        }
+                        onChange={(event) =>
                           setDraftPolicy((p) => ({
                             ...p,
-                            leaveTypeQuotas: {
-                              ...p.leaveTypeQuotas,
-                              [leaveType]: quota,
+                            lateComingPolicy: {
+                              ...p.lateComingPolicy,
+                              flatAmountPerOccurrence: Math.max(
+                                0,
+                                Number(event.target.value) || 0,
+                              ),
                             },
-                          }));
-                        }}
-                        style={{ ...inputStyle, width: 64, textAlign: "right" }}
-                      />
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 700,
-                          color: T.textMuted,
-                        }}
-                      >
-                        days/yr
-                      </span>
-                      <button
-                        onClick={() =>
-                          setDraftPolicy((p) => {
-                            const nextRules = { ...p.leaveTypeRules };
-                            delete nextRules[leaveType];
-                            const nextQuotas = { ...p.leaveTypeQuotas };
-                            delete nextQuotas[leaveType];
-                            return {
-                              ...p,
-                              leaveTypeRules: nextRules,
-                              leaveTypeQuotas: nextQuotas,
-                            };
-                          })
+                          }))
                         }
+                        style={{ ...inputStyle, marginTop: 10 }}
+                      />
+                    </Field>
+                  </div>
+                )}
+              </div>
+
+              {hasLeave && (
+                <div style={{ marginTop: 20, marginBottom: 24 }}>
+                  <span
+                    style={{
+                      display: "block",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      color: T.textMuted,
+                      marginBottom: 8,
+                    }}
+                  >
+                    Leave Type — Paid / Unpaid / Annual Quota
+                  </span>
+
+                  {Object.entries(draftPolicy.leaveTypeRules).map(
+                    ([leaveType, status]) => (
+                      <div
+                        key={leaveType}
                         style={{
-                          border: "none",
-                          background: "none",
-                          color: T.red600,
-                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "8px 10px",
+                          border: `1px solid ${T.border}`,
+                          borderRadius: 8,
+                          marginBottom: 6,
                         }}
                       >
-                        <X size={14} />
-                      </button>
-                    </div>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: T.textBody,
+                          }}
+                        >
+                          {leaveType}
+                        </span>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
+                          <ModernSelect
+                            value={status}
+                            onChange={(value) =>
+                              setDraftPolicy((p) => ({
+                                ...p,
+                                leaveTypeRules: {
+                                  ...p.leaveTypeRules,
+                                  [leaveType]: value as "paid" | "unpaid",
+                                },
+                              }))
+                            }
+                            ariaLabel={`${leaveType} pay status`}
+                            width={110}
+                            minWidth={110}
+                            options={LEAVE_PAY_STATUS_OPTIONS}
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            title="Annual paid-day quota for this leave type"
+                            aria-label={`${leaveType} annual quota`}
+                            value={draftPolicy.leaveTypeQuotas[leaveType] ?? 0}
+                            onChange={(event) => {
+                              const quota = Math.max(
+                                0,
+                                Number(event.target.value) || 0,
+                              );
+                              setDraftPolicy((p) => ({
+                                ...p,
+                                leaveTypeQuotas: {
+                                  ...p.leaveTypeQuotas,
+                                  [leaveType]: quota,
+                                },
+                              }));
+                            }}
+                            style={{
+                              ...inputStyle,
+                              width: 64,
+                              textAlign: "right",
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: T.textMuted,
+                            }}
+                          >
+                            days/yr
+                          </span>
+                          <button
+                            onClick={() =>
+                              setDraftPolicy((p) => {
+                                const nextRules = { ...p.leaveTypeRules };
+                                delete nextRules[leaveType];
+                                const nextQuotas = { ...p.leaveTypeQuotas };
+                                delete nextQuotas[leaveType];
+                                return {
+                                  ...p,
+                                  leaveTypeRules: nextRules,
+                                  leaveTypeQuotas: nextQuotas,
+                                };
+                              })
+                            }
+                            style={{
+                              border: "none",
+                              background: "none",
+                              color: T.red600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ),
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      placeholder="e.g. sick, casual, annual"
+                      value={newLeaveTypeKey}
+                      onChange={(event) =>
+                        setNewLeaveTypeKey(event.target.value)
+                      }
+                      style={inputStyle}
+                      maxLength={40}
+                    />
+                    <button
+                      onClick={() => {
+                        const key = newLeaveTypeKey.trim().toLowerCase();
+                        if (!key || draftPolicy.leaveTypeRules[key]) return;
+                        setDraftPolicy((p) => ({
+                          ...p,
+                          leaveTypeRules: {
+                            ...p.leaveTypeRules,
+                            [key]: "paid",
+                          },
+                          leaveTypeQuotas: { ...p.leaveTypeQuotas, [key]: 0 },
+                        }));
+                        setNewLeaveTypeKey("");
+                      }}
+                      style={secondaryButtonStyle}
+                    >
+                      Add
+                    </button>
                   </div>
-                ),
+                </div>
+              )}
+              {/* Lives outside the Leave block: it reports an allowance-name
+              error and must still show when the Leave module is off. */}
+              {allowanceNameError && (
+                <div
+                  role="alert"
+                  style={{
+                    background: "#fef2f2",
+                    border: `1px solid #fecaca`,
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    marginTop: 10,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: T.red600,
+                  }}
+                >
+                  {allowanceNameError}
+                </div>
               )}
 
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <input
-                  placeholder="e.g. sick, casual, annual"
-                  value={newLeaveTypeKey}
-                  onChange={(event) => setNewLeaveTypeKey(event.target.value)}
-                  style={inputStyle}
-                  maxLength={40}
-                />
-                <button
-                  onClick={() => {
-                    const key = newLeaveTypeKey.trim().toLowerCase();
-                    if (!key || draftPolicy.leaveTypeRules[key]) return;
-                    setDraftPolicy((p) => ({
-                      ...p,
-                      leaveTypeRules: { ...p.leaveTypeRules, [key]: "paid" },
-                      leaveTypeQuotas: { ...p.leaveTypeQuotas, [key]: 0 },
-                    }));
-                    setNewLeaveTypeKey("");
+              <div style={{ marginTop: 20, marginBottom: 24 }}>
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: T.textMuted,
+                    marginBottom: 8,
                   }}
-                  style={secondaryButtonStyle}
                 >
-                  Add
-                </button>
-              </div>
-            </div>
-          )}
-          {/* Lives outside the Leave block: it reports an allowance-name
-              error and must still show when the Leave module is off. */}
-          {allowanceNameError && (
-            <div
-              role="alert"
-              style={{
-                background: "#fef2f2",
-                border: `1px solid #fecaca`,
-                borderRadius: 10,
-                padding: "10px 14px",
-                marginTop: 10,
-                fontSize: 12,
-                fontWeight: 600,
-                color: T.red600,
-              }}
-            >
-              {allowanceNameError}
-            </div>
-          )}
+                  Allowance Types — Fixed / % of Basic / No Value
+                </span>
 
-          <div style={{ marginTop: 20, marginBottom: 24 }}>
-            <span
-              style={{
-                display: "block",
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: T.textMuted,
-                marginBottom: 8,
-              }}
-            >
-              Allowance Types — Fixed / % of Basic / No Value
-            </span>
+                {Object.entries(draftPolicy.allowanceTypes).map(
+                  ([key, type]) => (
+                    <div
+                      key={key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "8px 10px",
+                        border: `1px solid ${T.border}`,
+                        borderRadius: 8,
+                        marginBottom: 6,
+                        gap: 8,
+                      }}
+                    >
+                      <input
+                        value={type.label}
+                        aria-label={`${key} label`}
+                        onChange={(event) =>
+                          setDraftPolicy((p) => ({
+                            ...p,
+                            allowanceTypes: {
+                              ...p.allowanceTypes,
+                              [key]: { ...type, label: event.target.value },
+                            },
+                          }))
+                        }
+                        style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                        maxLength={40}
+                      />
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          alignItems: "center",
+                        }}
+                      >
+                        <ModernSelect
+                          value={type.mode}
+                          onChange={(value) =>
+                            setDraftPolicy((p) => ({
+                              ...p,
+                              allowanceTypes: {
+                                ...p.allowanceTypes,
+                                [key]: {
+                                  ...type,
+                                  mode: value as AllowanceMode,
+                                },
+                              },
+                            }))
+                          }
+                          ariaLabel={`${key} mode`}
+                          width={130}
+                          minWidth={130}
+                          options={ALLOWANCE_MODE_OPTIONS}
+                        />
+                        {type.mode !== "none" && (
+                          <input
+                            type="number"
+                            min={PAYROLL_VALUE_MIN}
+                            max={
+                              type.mode === "percent"
+                                ? PAYROLL_PERCENT_MAX
+                                : PAYROLL_VALUE_MAX
+                            }
+                            step={type.mode === "percent" ? 0.5 : 1}
+                            onKeyDown={blockInvalidNumberKeys}
+                            title={
+                              type.mode === "percent"
+                                ? "% of basic salary"
+                                : "Flat amount (PKR)"
+                            }
+                            aria-label={`${key} value`}
+                            value={type.value}
+                            onChange={(event) =>
+                              setDraftPolicy((p) => ({
+                                ...p,
+                                allowanceTypes: {
+                                  ...p.allowanceTypes,
+                                  [key]: {
+                                    ...type,
+                                    value: Math.max(
+                                      PAYROLL_VALUE_MIN,
+                                      Number(event.target.value) || 0,
+                                    ),
+                                  },
+                                },
+                              }))
+                            }
+                            style={{
+                              ...inputStyle,
+                              width: 72,
+                              textAlign: "right",
+                            }}
+                          />
+                        )}
+                        <button
+                          onClick={() =>
+                            setDraftPolicy((p) => {
+                              const next = { ...p.allowanceTypes };
+                              delete next[key];
+                              return { ...p, allowanceTypes: next };
+                            })
+                          }
+                          style={{
+                            border: "none",
+                            background: "none",
+                            color: T.red600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ),
+                )}
 
-            {Object.entries(draftPolicy.allowanceTypes).map(([key, type]) => (
-              <div
-                key={key}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "8px 10px",
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 8,
-                  marginBottom: 6,
-                  gap: 8,
-                }}
-              >
-                <input
-                  value={type.label}
-                  aria-label={`${key} label`}
-                  onChange={(event) =>
-                    setDraftPolicy((p) => ({
-                      ...p,
-                      allowanceTypes: {
-                        ...p.allowanceTypes,
-                        [key]: { ...type, label: event.target.value },
-                      },
-                    }))
-                  }
-                  style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-                  maxLength={40}
-                />
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <ModernSelect
-                    value={type.mode}
-                    onChange={(value) =>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <input
+                    placeholder="e.g. transport, housing, meal"
+                    value={newAllowanceTypeKey}
+                    onChange={(event) =>
+                      setNewAllowanceTypeKey(event.target.value)
+                    }
+                    style={inputStyle}
+                    maxLength={40}
+                  />
+                  <button
+                    onClick={() => {
+                      const key = newAllowanceTypeKey.trim().toLowerCase();
+                      if (!key || draftPolicy.allowanceTypes[key]) return;
                       setDraftPolicy((p) => ({
                         ...p,
                         allowanceTypes: {
                           ...p.allowanceTypes,
-                          [key]: { ...type, mode: value as AllowanceMode },
-                        },
-                      }))
-                    }
-                    ariaLabel={`${key} mode`}
-                    width={130}
-                    minWidth={130}
-                    options={ALLOWANCE_MODE_OPTIONS}
-                  />
-                  {type.mode !== "none" && (
-                    <input
-                      type="number"
-                      min={PAYROLL_VALUE_MIN}
-                      max={
-                        type.mode === "percent"
-                          ? PAYROLL_PERCENT_MAX
-                          : PAYROLL_VALUE_MAX
-                      }
-                      step={type.mode === "percent" ? 0.5 : 1}
-                      onKeyDown={blockInvalidNumberKeys}
-                      title={
-                        type.mode === "percent"
-                          ? "% of basic salary"
-                          : "Flat amount (PKR)"
-                      }
-                      aria-label={`${key} value`}
-                      value={type.value}
-                      onChange={(event) =>
-                        setDraftPolicy((p) => ({
-                          ...p,
-                          allowanceTypes: {
-                            ...p.allowanceTypes,
-                            [key]: {
-                              ...type,
-                              value: Math.max(
-                                PAYROLL_VALUE_MIN,
-                                Number(event.target.value) || 0,
-                              ),
-                            },
+                          [key]: {
+                            label: newAllowanceTypeKey.trim(),
+                            mode: "fixed",
+                            value: 0,
                           },
-                        }))
-                      }
-                      style={{ ...inputStyle, width: 72, textAlign: "right" }}
-                    />
-                  )}
-                  <button
-                    onClick={() =>
-                      setDraftPolicy((p) => {
-                        const next = { ...p.allowanceTypes };
-                        delete next[key];
-                        return { ...p, allowanceTypes: next };
-                      })
-                    }
+                        },
+                      }));
+                      setNewAllowanceTypeKey("");
+                    }}
+                    disabled={!newAllowanceName || newAllowanceNameConflict}
                     style={{
-                      border: "none",
-                      background: "none",
-                      color: T.red600,
-                      cursor: "pointer",
+                      ...secondaryButtonStyle,
+                      cursor:
+                        !newAllowanceName || newAllowanceNameConflict
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        !newAllowanceName || newAllowanceNameConflict
+                          ? 0.55
+                          : 1,
                     }}
                   >
-                    <X size={14} />
+                    Add
                   </button>
                 </div>
+                {newAllowanceNameConflict && (
+                  <div
+                    role="alert"
+                    style={{
+                      color: T.red600,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      marginTop: 6,
+                    }}
+                  >
+                    {newAllowanceTypeKey.trim()} is already added. Choose
+                    another allowance.
+                  </div>
+                )}
               </div>
-            ))}
-
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input
-                placeholder="e.g. transport, housing, meal"
-                value={newAllowanceTypeKey}
-                onChange={(event) => setNewAllowanceTypeKey(event.target.value)}
-                style={inputStyle}
-                maxLength={40}
-              />
-              <button
-                onClick={() => {
-                  const key = newAllowanceTypeKey.trim().toLowerCase();
-                  if (!key || draftPolicy.allowanceTypes[key]) return;
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    allowanceTypes: {
-                      ...p.allowanceTypes,
-                      [key]: {
-                        label: newAllowanceTypeKey.trim(),
-                        mode: "fixed",
-                        value: 0,
-                      },
-                    },
-                  }));
-                  setNewAllowanceTypeKey("");
-                }}
-                disabled={!newAllowanceName || newAllowanceNameConflict}
-                style={{
-                  ...secondaryButtonStyle,
-                  cursor:
-                    !newAllowanceName || newAllowanceNameConflict
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity:
-                    !newAllowanceName || newAllowanceNameConflict ? 0.55 : 1,
-                }}
-              >
-                Add
-              </button>
-            </div>
-            {newAllowanceNameConflict && (
-              <div
-                role="alert"
-                style={{
-                  color: T.red600,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  marginTop: 6,
-                }}
-              >
-                {newAllowanceTypeKey.trim()} is already added. Choose another
-                allowance.
-              </div>
-            )}
-          </div>
+            </>
+          )}
 
           {policyError && (
             <div
@@ -4583,7 +4485,13 @@ export default function PayrollModule() {
                       {slab.upperLimit === null ? (
                         `Above ${slab.lowerLimit.toLocaleString("en-PK")}`
                       ) : (
-                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 5,
+                          }}
+                        >
                           <span>
                             {index === 0
                               ? "Up to"

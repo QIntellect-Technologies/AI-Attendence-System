@@ -75,3 +75,35 @@ def test_income_tax_slabs_accept_a_terminal_unlimited_slab():
             ],
         }
     )
+
+
+def test_people_type_working_day_calendar_is_validated_with_payroll_calendar_rules():
+    _validate_payroll_policy(
+        {
+            "workingDayCalendarsByPeopleType": {
+                "student": {
+                    "weeklyOffDays": ["saturday", "sunday"],
+                    "weeklyOffDaysEffectiveFrom": "2026-01",
+                    "calendarsByMonth": {
+                        "2026-01": {
+                            "holidayDates": ["2026-01-01"],
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+
+def test_people_type_working_day_calendar_rejects_invalid_weekdays():
+    with pytest.raises(ValueError, match="payrollWeeklyOffDays"):
+        _validate_payroll_policy(
+            {
+                "workingDayCalendarsByPeopleType": {
+                    "student": {
+                        "weeklyOffDays": ["funday"],
+                        "calendarsByMonth": {},
+                    },
+                },
+            }
+        )

@@ -132,6 +132,7 @@ import ManualAttendanceModal, {
   type ManualAttendanceSubmitValues,
 } from "./ManualAttendanceModal";
 import ModernSelect from "../../components/ui/ModernSelect";
+import StudentWorkingDayCalendar from "./StudentWorkingDayCalendar";
 
 import {
   resolveBranchFromList,
@@ -1389,6 +1390,14 @@ function useAttendanceSources(args: {
     "attendance",
     isGlobal ? null : scopedBranchId,
   );
+  const organizationAttendancePeopleTypes = resolveModulePeopleTypes(
+    cfg as unknown as Record<string, unknown>,
+    "attendance",
+    null,
+  );
+  const isStudentOnlyOrganization =
+    organizationAttendancePeopleTypes.length > 0 &&
+    organizationAttendancePeopleTypes.every(isStudentPeopleType);
 
   const peopleModel = buildAttendancePeopleModel(
     cfg as unknown as Record<string, unknown>,
@@ -1459,6 +1468,7 @@ function useAttendanceSources(args: {
     scopedBranchId,
     peopleType,
     entityLabel,
+    isStudentOnlyOrganization,
     peopleModel,
     staff,
     attendance,
@@ -1567,6 +1577,7 @@ export default function AttendanceView() {
     scopedBranchId,
     peopleType,
     entityLabel,
+    isStudentOnlyOrganization,
     peopleModel,
     staff,
     attendance,
@@ -2350,6 +2361,7 @@ export default function AttendanceView() {
                   organizationIdForApi,
                   month,
                   branchId,
+                  peopleType || "staff",
                 ),
                 error: null,
               };
@@ -2398,6 +2410,7 @@ export default function AttendanceView() {
     filter.mode,
     organizationIdForApi,
     payrollCalendarMonths,
+    peopleType,
     scopedStaff,
     useRealApi,
   ]);
@@ -3522,6 +3535,8 @@ export default function AttendanceView() {
           {payrollCalendarError}
         </div>
       )}
+
+      {isStudentOnlyOrganization && <StudentWorkingDayCalendar />}
 
       <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard

@@ -60,6 +60,73 @@ def test_month_working_dates_reuse_payroll_calendar_rules():
     assert all(date.fromisoformat(day).weekday() != 6 for day in working_dates)
 
 
+def test_month_working_dates_use_people_type_calendar_without_changing_payroll_calendar():
+    policy = _policy(
+        workingDayCalendarsByPeopleType={
+            'student': {
+                'weeklyOffDays': ['saturday', 'sunday'],
+                'weeklyOffDaysEffectiveFrom': '2024-02',
+                'calendarsByMonth': {
+                    '2024-02': {
+                        'holidayDates': ['2024-02-05'],
+                    },
+                },
+            },
+        },
+    )
+
+    student_dates = payroll_engine.scheduled_work_dates_for_month(
+        '2024-02',
+        policy,
+        people_type='student',
+    )
+    staff_dates = payroll_engine.scheduled_work_dates_for_month(
+        '2024-02',
+        policy,
+        people_type='staff',
+    )
+
+    assert len(student_dates) == 20
+    assert '2024-02-05' not in student_dates
+    assert all(date.fromisoformat(day).weekday() not in {5, 6} for day in student_dates)
+    assert len(staff_dates) == 24
+
+
+def test_payroll_breakdown_uses_people_type_calendar():
+    policy = _policy(
+        workingDayCalendarsByPeopleType={
+            'student': {
+                'weeklyOffDays': ['saturday', 'sunday'],
+                'weeklyOffDaysEffectiveFrom': '2024-02',
+                'calendarsByMonth': {
+                    '2024-02': {
+                        'holidayDates': ['2024-02-05'],
+                    },
+                },
+            },
+        },
+    )
+    common = {
+        'base_salary': 24_000,
+        'ot_hours': 0,
+        'ot_rate_per_hour': 0,
+        'period_start': date(2024, 2, 1),
+        'period_end': date(2024, 2, 29),
+        'policy': policy,
+        'attendance_rows': [],
+        'leave_rows': [],
+    }
+
+    student_result = compute_payroll_breakdown(
+        **common,
+        people_type='student',
+    )
+    staff_result = compute_payroll_breakdown(**common, people_type='staff')
+
+    assert student_result.scheduled_work_days == 20
+    assert staff_result.scheduled_work_days == 24
+
+
 def test_weekly_off_day_and_holiday_are_not_absences():
     result = _breakdown(
         attendance_rows=[
@@ -356,12 +423,46 @@ def test_pending_late_decisions_follow_capture_channel_and_exclude_resolved_rows
         ),
     )
 
-    assert result.late_count == 2
+    assert result.late_count == 0
     assert result.pending_late_decisions == [
         {'attendance_id': 'mobile-pending', 'date': '2024-02-01'},
         {'attendance_id': 'node-pending', 'date': '2024-02-01'},
     ]
-    assert result.late_deduction_amount == result.per_day_rate * 2
+    assert result.late_deduction_amount == 0
+
+
+def test_pending_late_decisions_are_not_deducted_until_explicitly_included(monkeypatch):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2024, 2, 5)
+
+    monkeypatch.setattr(payroll_engine, 'date', FixedDate)
+    attendance_row = {
+        'attendanceId': 'mobile-pending',
+        'date': '2024-02-01',
+        'checkInStatus': 'late',
+        'captureChannel': 'mobile_app',
+    }
+    policy = _policy(
+        lateComingPolicy={
+            'mode': 'occurrence_threshold',
+            'thresholdOccurrences': 1,
+        },
+    )
+
+    pending_result = _breakdown(attendance_rows=[attendance_row], policy=policy)
+    included_result = _breakdown(
+        attendance_rows=[
+            {**attendance_row, 'checkInPayrollDecision': 'include'},
+        ],
+        policy=policy,
+    )
+
+    assert pending_result.late_count == 0
+    assert pending_result.late_deduction_amount == 0
+    assert included_result.late_count == 1
+    assert included_result.late_deduction_amount == included_result.per_day_rate
 
 
 def test_recurring_weekly_off_days_apply_to_months_without_month_specific_holidays():

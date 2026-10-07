@@ -3310,6 +3310,30 @@ def _validate_payroll_policy(policy: dict) -> None:
         if effective_month.strftime('%Y-%m') != effective_from:
             raise ValueError('payrollWeeklyOffDaysEffectiveFrom must be YYYY-MM')
 
+    typed_calendars = policy.get('workingDayCalendarsByPeopleType')
+    if typed_calendars is not None:
+        if not isinstance(typed_calendars, dict):
+            raise ValueError('workingDayCalendarsByPeopleType must be an object')
+        for people_type, calendar in typed_calendars.items():
+            if not isinstance(people_type, str) or not people_type.strip():
+                raise ValueError('Working-day calendar people types must be non-empty strings')
+            if not isinstance(calendar, dict):
+                raise ValueError(
+                    f'Invalid working-day calendar configuration for {people_type}'
+                )
+            calendar_policy = {
+                **{
+                    key: value for key, value in policy.items()
+                    if key != 'workingDayCalendarsByPeopleType'
+                },
+                'payrollWeeklyOffDays': calendar.get('weeklyOffDays'),
+                'payrollWeeklyOffDaysEffectiveFrom': calendar.get(
+                    'weeklyOffDaysEffectiveFrom'
+                ),
+                'payrollCalendarsByMonth': calendar.get('calendarsByMonth') or {},
+            }
+            _validate_payroll_policy(calendar_policy)
+
     if 'fixedWorkingDaysPerMonth' in policy:
         raw = policy.get('fixedWorkingDaysPerMonth')
         if raw not in (None, ''):
@@ -3504,20 +3528,58 @@ def _paid_payroll_rows(
     log_label: str,
     strict: bool = False,
 ) -> list[dict]:
+    return _paid_payroll_rows_for_periods(
+        org_id,
+        [(period_start, period_end)],
+        columns,
+        log_label,
+        strict,
+    )
+
+
+def _paid_payroll_rows_for_periods(
+    org_id: str,
+    periods: list[tuple[str, str]],
+    columns: str,
+    log_label: str,
+    strict: bool = False,
+    staff_id: str | None = None,
+) -> list[dict]:
+    """Fetch paid rows for a set of periods in one range query."""
+    if not periods:
+        return []
+
     org_key = str(org_id)
+    staff_key = _payroll_text(staff_id)
+    expected_periods = set(periods)
+    range_start = periods[0][0]
+    range_end = (date.fromisoformat(periods[-1][1]) + timedelta(days=1)).isoformat()
+
+    def _query():
+        query = (
+            get_supabase()
+            .table('payroll_payments')
+            .select(columns)
+            .eq('org_id', org_key)
+        )
+        if staff_key:
+            query = query.eq('staff_id', staff_key)
+        return query.gte('period_start', range_start).lt('period_start', range_end)
+
     try:
         result = _execute_supabase(
             log_label,
-            lambda: (
-                get_supabase()
-                .table('payroll_payments')
-                .select(columns)
-                .eq('org_id', org_key)
-                .eq('period_start', period_start)
-                .eq('period_end', period_end)
-            ),
+            _query,
         )
-        return result.data or []
+        return [
+            row
+            for row in (result.data or [])
+            if isinstance(row, dict)
+            and (
+                _payroll_text(row.get('period_start')),
+                _payroll_text(row.get('period_end')),
+            ) in expected_periods
+        ]
     except Exception as exc:
         if strict:
             if _table_missing(exc, 'payroll_payments'):
@@ -3694,6 +3756,7 @@ def get_pending_payroll_salary_periods(
         return []
 
     periods: list[dict[str, str]] = []
+    period_ranges: list[tuple[str, str]] = []
     current = start.replace(day=1)
     end_month = end.replace(day=1)
     while current < end_month:
@@ -3704,24 +3767,30 @@ def get_pending_payroll_salary_periods(
         )
         period_start = current.isoformat()
         period_end = (next_month - timedelta(days=1)).isoformat()
-        paid_rows = _paid_payroll_rows(
-            org_key,
-            period_start,
-            period_end,
-            'staff_id',
-            'get_pending_payroll_salary_periods',
-            strict=True,
-        )
-        if not any(
-            isinstance(row, dict)
-            and _payroll_text(row.get('staff_id')) == staff_key
-            for row in paid_rows
-        ):
-            periods.append({
-                'period_start': period_start,
-                'period_end': period_end,
-            })
+        period_ranges.append((period_start, period_end))
         current = next_month
+
+    paid_rows = _paid_payroll_rows_for_periods(
+        org_key,
+        period_ranges,
+        'staff_id',
+        'get_pending_payroll_salary_periods',
+        strict=True,
+        staff_id=staff_key,
+    )
+    paid_periods = {
+        (
+            _payroll_text(row.get('period_start')),
+            _payroll_text(row.get('period_end')),
+        )
+        for row in paid_rows
+        if _payroll_text(row.get('staff_id')) == staff_key
+    }
+    periods.extend(
+        {'period_start': period_start, 'period_end': period_end}
+        for period_start, period_end in period_ranges
+        if (period_start, period_end) not in paid_periods
+    )
     return periods
 
 
@@ -3763,7 +3832,10 @@ def save_pending_payroll_salary_snapshots(
             if current.month == 12
             else date(current.year, current.month + 1, 1)
         )
-        months.append((current.isoformat(), next_month.isoformat()))
+        months.append((
+            current.isoformat(),
+            (next_month - timedelta(days=1)).isoformat(),
+        ))
         current = next_month
     if not months:
         return []
@@ -3778,7 +3850,10 @@ def save_pending_payroll_salary_snapshots(
                 .eq('org_id', org_key)
                 .eq('staff_id', staff_key)
                 .gte('period_start', months[0][0])
-                .lt('period_start', months[-1][1])
+                .lt(
+                    'period_start',
+                    (date.fromisoformat(months[-1][1]) + timedelta(days=1)).isoformat(),
+                )
             ),
         )
     except Exception as exc:
@@ -3799,25 +3874,24 @@ def save_pending_payroll_salary_snapshots(
         if isinstance(row, dict) and row.get('period_start') is not None
     }
 
+    paid_rows = _paid_payroll_rows_for_periods(
+        org_key,
+        months,
+        'staff_id, breakdown',
+        'save_pending_payroll_salary_snapshots.paid_period',
+        strict=True,
+        staff_id=staff_key,
+    )
+    paid_by_month = {
+        _payroll_text(row.get('period_start')): row
+        for row in paid_rows
+        if _payroll_text(row.get('staff_id')) == staff_key
+    }
+
     snapshots: list[dict] = []
     for period_start, period_end in months:
-        paid_rows = _paid_payroll_rows(
-            org_key,
-            period_start,
-            (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
-            'staff_id, breakdown',
-            'save_pending_payroll_salary_snapshots.paid_period',
-            strict=True,
-        )
         existing_salary = existing_by_month.get(period_start)
-        paid_row = next(
-            (
-                row for row in paid_rows
-                if isinstance(row, dict)
-                and _payroll_text(row.get('staff_id')) == staff_key
-            ),
-            None,
-        )
+        paid_row = paid_by_month.get(period_start)
         if paid_row:
             breakdown = paid_row.get('breakdown')
             saved_salary = (
@@ -3840,7 +3914,7 @@ def save_pending_payroll_salary_snapshots(
             'org_id': org_key,
             'staff_id': staff_key,
             'period_start': period_start,
-            'period_end': (date.fromisoformat(period_end) - timedelta(days=1)).isoformat(),
+            'period_end': period_end,
             'basic_salary': salary,
             'updated_at': datetime.now(timezone.utc).isoformat(),
         })
@@ -5450,9 +5524,9 @@ def _payroll_page_row(
     backend_branch_id = _payroll_text(staff.get('branch_id')) or None
     branch = branch_lookup.get(str(backend_branch_id or '')) or {}
     branch_name = _payroll_text(staff.get('branch_name') or branch.get('name')) or 'Main Branch'
-    # Department source of truth is public.client_staff.department_name, backed
-    # by optional department_id. A plain client_staff.department column is not
-    # part of the schema contract and must not be used.
+    # Match Staff Management: resolve department_id to the canonical
+    # departments.name before mapping the row, with department_name as fallback.
+    # A plain client_staff.department column is not part of the schema contract.
     department = _payroll_text(staff.get('department_name')) or 'Unassigned'
 
     basic_salary = _payroll_float(
@@ -5606,12 +5680,17 @@ def get_client_payroll_page(
     Source of truth is public.client_staff.salary. Optional public.salary_configs
     overlays allowances/deductions/rates. This implementation is intentionally
     schema-safe: it never queries client_staff.department because that column is
-    not present in all tenant schemas. Department is a display value only and is
-    derived after fetch when available; otherwise it becomes "General".
+    not present in all tenant schemas. Department is resolved from
+    department_id using the same lookup as Staff Management, with
+    department_name retained as the legacy fallback.
     """
     page_started_at = time.perf_counter()
     from support_db_organizations import get_organization
-    from support_db_staff import _client_branch_indexes, _resolve_client_branch
+    from support_db_staff import (
+        _client_branch_indexes,
+        _resolve_client_branch,
+        _resolve_department_map,
+    )
     org_key = _payroll_text(org_id)
     if not org_key:
         raise ValueError('organization_id/orgId is required')
@@ -5659,6 +5738,16 @@ def get_client_payroll_page(
         'created_at', 'updated_at',
     } else 'name'
     search_text = _payroll_text(search).replace(',', ' ')
+    join_date_cutoff = None
+    if period_end:
+        try:
+            join_date_cutoff = date.fromisoformat(
+                _payroll_text(period_end)
+            ).isoformat()
+        except ValueError:
+            # The existing period validation below remains responsible for
+            # reporting malformed dates; do not change that error path here.
+            pass
 
     safe_staff_selects = [
         # Contract schema, with CNIC. public.client_staff owns
@@ -5703,6 +5792,10 @@ def get_client_payroll_page(
         # stays stable; it is just never wired to a query clause anymore.
         if include_archive_filter:
             q = q.eq('is_archived', False)
+        if join_date_cutoff:
+            # Include the full month in which someone joins, but never create
+            # a payroll row for a period that ends before their joining date.
+            q = q.lte('join_date', join_date_cutoff)
         if backend_branch_id:
             q = q.eq('branch_id', backend_branch_id)
         if include_search and search_text:
@@ -6212,6 +6305,9 @@ def get_client_payroll_page(
                         attendance_rows=attendance_by_staff.get(staff_id, []),
                         leave_rows=leaves_by_staff.get(staff_id, []),
                         monthly_gross_salary=monthly_gross_salary,
+                        people_type=_normalize_people_type(
+                            staff.get('people_type') or staff.get('peopleType')
+                        ),
                     )
                     breakdown_by_staff[staff_id] = breakdown.to_dict()
                     present_dates = {r['date'] for r in attendance_by_staff.get(staff_id, []) if r.get('date')}
@@ -6233,6 +6329,29 @@ def get_client_payroll_page(
             present_days_by_staff = {}
             paid_staff_ids = None
 
+    departments_by_id = _resolve_department_map(
+        org_key,
+        {
+            _payroll_text(staff.get('department_id'))
+            for staff in staff_rows
+            if _payroll_text(staff.get('department_id'))
+        },
+    )
+    payroll_staff_rows = []
+    for staff in staff_rows:
+        department_id = _payroll_text(staff.get('department_id'))
+        department_name = (
+            departments_by_id.get(department_id, {}).get('name')
+            if department_id
+            else None
+        )
+        payroll_staff_rows.append(
+            {
+                **staff,
+                **({'department_name': department_name} if department_name else {}),
+            }
+        )
+
     rows = [
         _payroll_page_row(
             org_key,
@@ -6246,7 +6365,7 @@ def get_client_payroll_page(
             effective_ot_rate=effective_ot_rate_by_staff.get(_payroll_text(staff.get('id'))),
             policy=policy_by_staff.get(_payroll_text(staff.get('id'))),
         )
-        for staff in staff_rows
+        for staff in payroll_staff_rows
     ]
 
     # Sorts that depend on derived/overlay values happen after mapping.

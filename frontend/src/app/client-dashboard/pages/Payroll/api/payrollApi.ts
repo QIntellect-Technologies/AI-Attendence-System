@@ -110,6 +110,12 @@ export interface PayrollMonthCalendar {
   holidaysConfirmed?: boolean;
 }
 
+export interface WorkingDayCalendar {
+  weeklyOffDays?: PayrollWeekday[];
+  weeklyOffDaysEffectiveFrom?: string;
+  calendarsByMonth?: Record<string, PayrollMonthCalendar>;
+}
+
 export interface LateComingPolicy {
   mode: LateComingMode;
   thresholdOccurrences?: number;
@@ -124,6 +130,7 @@ export interface PayrollPolicy {
   payrollWeeklyOffDays: PayrollWeekday[];
   payrollWeeklyOffDaysEffectiveFrom: string;
   payrollCalendarsByMonth: Record<string, PayrollMonthCalendar>;
+  workingDayCalendarsByPeopleType: Record<string, WorkingDayCalendar>;
   lateComingPolicy: LateComingPolicy;
   leaveTypeRules: Record<string, LeavePayStatus>;
   /**
@@ -151,6 +158,7 @@ export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   payrollWeeklyOffDays: ["sunday"],
   payrollWeeklyOffDaysEffectiveFrom: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`,
   payrollCalendarsByMonth: {},
+  workingDayCalendarsByPeopleType: {},
   lateComingPolicy: { mode: "occurrence_threshold", thresholdOccurrences: 3 },
   leaveTypeRules: {},
   leaveTypeQuotas: {},
@@ -221,6 +229,8 @@ function normalizePayrollPolicy(
     payrollWeeklyOffDaysEffectiveFrom:
       currentPolicy.payrollWeeklyOffDaysEffectiveFrom ?? currentMonth,
     payrollCalendarsByMonth: calendars,
+    workingDayCalendarsByPeopleType:
+      merged.workingDayCalendarsByPeopleType ?? {},
     incomeTaxSlabs: rawIncomeTaxSlabs.map((slab, index) => ({
       ...slab,
       lowerLimit:
@@ -712,10 +722,12 @@ export async function getPayrollWorkingDates(
   organizationId: PayrollId,
   month: string,
   branchId?: PayrollId | null,
+  peopleType = "staff",
 ): Promise<string[]> {
   const query = new URLSearchParams({
     organization_id: String(organizationId),
     month,
+    people_type: peopleType,
   });
   const cleanBranchId = cleanPayrollId(branchId);
   if (cleanBranchId !== null) query.set("branch_id", String(cleanBranchId));

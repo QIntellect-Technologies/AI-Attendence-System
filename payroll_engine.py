@@ -417,20 +417,48 @@ def _scheduled_work_dates(period_start: date, period_end: date, policy: dict) ->
     return scheduled_dates
 
 
-def scheduled_work_dates_for_month(month_key: str, policy: dict) -> list[str]:
-    """Return the payroll-calendar working dates for one YYYY-MM month."""
+def _policy_for_people_type(policy: dict, people_type: str | None) -> dict:
+    """Overlay an optional people-type calendar on the legacy schedule."""
+    calendar_policy = policy
+    people_type_key = str(people_type or '').strip().lower().replace('-', '_').replace(' ', '_')
+    people_calendars = policy.get('workingDayCalendarsByPeopleType') or {}
+    people_calendar = people_calendars.get(people_type_key) if isinstance(people_calendars, dict) else None
+    if people_calendar is not None:
+        if not isinstance(people_calendar, dict):
+            raise ValueError(
+                f'Invalid working-day calendar configuration for {people_type_key}'
+            )
+        calendar_policy = {
+            **policy,
+            'payrollWeeklyOffDays': people_calendar.get('weeklyOffDays'),
+            'payrollWeeklyOffDaysEffectiveFrom': people_calendar.get(
+                'weeklyOffDaysEffectiveFrom'
+            ),
+            'payrollCalendarsByMonth': people_calendar.get('calendarsByMonth') or {},
+        }
+    return calendar_policy
+
+
+def scheduled_work_dates_for_month(
+    month_key: str,
+    policy: dict,
+    people_type: str | None = None,
+) -> list[str]:
+    """Return the configured working dates for one YYYY-MM month."""
     try:
         month_start = date.fromisoformat(f'{month_key}-01')
     except (TypeError, ValueError) as exc:
         raise ValueError('month must be YYYY-MM') from exc
     if month_start.strftime('%Y-%m') != month_key:
         raise ValueError('month must be YYYY-MM')
+
+    calendar_policy = _policy_for_people_type(policy, people_type)
     month_end = date(
         month_start.year,
         month_start.month,
         monthrange(month_start.year, month_start.month)[1],
     )
-    return sorted(_scheduled_work_dates(month_start, month_end, policy))
+    return sorted(_scheduled_work_dates(month_start, month_end, calendar_policy))
 
 
 def _per_day_rate(base_salary: float, policy: dict, period_start: date, period_end: date) -> float:
@@ -505,6 +533,13 @@ def _late_decision_key(row: dict) -> str:
         if row.get('captureChannel') == 'local_node'
         else 'checkInPayrollDecision'
     )
+
+
+def _late_decision_included(row: dict) -> bool:
+    """Pending mobile/node late arrivals count only after an explicit include."""
+    if row.get('captureChannel') in ('local_node', 'mobile_app'):
+        return row.get(_late_decision_key(row)) == 'include'
+    return _decision_included(row, _late_decision_key(row))
 
 
 def is_unpaid_leave_type(leave_type: str, leave_rules: dict) -> bool:
@@ -585,6 +620,7 @@ def compute_payroll_breakdown(
     attendance_rows: list[dict],   # [{date, checkInStatus, dayStatus}]
     leave_rows: list[dict],        # [{leaveType, days, dates?}]
     monthly_gross_salary: float | None = None,
+    people_type: str | None = None,
 ) -> PayrollBreakdown:
     # Guarded here, not just at the route layer, so every current and
     # future caller of this function is protected regardless of how it got
@@ -602,11 +638,25 @@ def compute_payroll_breakdown(
             f"is before period_start ({period_start.isoformat()})."
         )
 
-    scheduled_dates = _scheduled_work_dates(period_start, period_end, policy)
-    per_day_rate = _per_day_rate(base_salary, policy, period_start, period_end)
+    calendar_policy = _policy_for_people_type(policy, people_type)
+    scheduled_dates = _scheduled_work_dates(
+        period_start,
+        period_end,
+        calendar_policy,
+    )
+    per_day_rate = _per_day_rate(
+        base_salary,
+        calendar_policy,
+        period_start,
+        period_end,
+    )
     deduction_period_end = min(period_end, date.today())
     deduction_scheduled_dates = (
-        _scheduled_work_dates(period_start, deduction_period_end, policy)
+        _scheduled_work_dates(
+            period_start,
+            deduction_period_end,
+            calendar_policy,
+        )
         if deduction_period_end >= period_start
         else set()
     )
@@ -620,7 +670,7 @@ def compute_payroll_breakdown(
     ]
     late_count = sum(
         1 for row in late_rows
-        if _decision_included(row, _late_decision_key(row))
+        if _late_decision_included(row)
     )
     scheduled_late_rows = [
         row for row in late_rows
@@ -635,7 +685,7 @@ def compute_payroll_breakdown(
     ]
     deductible_late_count = sum(
         1 for row in scheduled_late_rows
-        if _decision_included(row, _late_decision_key(row))
+        if _late_decision_included(row)
     )
     half_day_attendance_count = sum(
         1 for r in attendance_rows

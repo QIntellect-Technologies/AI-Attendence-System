@@ -15,6 +15,7 @@ interface StatCardProps {
   iconBg?: string;
   iconColor?: string;
   onClick?: () => void;
+  minHeight?: number;
 }
 
 const StatCard: React.FC<StatCardProps> = ({
@@ -25,6 +26,7 @@ const StatCard: React.FC<StatCardProps> = ({
   iconBg = T.teal100,
   iconColor = T.teal600,
   onClick,
+  minHeight,
 }) => {
   return (
     <div
@@ -33,6 +35,7 @@ const StatCard: React.FC<StatCardProps> = ({
         border: `1px solid ${T.border}`,
         borderRadius: 16,
         padding: "20px 22px",
+        minHeight,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",

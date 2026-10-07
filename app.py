@@ -3707,6 +3707,8 @@ def _require_pending_payroll_salary_decision(
         raise ValueError("pending_salary_action must be 'preserve' or 'update'")
     if new_salary == context['old_salary']:
         return action or 'preserve'
+    if action is not None:
+        return action
 
     current_month_start = date.today().replace(day=1)
     history_start = date.fromisoformat(context['history_start'])
@@ -5604,13 +5606,18 @@ def api_get_payroll_working_days():
         return jsonify({'success': False, 'error': 'month must be YYYY-MM'}), 400
 
     branch_id = _clean_id_text(request.args.get('branch_id') or request.args.get('branchId')) or None
+    people_type = str(request.args.get('people_type') or 'staff').strip().lower()
     try:
         policy = support_cp_db.get_payroll_policy_for_period(
             org_id,
             f'{month_key}-01',
             branch_id=branch_id,
         )
-        working_dates = payroll_engine.scheduled_work_dates_for_month(month_key, policy)
+        working_dates = payroll_engine.scheduled_work_dates_for_month(
+            month_key,
+            policy,
+            people_type=people_type,
+        )
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
     except Exception:
