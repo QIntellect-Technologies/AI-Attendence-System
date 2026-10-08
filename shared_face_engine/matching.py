@@ -106,12 +106,12 @@ def _scan_candidates(
     candidates: dict[str, np.ndarray],
 ) -> tuple[str, float] | None:
     """One pass over every candidate, tracking the globally closest one by
-    raw cosine similarity â€” no threshold applied here. Shared by
+    raw cosine similarity — no threshold applied here. Shared by
     best_match() (threshold-gated) and closest_candidate() (diagnostic,
     no gate) so the comparison loop exists exactly once. Mathematically
     equivalent to the old best_match loop when a threshold IS applied
     afterward: the global max similarity is >= threshold iff at least one
-    candidate cleared it, and it's the same value either way â€” so
+    candidate cleared it, and it's the same value either way — so
     best_match()'s behavior below is unchanged, just derived correctly."""
     best_id: str | None = None
     best_similarity = -1.0
@@ -150,7 +150,7 @@ def _max_similarity_to_person(test_embedding: np.ndarray, person_vectors: Sequen
     pooling collapses multi-modal appearance variation (glasses on/off,
     facial hair, pose, lighting) into a single centroid that can sit
     meaningfully further from any one real appearance than the real
-    appearance is from a genuine same-person match â€” a false negative
+    appearance is from a genuine same-person match — a false negative
     against a correctly-enrolled person whenever their live appearance
     diverges from whichever mode dominated their enrollment video.
     Comparing against every stored vector individually and keeping the
@@ -173,7 +173,7 @@ def verify_against_vectors(
     self-verify) rather than scanning a candidate pool. Returns
     (best_similarity, is_match) using the same per-vector max-similarity
     approach as best_match_multi/_max_similarity_to_person, instead of
-    compare_embeddings() against a compute_aggregate_embedding() mean â€”
+    compare_embeddings() against a compute_aggregate_embedding() mean —
     see _max_similarity_to_person's docstring for why the aggregate is
     the wrong comparison for a live 1:1 check against multi-frame
     enrollment vectors. Returns (-1.0, False) for no stored vectors,
@@ -253,12 +253,12 @@ def best_match_multi(
 ) -> tuple[str, float] | None:
     """Like best_match(), but candidates maps candidate_id -> ALL of that
     person's stored enrollment vectors, not one pre-averaged mean. Costs
-    O(total stored vectors) per call instead of O(candidates) â€” negligible
+    O(total stored vectors) per call instead of O(candidates) — negligible
     at hundreds of vectors, which is why recognition_worker still caches
     this per branch and only rebuilds on enrollment changes, same as the
     old aggregate cache did. If a branch's enrollment ever grows into the
     tens of thousands of vectors, this scan should move to an ANN index
-    (e.g. faiss) instead of brute force â€” not a concern at current scale."""
+    (e.g. faiss) instead of brute force — not a concern at current scale."""
     return best_match_multi_prepared(
         test_embedding,
         prepare_multi_candidates(candidates),
@@ -270,7 +270,7 @@ def closest_candidate_multi(
     test_embedding: np.ndarray,
     candidates: dict[str, Sequence[np.ndarray]],
 ) -> tuple[str, float] | None:
-    """Diagnostic-only counterpart to best_match_multi â€” same role as
+    """Diagnostic-only counterpart to best_match_multi — same role as
     closest_candidate() for the multi-vector candidate shape."""
     return closest_candidate_multi_prepared(
         test_embedding,
