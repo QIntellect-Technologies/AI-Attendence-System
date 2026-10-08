@@ -934,32 +934,6 @@ def get_client_staff_attendance_today(
         existing.get('check_out_timestamp') if existing else None,
     )
 
-    try:
-        from support_db_hr_assistant import _monthly_attendance_summary
-        from support_db import get_payroll_policy_for_period
-        from payroll_engine import scheduled_work_dates_for_month
-        
-        today_date = datetime.now(branch_zone).date()
-        month_key = today_date.strftime('%Y-%m')
-        
-        policy = get_payroll_policy_for_period(
-            org_key,
-            today_date.replace(day=1).isoformat(),
-            branch_id=str(branch_id) if branch_id else None,
-            staff_id=staff_key,
-        )
-        working_dates = scheduled_work_dates_for_month(month_key, policy)
-        
-        total_working_days = len(working_dates)
-        working_days_elapsed = len([d for d in working_dates if d <= today_date.isoformat()])
-        
-        summary = _monthly_attendance_summary(org_key, staff_key)
-        present_days = summary.get('present_days', 0)
-    except Exception:
-        working_days_elapsed = 0
-        total_working_days = 0
-        present_days = 0
-
     return {
         'marked': existing is not None,
         'checked_out': bool(existing and existing.get('check_out_timestamp')),
@@ -986,9 +960,6 @@ def get_client_staff_attendance_today(
         ),
         'duration_minutes': duration_minutes,
         'duration_label': duration_label,
-        'working_days_elapsed': working_days_elapsed,
-        'total_working_days': total_working_days,
-        'present_days': present_days,
     }
 
 def _check_action_replay(
@@ -1242,17 +1213,6 @@ def mark_client_staff_attendance(
                 attendance_id=new_id,
                 event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
             )
-        # Always fire the "attendance marked" notification so the admin
-        # dashboard shows real-time check-in activity for every staff member,
-        # not just late arrivals. Soft-fail (exceptions are swallowed inside).
-        _attendance_exceptions.notify_attendance_marked(
-            org_id=org_key, branch_id=branch_id, staff_id=staff_key,
-            staff_name=staff_row.get('name') or 'Staff member',
-            attendance_id=new_id,
-            event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
-            leg='check_in',
-            source=source,
-        )
         return {
             'already_marked': False,
             'checked_out': False,
@@ -1322,15 +1282,6 @@ def mark_client_staff_attendance(
             attendance_id=existing['id'], status=check_out_status,
             event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
         )
-    # Always fire the "attendance marked" notification for check-outs too.
-    _attendance_exceptions.notify_attendance_marked(
-        org_id=org_key, branch_id=branch_id, staff_id=staff_key,
-        staff_name=staff_row.get('name') or 'Staff member',
-        attendance_id=existing['id'],
-        event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
-        leg='check_out',
-        source=source,
-    )
 
     return {
         'already_marked': False,
@@ -1582,15 +1533,6 @@ def mark_field_staff_attendance(
                 # identity/location concerns outrank plain timing ones.
                 reason=row.get('check_in_hold_reason') or 'late',
             )
-        # Always fire the "attendance marked" notification for field check-ins.
-        _attendance_exceptions.notify_attendance_marked(
-            org_id=org_key, branch_id=branch_id, staff_id=staff_key,
-            staff_name=staff_row.get('name') or 'Staff member',
-            attendance_id=new_id,
-            event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
-            leg='check_in',
-            source=source,
-        )
         return {
             'already_marked': False,
             'checked_out': False,
@@ -1670,15 +1612,6 @@ def mark_field_staff_attendance(
             status=checkout_fields.get('check_out_hold_reason') or check_out_status,
             event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
         )
-    # Always fire the "attendance marked" notification for field check-outs.
-    _attendance_exceptions.notify_attendance_marked(
-        org_id=org_key, branch_id=branch_id, staff_id=staff_key,
-        staff_name=staff_row.get('name') or 'Staff member',
-        attendance_id=existing['id'],
-        event_local_str=_attendance_exceptions.local_time_str(event_dt, branch_zone),
-        leg='check_out',
-        source=source,
-    )
 
     return {
         'already_marked': False,

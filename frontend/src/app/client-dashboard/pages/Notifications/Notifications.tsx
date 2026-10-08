@@ -18,8 +18,6 @@ import {
   CheckCheck,
   Clock,
   DollarSign,
-  LogIn,
-  LogOut,
   TimerReset,
   Trash2,
   UserPlus,
@@ -98,8 +96,6 @@ function notificationIcon(
   if (notification.event_type === "leave_applied") return CalendarDays;
   if (notification.event_type === "overtime_applied") return TimerReset;
   if (isPayrollDecisionNotification(notification)) return DollarSign;
-  if (notification.event_type === "attendance.check_in.marked") return LogIn;
-  if (notification.event_type === "attendance.check_out.marked") return LogOut;
   return Bell;
 }
 
@@ -108,8 +104,6 @@ function notificationAccent(notification: DashboardNotification): string {
   if (notification.event_type === "leave_applied") return "#2563eb";
   if (notification.event_type === "overtime_applied") return "#d97706";
   if (isPayrollDecisionNotification(notification)) return "#d97706";
-  if (notification.event_type === "attendance.check_in.marked") return "#16a34a";
-  if (notification.event_type === "attendance.check_out.marked") return "#0891b2";
   return T.navy600;
 }
 
@@ -675,7 +669,7 @@ export default function NotificationsPage() {
               No notifications yet
             </div>
             <div style={{ marginTop: 4, fontSize: 12 }}>
-              Attendance check-ins/outs, leave, overtime, and new employee events will appear here.
+              Leave, overtime, and new employee events will appear here.
             </div>
           </div>
         ) : (
