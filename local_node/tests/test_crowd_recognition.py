@@ -4,10 +4,11 @@ import numpy as np
 import pytest
 
 from local_node import camera_stream_manager, recognition_worker
+from local_node.face_tracker import IMRAN_TRACKER_CONFIG, LEGACY_TRACKER_CONFIG
 
 
-def test_idle_detection_rechecks_at_imran_cadence():
-    assert camera_stream_manager.IDLE_DETECT_INTERVAL_SECONDS == 0.05
+def test_idle_detection_rechecks_at_configured_cadence():
+    assert camera_stream_manager.IDLE_DETECT_INTERVAL_SECONDS == 1.5
 
 
 def test_track_assignment_claims_each_existing_track_once():
@@ -34,7 +35,16 @@ def test_track_assignment_claims_each_existing_track_once():
     assert second_track_id != first_track_id
 
 
-def test_track_assignment_inherits_recent_track_using_imran_lost_iou():
+@pytest.mark.parametrize(
+    ("config", "keeps_id"),
+    [(LEGACY_TRACKER_CONFIG, True), (IMRAN_TRACKER_CONFIG, False)],
+)
+def test_track_assignment_inherits_recent_track_by_profile(
+    monkeypatch,
+    config,
+    keeps_id,
+):
+    monkeypatch.setattr(camera_stream_manager, "ACTIVE_TRACKER_CONFIG", config)
     state = camera_stream_manager._CameraState(
         camera_id="camera-1",
         camera_name="Camera 1",
@@ -50,7 +60,8 @@ def test_track_assignment_inherits_recent_track_using_imran_lost_iou():
         state, (137, 100, 187, 150), 1.5,
     )
 
-    assert track_id == 1
+    assert (track_id == 1) is keeps_id
+    assert track["matched"] is True
     assert track["last_seen"] == 1.5
 
 

@@ -41,7 +41,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, Sequence
 
 import cv2
 import numpy as np
@@ -49,6 +49,11 @@ from local_node.config_store import read_runtime_status, write_runtime_status
 from local_node.logging_config import log_on_change
 from local_node import perf_stats
 from local_node.recognition_engine import detect_and_extract, FaceEngineUnavailableError
+from local_node.face_tracker import (
+    ACTIVE_TRACKER_CONFIG,
+    FaceTrack,
+    FaceTracker,
+)
 from local_node import local_db
 from local_node import shift_gate
 from local_node.attendance_sync_worker import trigger_sync_now
@@ -60,9 +65,6 @@ logger = logging.getLogger(__name__)
 STREAM_FPS_LIMIT = 12
 DUPLICATE_LOG_SECONDS = 30
 RECONNECT_BACKOFF_SECONDS = 5
-TRACK_IOU_MATCH_THRESHOLD = 0.2
-TRACK_MAX_UNSEEN_SECONDS = 2.0
-
 FAILURE_THRESHOLD_BEFORE_FALLBACK = 3     # consecutive open/read failures on the active URL
 PRIMARY_RETRY_INTERVAL_SECONDS = 120       # how often to re-try the local URL while on fallback
 
@@ -239,11 +241,9 @@ MOTION_DIFF_THRESHOLD = 12.0          # cv2.mean() abs diff (0-255 scale) to cou
 # 400x900px figure down to 24x54px. The gate reaches the same verdict; it
 # just stops reading 3.7 million pixels to get there.
 MOTION_DECIMATE_TARGET_EDGE = 192
-# Deliberately shorter than TRACK_MAX_UNSEEN_SECONDS (2.0s) — this is the
-# longest a fully idle (zero-motion) camera ever goes without a real
-# detection pass, so a person who has stopped moving in frame still gets
-# re-detected before their track would otherwise go stale and drop.
-IDLE_DETECT_INTERVAL_SECONDS = 0.05
+# Keep this below each profile's max track age; TrackerConfig validates
+# that relationship so idle cameras re-detect before tracks go stale.
+IDLE_DETECT_INTERVAL_SECONDS = ACTIVE_TRACKER_CONFIG.idle_recheck_seconds
 
 # ── blank/no-signal frame detection ─────────────────────────────────────
 # A successfully decoded frame is not the same thing as a live picture.
@@ -709,6 +709,7 @@ class _CameraState:
     camera_name: str
     camera_location: str
     camera_type: str = "nvr"
+    clock: Callable[[], float] = time.time
     # This camera's business-context tags (see support_db_camera_assignments
     # .py's camera_context_assignments table, synced down via get_node_config
     # -> _local_node_camera_view -> camera_config.normalize_camera). Empty
@@ -750,8 +751,8 @@ class _CameraState:
     viewer_count: int = 0
 
     last_seen_by_person: dict[str, float] = field(default_factory=dict)
-    tracked_faces: dict[int, dict[str, Any]] = field(default_factory=dict)
-    next_track_id: int = 0
+    tracked_faces: dict[int, FaceTrack] = field(default_factory=dict)
+    face_tracker: FaceTracker = field(init=False, repr=False)
     stop_event: threading.Event = field(default_factory=threading.Event)
     reader_thread: threading.Thread | None = None
     processor_thread: threading.Thread | None = None
@@ -786,6 +787,10 @@ class _CameraState:
 
     def __post_init__(self) -> None:
         self.jpeg_ready = threading.Condition(self.jpeg_lock)
+        self.face_tracker = FaceTracker(
+            ACTIVE_TRACKER_CONFIG,
+            self.tracked_faces,
+        )
 
 
 class CameraStreamManager:
@@ -1355,7 +1360,7 @@ class CameraStreamManager:
                 state.stop_event.wait(0.05)
                 continue
 
-            now = time.time()
+            now = state.clock()
             motion_started = perf_stats.now()
             motion = _motion_detected(state, frame)
             perf_stats.record(state.camera_id, "detector.motion_gate", motion_started)
@@ -1408,11 +1413,16 @@ class CameraStreamManager:
             # scales with camera count rather than with faces seen, the
             # cost is lock contention, not the model itself.
             model_started = perf_stats.now()
-            now = time.time()
+            now = state.clock()
+            state.face_tracker.prune(now)
             confirmed_bboxes = [
                 t["bbox"]
-                for tid, t in state.tracked_faces.items()
-                if t.get("matched") and t.get("bbox") and (now - t.get("last_seen", 0)) < 1.0
+                for t in state.tracked_faces.values()
+                if t.get("matched")
+                and t.get("bbox")
+                and t.get("last_embedded_at") is not None
+                and (now - t["last_embedded_at"])
+                < state.face_tracker.config.confirmed_skip_seconds
             ]
             faces = detect_and_extract(frame, skip_bboxes=confirmed_bboxes if confirmed_bboxes else None)
             perf_stats.record(state.camera_id, "detect.model", model_started)
@@ -1462,53 +1472,36 @@ class CameraStreamManager:
             level=logging.DEBUG,
         )
 
-        now = time.time()
+        now = state.clock()
 
-        # Drop tracks not seen recently — otherwise tracked_faces grows
-        # forever and old bboxes could wrongly "claim" a new face via IoU.
-        stale = [tid for tid, t in state.tracked_faces.items() if now - t["last_seen"] > TRACK_MAX_UNSEEN_SECONDS]
-        for tid in stale:
-            del state.tracked_faces[tid]
-
-        for face in faces:
+        # Assign detections together so competing detections claim the
+        # strongest track association before lower-scoring alternatives.
+        track_assignments = self._assign_tracks(state, faces, now, set())
+        for face, (_, track) in zip(faces, track_assignments):
             embedding = face.get("embedding")
             if embedding is None:
-                # This message has no varying content (just the camera id),
-                # so log_on_change logs it once per camera and then stays
-                # silent for good — exactly "show it once, then stop"
-                # rather than "once every embedding" cycle after cycle.
-                log_on_change(
-                    logger, f"no_embedding:{state.camera_id}",
-                    "Camera %s: face detected but no embedding extracted (bad crop/landmarks?)",
-                    state.camera_id,
-                )
+                if not track.get("matched"):
+                    log_on_change(
+                        logger, f"no_embedding:{state.camera_id}",
+                        "Camera %s: face detected but no embedding extracted (bad crop/landmarks?)",
+                        state.camera_id,
+                    )
                 continue
 
+            track["last_embedded_at"] = now
             bbox = face.get("bbox")
-            track_id, track = self._assign_track(state, bbox, now)
 
-            # Skip best_match() ONLY once a track has a CONFIRMED match —
-            # that's the only case where re-matching genuinely adds
-            # nothing, since the same physical face's identity doesn't
-            # change frame to frame. An UNMATCHED track is retried on
-            # every detection pass it's part of, not just its first.
-            #
-            # This used to cache a failed first attempt as permanent
-            # "no match" (see git history / previous revision), on the
-            # theory that best_match() was expensive enough to ration.
-            # It isn't: best_match() is a NumPy cosine-similarity compare
-            # against an already-cached candidate list — no model
-            # inference. The actual expensive step, detect_and_extract(),
-            # already ran above regardless of whether matching happens,
-            # so retrying the comparison here costs next to nothing. What
-            # the old behaviour DID cost: a single poor-quality first
-            # embedding (motion blur or an off-angle while someone is
-            # still walking into frame — exactly the common case) would
-            # permanently blacklist that person for their entire visit,
-            # even though a much better frame of the same face might
-            # arrive a second later. That is what was causing marks to
-            # go missing rather than merely being late.
-            if not track.get("matched"):
+            was_matched = bool(track.get("matched"))
+
+            # Unknown tracks are retried at the selected profile's cadence;
+            # confirmed tracks keep their identity unless profile verification is enabled.
+            last_attempt = track.get("last_match_attempt_at")
+            if not was_matched and not track.get("matched") and (
+                last_attempt is None
+                or now - last_attempt
+                >= state.face_tracker.config.unknown_retry_interval_seconds
+            ):
+                track["last_match_attempt_at"] = now
                 match_started = perf_stats.now()
                 match = best_match(embedding)
                 perf_stats.record(state.camera_id, "detect.best_match", match_started)
@@ -1517,7 +1510,9 @@ class CameraStreamManager:
                     track["matched"] = True
                 else:
                     perf_stats.count(state.camera_id, "detect.match_retry_still_unmatched")
-            else:
+            elif not track.get("matched"):
+                perf_stats.count(state.camera_id, "detect.match_retry_throttled")
+            elif was_matched:
                 perf_stats.count(state.camera_id, "detect.match_served_from_track")
             match = track.get("match")
             if not match:
@@ -1637,81 +1632,25 @@ class CameraStreamManager:
                 })
 
     @staticmethod
-    def _assign_track(state: _CameraState, bbox, now: float) -> tuple[int, dict[str, Any]]:
-        """Match this frame's bbox to an existing track using priority-based association:
-        PRIORITY 1: Match to closest RECOGNIZED / MATCHED active track (prevents flickering).
-        PRIORITY 2: Match to any active track (by IoU or centroid distance).
-        PRIORITY 3: Inherit from recently lost recognized track (<2.0s).
-        PRIORITY 4: Create new track.
-        """
-        x1, y1, x2, y2 = bbox
-        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        bw, bh = x2 - x1, y2 - y1
-        max_dist = max(35.0, max(bw, bh) * 0.8)
+    def _assign_track(
+        state: _CameraState,
+        bbox: Sequence[float],
+        now: float,
+        claimed_ids: set[int] | None = None,
+    ) -> tuple[int, FaceTrack]:
+        """Compatibility wrapper; all association logic lives in FaceTracker."""
+        claims = claimed_ids if claimed_ids is not None else set()
+        return state.face_tracker.assign(bbox, now, claims)
 
-        # PRIORITY 1: Match with closest RECOGNIZED active track
-        best_tid, best_dist = None, float("inf")
-        for tid, t in state.tracked_faces.items():
-            if not t.get("matched"):
-                continue
-            tx1, ty1, tx2, ty2 = t["bbox"]
-            tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
-            dist = np.sqrt((cx - tcx) ** 2 + (cy - tcy) ** 2)
-
-            ix1, iy1 = max(x1, tx1), max(y1, ty1)
-            ix2, iy2 = min(x2, tx2), min(y2, ty2)
-            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-            union = (x2 - x1) * (y2 - y1) + (tx2 - tx1) * (ty2 - ty1) - inter
-            iou = inter / union if union > 0 else 0.0
-
-            if (iou > 0.1 or dist < max_dist) and dist < best_dist:
-                best_dist = dist
-                best_tid = tid
-
-        # PRIORITY 2: Match with any active track by IoU
-        if best_tid is None:
-            best_iou = 0.0
-            for tid, t in state.tracked_faces.items():
-                tx1, ty1, tx2, ty2 = t["bbox"]
-                ix1, iy1 = max(x1, tx1), max(y1, ty1)
-                ix2, iy2 = min(x2, tx2), min(y2, ty2)
-                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-                union = (x2 - x1) * (y2 - y1) + (tx2 - tx1) * (ty2 - ty1) - inter
-                iou = inter / union if union > 0 else 0.0
-                if iou > TRACK_IOU_MATCH_THRESHOLD and iou > best_iou:
-                    best_iou, best_tid = iou, tid
-
-        if best_tid is not None:
-            state.tracked_faces[best_tid]["bbox"] = bbox
-            state.tracked_faces[best_tid]["last_seen"] = now
-            return best_tid, state.tracked_faces[best_tid]
-
-        # PRIORITY 3: Try inheriting from recently lost recognized track
-        best_inherit_tid = None
-        best_inherit_dist = float("inf")
-        for tid, t in state.tracked_faces.items():
-            if not t.get("matched"):
-                continue
-            time_since_seen = now - t["last_seen"]
-            if 0.15 < time_since_seen < TRACK_MAX_UNSEEN_SECONDS:
-                tx1, ty1, tx2, ty2 = t["bbox"]
-                tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
-                dist = np.sqrt((cx - tcx) ** 2 + (cy - tcy) ** 2)
-                if dist < max_dist * 1.5 and dist < best_inherit_dist:
-                    best_inherit_dist = dist
-                    best_inherit_tid = tid
-
-        if best_inherit_tid is not None:
-            state.tracked_faces[best_inherit_tid]["bbox"] = bbox
-            state.tracked_faces[best_inherit_tid]["last_seen"] = now
-            return best_inherit_tid, state.tracked_faces[best_inherit_tid]
-
-        # PRIORITY 4: Create new track
-        tid = state.next_track_id
-        state.next_track_id += 1
-        track = {"bbox": bbox, "last_seen": now, "match": None, "matched": False}
-        state.tracked_faces[tid] = track
-        return tid, track
+    @staticmethod
+    def _assign_tracks(
+        state: _CameraState,
+        faces: Sequence[dict[str, Any]],
+        now: float,
+        claimed_ids: set[int],
+    ) -> list[tuple[int, FaceTrack]]:
+        bboxes = [face["bbox"] for face in faces]
+        return state.face_tracker.assign_many(bboxes, now, claimed_ids)
 
     
     @staticmethod
