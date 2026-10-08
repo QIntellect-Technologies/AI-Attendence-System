@@ -15,6 +15,7 @@
     </base-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">192.168.0.196</domain>
+        <domain includeSubdomains="false">192.168.0.200</domain>
         <domain includeSubdomains="false">10.0.2.2</domain>
     </domain-config>
 </network-security-config>

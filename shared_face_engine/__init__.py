@@ -20,6 +20,7 @@ from shared_face_engine.model_loader import (
 )
 from shared_face_engine.embedding import (
     detect_and_extract,
+    detect_and_extract_live,
     process_video,
 )
 from shared_face_engine.quality import (
@@ -50,6 +51,7 @@ __all__ = [
     "stage_models",
     "unload_model",
     "detect_and_extract",
+    "detect_and_extract_live",
     "process_video",
     "FaceQualityResult",
     "assess_face_quality",

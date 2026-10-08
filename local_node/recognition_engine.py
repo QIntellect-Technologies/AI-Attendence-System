@@ -25,7 +25,7 @@ from local_node.config_store import MODELS_DIR, ensure_app_dirs
 # this ("never reach into submodules directly") specifically so model
 # version/detection params can't drift between consumers.
 from shared_face_engine import MODEL_NAME, get_face_model, is_gpu_enabled
-from shared_face_engine.embedding import detect_and_extract as _shared_detect_and_extract
+from shared_face_engine import detect_and_extract_live as _shared_detect_and_extract
 
 logger = logging.getLogger(__name__)
 
