@@ -102,6 +102,7 @@ import {
 
 import {
   Clock,
+  CalendarDays,
   Loader2,
   UserX,
   UserCheck,
@@ -132,7 +133,7 @@ import ManualAttendanceModal, {
   type ManualAttendanceSubmitValues,
 } from "./ManualAttendanceModal";
 import ModernSelect from "../../components/ui/ModernSelect";
-import StudentWorkingDayCalendar from "./StudentWorkingDayCalendar";
+import WorkingDayCalendar from "./WorkingDayCalendar";
 
 import {
   resolveBranchFromList,
@@ -1507,6 +1508,7 @@ export default function AttendanceView() {
 
   const [apiStaff, setApiStaff] = useState<AttendanceStaff[]>([]);
   const [apiAttendance, setApiAttendance] = useState<ApiAttendance[]>([]);
+  const [showWorkingDayCalendar, setShowWorkingDayCalendar] = useState(false);
   const [payrollWorkingDatesByBranch, setPayrollWorkingDatesByBranch] =
     useState<Map<number, Set<string>>>(() => new Map());
   const [payrollCalendarLoading, setPayrollCalendarLoading] = useState(false);
@@ -1584,6 +1586,14 @@ export default function AttendanceView() {
     data,
     getBranchName,
   } = sources;
+  const workingCalendarBranchId = useMemo(() => {
+    const uiBranchId = branchIdParam
+      ? Number(branchIdParam)
+      : activeBranchId;
+    return uiBranchId ? backendBranchIdForUi(branches, uiBranchId) : null;
+  }, [activeBranchId, branchIdParam, branches]);
+  const showWorkingDayCalendarButton =
+    !isModuleEnabled(cfg.modules, "payroll") && !peopleModel.isStudentScope;
 
   const departmentApiBranchIds = useMemo(
     () =>
@@ -3458,6 +3468,24 @@ export default function AttendanceView() {
           }}
         >
           <DateFilterBar filter={filter} compact maxDate={dateFilterMaxDate} />
+          {showWorkingDayCalendarButton && (
+            <button
+              type="button"
+              aria-expanded={showWorkingDayCalendar}
+              onClick={() =>
+                setShowWorkingDayCalendar((visible) => !visible)
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors"
+              style={{
+                borderColor: T.teal600,
+                color: T.teal600,
+                background: "#fff",
+              }}
+            >
+              <CalendarDays className="h-4 w-4" />
+              {showWorkingDayCalendar ? "Close Working Days" : "Working Days"}
+            </button>
+          )}
           <DynamicFilterToolbar
             sections={attendanceFilterSections}
             mobileOnly
@@ -3537,7 +3565,17 @@ export default function AttendanceView() {
         </div>
       )}
 
-      {isStudentOnlyOrganization && <StudentWorkingDayCalendar />}
+      {isStudentOnlyOrganization && (
+        <WorkingDayCalendar peopleType="student" />
+      )}
+      {showWorkingDayCalendarButton && showWorkingDayCalendar && (
+        <WorkingDayCalendar
+          peopleType="staff"
+          branchId={workingCalendarBranchId}
+          modal
+          onClose={() => setShowWorkingDayCalendar(false)}
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard

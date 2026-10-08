@@ -290,8 +290,8 @@ class _FieldHomeScreenState extends State<FieldHomeScreen> {
             HRChatbotWidget(user: widget.user),
             // ─── Notification Poller ─────────────────────────
             NotificationPoller(
-              department: widget.user.department,
-              staffType: 'field',
+              user: widget.user,
+              onAttendanceDetected: _fetchStats,
             ),
           ],
         ),

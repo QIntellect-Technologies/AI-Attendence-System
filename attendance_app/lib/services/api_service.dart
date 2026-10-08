@@ -772,7 +772,6 @@
 //   }
 // }
 
-
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
@@ -1170,17 +1169,40 @@ class ApiService {
   /// _fetchStats() rely on catching that throw to leave _todayPresent
   /// untouched on failure, rather than reading an empty list as "no
   /// attendance today" and clobbering an already-confirmed check-in.
-  static Future<List<dynamic>> getOfficeAttendance(
-      String token, String name) async {
+  static Future<List<dynamic>> getOfficeAttendance(String token, String name,
+      {int limit = 100}) async {
     final res = await http
         .get(
-          Uri.parse('$baseUrl/api/staff/attendance/history'),
+          Uri.parse('$baseUrl/api/staff/attendance/history')
+              .replace(queryParameters: {'limit': '$limit'}),
           headers: _headers(token),
         )
         .timeout(const Duration(seconds: 15));
     final data = _decodeOrThrow(res);
     if (data is List) return data;
     return (data as Map<String, dynamic>)['logs'] ?? [];
+  }
+
+  /// Configured work dates for one attendance range. The server uses the
+  /// same payroll calendar and joining-date rules as the dashboard.
+  static Future<Map<String, dynamic>> getOfficeAttendanceWorkingDays(
+    String token, {
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    String dateKey(DateTime date) => '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+
+    final uri = Uri.parse('$baseUrl/api/staff/attendance/working-days')
+        .replace(queryParameters: {
+      'start_date': dateKey(startDate),
+      'end_date': dateKey(endDate),
+    });
+    final res = await http
+        .get(uri, headers: _headers(token))
+        .timeout(const Duration(seconds: 15));
+    return _decodeOrThrow(res) as Map<String, dynamic>;
   }
 
   // ===== LEAVE =====
@@ -1227,7 +1249,8 @@ class ApiService {
             'reason': reason,
             'half_day': halfDay,
             if (halfDayPeriod != null) 'half_day_period': halfDayPeriod,
-            if (halfDayStartTime != null) 'half_day_start_time': halfDayStartTime,
+            if (halfDayStartTime != null)
+              'half_day_start_time': halfDayStartTime,
             if (halfDayEndTime != null) 'half_day_end_time': halfDayEndTime,
           }),
         )
@@ -1302,8 +1325,9 @@ class ApiService {
 
     final uri = Uri.parse('$baseUrl/api/staff/leaves/summary')
         .replace(queryParameters: query);
-    final res =
-        await http.get(uri, headers: _headers(token)).timeout(const Duration(seconds: 15));
+    final res = await http
+        .get(uri, headers: _headers(token))
+        .timeout(const Duration(seconds: 15));
     final data = _decodeOrThrow(res);
     return (data as Map<String, dynamic>);
   }

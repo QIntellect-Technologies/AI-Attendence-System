@@ -20,11 +20,14 @@ still-missing surface -- intentionally out of scope here.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, request, g
 
 from client_staff_auth import require_client_staff_auth
 from client_routes_helpers import ok, handle
 import support_db as support_cp_db
+import payroll_engine
 
 client_staff_attendance_bp = Blueprint(
     "client_staff_attendance", __name__, url_prefix="/api/staff/attendance"
@@ -120,5 +123,70 @@ def attendance_history():
             limit=limit,
         )
         return ok({"logs": logs})
+
+    return handle(_run)
+
+
+@client_staff_attendance_bp.route("/working-days", methods=["GET"])
+@require_client_staff_auth
+def attendance_working_days():
+    """Configured payroll working dates for the logged-in staff member."""
+    def _run():
+        try:
+            start = date.fromisoformat(str(request.args.get("start_date") or ""))
+            end = date.fromisoformat(str(request.args.get("end_date") or ""))
+        except ValueError as exc:
+            raise ValueError("start_date and end_date must be YYYY-MM-DD") from exc
+
+        if end < start:
+            raise ValueError("end_date must not be before start_date")
+        if (end.year - start.year) * 12 + end.month - start.month > 25:
+            raise ValueError("Date range cannot exceed 25 calendar months")
+
+        staff = support_cp_db.get_client_staff_member(g.client_staff["id"])
+        join_date_value = str(staff.get("join_date") or "")[:10]
+        join_date = date.fromisoformat(join_date_value) if join_date_value else None
+        if join_date and start < join_date:
+            effective_start = join_date
+        else:
+            effective_start = start
+
+        working_dates = []
+        if effective_start <= end:
+            month_start = date(effective_start.year, effective_start.month, 1)
+            while month_start <= end:
+                month_key = month_start.strftime("%Y-%m")
+                policy = support_cp_db.get_payroll_policy_for_period(
+                    g.client_staff["org_id"],
+                    month_start.isoformat(),
+                    # The profile's branch_id is the dashboard UI-mapped
+                    # value; payroll policy lookup requires the JWT's raw
+                    # backend branch UUID.
+                    branch_id=g.client_staff.get("branch_id"),
+                )
+                working_dates.extend(
+                    day
+                    for day in payroll_engine.scheduled_work_dates_for_month(
+                        month_key,
+                        policy,
+                        people_type=staff.get("people_type") or "staff",
+                    )
+                    if effective_start.isoformat() <= day <= end.isoformat()
+                )
+                month_start = (
+                    date(month_start.year + 1, 1, 1)
+                    if month_start.month == 12
+                    else date(month_start.year, month_start.month + 1, 1)
+                )
+
+        elapsed_end = min(end, date.today())
+        elapsed_working_dates = [
+            day for day in working_dates if day <= elapsed_end.isoformat()
+        ]
+        return ok({
+            "working_dates": working_dates,
+            "elapsed_working_dates": elapsed_working_dates,
+            "join_date": join_date.isoformat() if join_date else None,
+        })
 
     return handle(_run)

@@ -1,20 +1,18 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import '../config/app_config.dart';
+import '../models/user_model.dart';
+import '../services/api_service.dart';
 import '../utils/app_theme.dart';
-
-const String _baseUrl = AppConfig.baseUrl;
+import '../utils/attendance_status.dart';
 
 class NotificationPoller extends StatefulWidget {
-  final String department;
-  final String staffType; // 'field' or 'office'
+  final UserModel user;
+  final Future<void> Function()? onAttendanceDetected;
 
   const NotificationPoller({
     super.key,
-    required this.department,
-    required this.staffType,
+    required this.user,
+    this.onAttendanceDetected,
   });
 
   @override
@@ -24,9 +22,10 @@ class NotificationPoller extends StatefulWidget {
 class _NotificationPollerState extends State<NotificationPoller>
     with SingleTickerProviderStateMixin {
   Timer? _timer;
-  final Set<int> _seenIds = {};
+  final Set<String> _seenIds = {};
   final List<Map<String, dynamic>> _queue = [];
   bool _showing = false;
+  bool _fetching = false;
   late AnimationController _animCtrl;
   late Animation<Offset> _slideAnim;
 
@@ -44,7 +43,9 @@ class _NotificationPollerState extends State<NotificationPoller>
 
     Future.delayed(const Duration(seconds: 3), _fetchNotifications);
     _timer = Timer.periodic(
-        const Duration(seconds: 30), (_) => _fetchNotifications());
+      const Duration(seconds: 10),
+      (_) => _fetchNotifications(),
+    );
   }
 
   @override
@@ -55,28 +56,74 @@ class _NotificationPollerState extends State<NotificationPoller>
   }
 
   Future<void> _fetchNotifications() async {
+    if (!mounted || _fetching) return;
+    _fetching = true;
     try {
-      final url = Uri.parse(
-          '$_baseUrl/api/notifications?department=${widget.department}');
-      final res = await http.get(url).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return;
+      final logs = widget.user.isFieldStaff
+          ? await ApiService.getFieldAttendanceLogs(widget.user.token)
+          : await ApiService.getOfficeAttendance(
+              widget.user.token,
+              widget.user.name,
+            );
+      if (!mounted) return;
 
-      final List data = jsonDecode(res.body);
-      for (final item in data) {
-        final id = item['id'] as int;
-        final dept = item['department'] ?? 'all';
-
-        final isForMe = dept == 'all' ||
-            dept == widget.department ||
-            (dept == widget.staffType);
-
-        if (isForMe && !_seenIds.contains(id)) {
-          _seenIds.add(id);
-          _queue.add(Map<String, dynamic>.from(item));
+      final today = DateTime.now().toIso8601String().substring(0, 10);
+      var attendanceDetected = false;
+      for (final value in logs) {
+        if (value is! Map) continue;
+        final log = Map<String, dynamic>.from(value);
+        final date =
+            (log['date'] ?? log['logDate'] ?? log['log_date'] ?? '').toString();
+        final channel = (log['captureChannel'] ?? log['capture_channel'] ?? '')
+            .toString()
+            .toLowerCase();
+        if (!date.startsWith(today) ||
+            (channel != 'local_node' && channel != 'cloud')) {
+          continue;
         }
+
+        final time = (log['time'] ??
+                log['checkInTime'] ??
+                log['check_in_time'] ??
+                log['timestamp'] ??
+                '')
+            .toString();
+        final id = (log['id'] ?? '$date-$time-$channel').toString();
+        if (!_seenIds.add(id)) continue;
+        attendanceDetected = true;
+
+        final checkInStatus = resolveCheckInStatus(
+          log['checkInStatus'] ?? log['check_in_status'],
+          notes: log['notes'],
+        );
+        final pendingReview =
+            (log['status'] ?? '').toString().toLowerCase() == 'pending review';
+        final statusLabel = checkInStatus == 'late'
+            ? pendingReview
+                ? 'Late check-in. Pending admin review.'
+                : 'Late check-in.'
+            : checkInStatus == 'on_time'
+                ? 'On time.'
+                : checkInStatus == 'early'
+                    ? 'Checked in early.'
+                    : 'Attendance recorded.';
+
+        _queue.add({
+          'title': 'You are marked present',
+          'message': 'Check-in at $time — $statusLabel',
+          'department': 'CCTV',
+          'created_at': time,
+        });
+      }
+      if (attendanceDetected && widget.onAttendanceDetected != null) {
+        unawaited(widget.onAttendanceDetected!());
       }
       _showNext();
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('Failed to check for CCTV attendance: $error');
+    } finally {
+      _fetching = false;
+    }
   }
 
   void _showNext() {
@@ -236,8 +283,8 @@ class _NotificationBannerState extends State<_NotificationBanner> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.teal500
-                                        .withValues(alpha: 0.2),
+                                    color:
+                                        AppTheme.teal500.withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(

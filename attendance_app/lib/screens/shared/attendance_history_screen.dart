@@ -2,17 +2,23 @@ import 'package:flutter/material.dart';
 import '../../models/user_model.dart';
 import '../../services/api_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/attendance_summary.dart';
 import '../../widgets/common_widgets.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   final UserModel user;
   const AttendanceHistoryScreen({super.key, required this.user});
   @override
-  State<AttendanceHistoryScreen> createState() => _AttendanceHistoryScreenState();
+  State<AttendanceHistoryScreen> createState() =>
+      _AttendanceHistoryScreenState();
 }
 
 class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   List<dynamic> _logs = [];
+  Set<String> _workingDates = {};
+  Set<String> _elapsedWorkingDates = {};
+  String? _joiningDate;
+  String? _workingDaysError;
   bool _loading = true;
   String? _error;
   String _selectedPeriod = 'Daily';
@@ -41,10 +47,28 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       final data = widget.user.isFieldStaff
           ? await ApiService.getFieldAttendanceLogs(widget.user.token)
           : await ApiService.getOfficeAttendance(
-              widget.user.token, widget.user.name);
+              widget.user.token, widget.user.name,
+              limit: 500);
+      AttendanceWorkingDays? workingDays;
+      if (widget.user.isOfficeStaff) {
+        final range = _selectedRange();
+        final calendar = await ApiService.getOfficeAttendanceWorkingDays(
+          widget.user.token,
+          startDate: range.$1,
+          endDate: range.$2,
+        );
+        workingDays = AttendanceWorkingDays.fromResponse(
+          calendar,
+          asOf: DateTime.now(),
+        );
+      }
       if (mounted) {
         setState(() {
           _logs = data;
+          _workingDates = workingDays?.scheduledDates ?? {};
+          _elapsedWorkingDates = workingDays?.elapsedDates ?? {};
+          _joiningDate = workingDays?.joinDate;
+          _workingDaysError = null;
           _error = null;
           _loading = false;
         });
@@ -81,27 +105,45 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   }
 
   String _dateOf(Map log) =>
-      _pick<String>(log, ['date', 'logDate', 'log_date', 'attendanceDate', 'attendance_date']) ??
-      (_pick<String>(log, ['timestamp', 'checkIn', 'check_in', 'createdAt', 'created_at'])
-              ?.split('T')
-              .first ??
+      _pick<String>(log, [
+        'date',
+        'logDate',
+        'log_date',
+        'attendanceDate',
+        'attendance_date'
+      ]) ??
+      (_pick<String>(log, [
+            'timestamp',
+            'checkIn',
+            'check_in',
+            'createdAt',
+            'created_at'
+          ])?.split('T').first ??
           'N/A');
 
   String? _checkInOf(Map log) => _pick<String>(
       log, ['checkInTime', 'check_in_time', 'checkIn', 'check_in', 'time']);
 
-  String? _checkOutOf(Map log) =>
-      _pick<String>(log, ['checkOutTime', 'check_out_time', 'checkOut', 'check_out']);
+  String? _checkOutOf(Map log) => _pick<String>(
+      log, ['checkOutTime', 'check_out_time', 'checkOut', 'check_out']);
 
-  String? _durationOf(Map log) => _pick<String>(
-      log, ['workDuration', 'work_duration', 'duration', 'durationLabel', 'duration_label']);
+  String? _durationOf(Map log) => _pick<String>(log, [
+        'workDuration',
+        'work_duration',
+        'duration',
+        'durationLabel',
+        'duration_label'
+      ]);
 
   String _statusOf(Map log) {
-    if (log['check_in_hold_reason'] != null || log['checkInHoldReason'] != null ||
-        log['check_out_hold_reason'] != null || log['checkOutHoldReason'] != null) {
+    if (log['check_in_hold_reason'] != null ||
+        log['checkInHoldReason'] != null ||
+        log['check_out_hold_reason'] != null ||
+        log['checkOutHoldReason'] != null) {
       return 'Pending Review';
     }
-    return _pick<String>(log, ['status', 'dayStatus', 'day_status', 'type']) ?? 'Present';
+    return _pick<String>(log, ['status', 'dayStatus', 'day_status', 'type']) ??
+        'Present';
   }
 
   String? _notesOf(Map log) => _pick<String>(log, ['notes']);
@@ -151,8 +193,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                     fontSize: 18)),
             const SizedBox(height: 4),
             Text(label,
-                style: const TextStyle(
-                    color: AppTheme.mutedText, fontSize: 12)),
+                style:
+                    const TextStyle(color: AppTheme.mutedText, fontSize: 12)),
           ],
         ),
       ),
@@ -165,7 +207,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       if (date == null) return false;
       if (_selectedPeriod == 'Custom') {
         if (_customStartDate == null || _customEndDate == null) return true;
-        return !date.isBefore(_customStartDate!) && !date.isAfter(_customEndDate!);
+        return !date.isBefore(_customStartDate!) &&
+            !date.isAfter(_customEndDate!);
       }
       final start = _rangeStart(_selectedDate);
       final end = _rangeEnd(_selectedDate);
@@ -174,17 +217,27 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   }
 
   int get _presentCount {
-    return _filteredLogs.where((log) => _statusOf(log).toLowerCase() == 'present').length;
+    return _summary.presentDays;
   }
 
   int get _absentCount {
-    return _filteredLogs.where((log) => _statusOf(log).toLowerCase() == 'absent').length;
+    return _summary.absentDays;
   }
+
+  int get _lateCount => _summary.lateDays;
+
+  AttendanceSummary get _summary => AttendanceSummary.fromLogs(
+        _filteredLogs,
+        _workingDates,
+        elapsedWorkingDates: _elapsedWorkingDates,
+      );
 
   int get _leaveCount {
     return _filteredLogs.where((log) {
       final status = _statusOf(log).toLowerCase();
-      return status.contains('leave') || status.contains('half day') || status.contains('half_day');
+      return status.contains('leave') ||
+          status.contains('half day') ||
+          status.contains('half_day');
     }).length;
   }
 
@@ -204,9 +257,50 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       case 'Weekly':
         return date.add(Duration(days: 7 - date.weekday));
       case 'Monthly':
-        return DateTime(date.year, date.month + 1, 1).subtract(const Duration(days: 1));
+        return DateTime(date.year, date.month + 1, 1)
+            .subtract(const Duration(days: 1));
       default:
         return DateTime(date.year, date.month, date.day, 23, 59, 59);
+    }
+  }
+
+  (DateTime, DateTime) _selectedRange() {
+    if (_selectedPeriod == 'Custom') {
+      final today = DateTime.now();
+      return (
+        _customStartDate ?? DateTime(today.year, today.month, 1),
+        _customEndDate ?? today,
+      );
+    }
+    return (_rangeStart(_selectedDate), _rangeEnd(_selectedDate));
+  }
+
+  Future<void> _refreshWorkingDays() async {
+    if (!widget.user.isOfficeStaff) return;
+    try {
+      final range = _selectedRange();
+      final calendar = await ApiService.getOfficeAttendanceWorkingDays(
+        widget.user.token,
+        startDate: range.$1,
+        endDate: range.$2,
+      );
+      final workingDays = AttendanceWorkingDays.fromResponse(
+        calendar,
+        asOf: DateTime.now(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _workingDates = workingDays.scheduledDates;
+        _elapsedWorkingDates = workingDays.elapsedDates;
+        _joiningDate = workingDays.joinDate;
+        _workingDaysError = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _workingDaysError = 'Could not load configured working days.';
+        });
+      }
     }
   }
 
@@ -216,8 +310,18 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
 
   String _formatMonth(DateTime date) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
     return '${months[date.month - 1]} ${date.year}';
   }
@@ -296,7 +400,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       return DateTime.parse(value);
     } catch (_) {
       final normalized = value.replaceAll('/', '-');
-      final isoMatch = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(normalized);
+      final isoMatch =
+          RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(normalized);
       if (isoMatch != null) {
         return DateTime(
           int.parse(isoMatch.group(1)!),
@@ -304,7 +409,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           int.parse(isoMatch.group(3)!),
         );
       }
-      final dmyMatch = RegExp(r'^(\d{1,2})-(\d{1,2})-(\d{4})').firstMatch(normalized);
+      final dmyMatch =
+          RegExp(r'^(\d{1,2})-(\d{1,2})-(\d{4})').firstMatch(normalized);
       if (dmyMatch != null) {
         return DateTime(
           int.parse(dmyMatch.group(3)!),
@@ -334,6 +440,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
       _draftStartDate = null;
       _draftEndDate = null;
     });
+    _refreshWorkingDays();
   }
 
   Future<void> _openFilterPanel() async {
@@ -358,7 +465,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                       margin: const EdgeInsets.only(top: 80),
                       decoration: const BoxDecoration(
                         color: AppTheme.surface,
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                        borderRadius:
+                            BorderRadius.vertical(top: Radius.circular(24)),
                       ),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -406,16 +514,20 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                               spacing: 8,
                               runSpacing: 8,
                               children: [
-                                _periodChoiceInSheet('Daily', _draftPeriod, (value) {
+                                _periodChoiceInSheet('Daily', _draftPeriod,
+                                    (value) {
                                   setSheetState(() => _draftPeriod = value);
                                 }),
-                                _periodChoiceInSheet('Weekly', _draftPeriod, (value) {
+                                _periodChoiceInSheet('Weekly', _draftPeriod,
+                                    (value) {
                                   setSheetState(() => _draftPeriod = value);
                                 }),
-                                _periodChoiceInSheet('Monthly', _draftPeriod, (value) {
+                                _periodChoiceInSheet('Monthly', _draftPeriod,
+                                    (value) {
                                   setSheetState(() => _draftPeriod = value);
                                 }),
-                                _periodChoiceInSheet('Custom', _draftPeriod, (value) {
+                                _periodChoiceInSheet('Custom', _draftPeriod,
+                                    (value) {
                                   setSheetState(() => _draftPeriod = value);
                                 }),
                               ],
@@ -429,14 +541,19 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                       onTap: () async {
                                         final picked = await showDatePicker(
                                           context: context,
-                                          initialDate: _draftStartDate ?? _draftDate,
-                                          firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                                          initialDate:
+                                              _draftStartDate ?? _draftDate,
+                                          firstDate: DateTime.now().subtract(
+                                              const Duration(days: 365)),
+                                          lastDate: DateTime.now()
+                                              .add(const Duration(days: 365)),
                                         );
                                         if (picked != null) {
                                           setSheetState(() {
                                             _draftStartDate = picked;
-                                            if (_draftEndDate != null && _draftEndDate!.isBefore(picked)) {
+                                            if (_draftEndDate != null &&
+                                                _draftEndDate!
+                                                    .isBefore(picked)) {
                                               _draftEndDate = picked;
                                             }
                                           });
@@ -444,7 +561,9 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                       },
                                       child: _dateBox(
                                         label: 'Start date',
-                                        value: _draftStartDate != null ? _formatDate(_draftStartDate!) : 'Select start date',
+                                        value: _draftStartDate != null
+                                            ? _formatDate(_draftStartDate!)
+                                            : 'Select start date',
                                       ),
                                     ),
                                   ),
@@ -454,17 +573,24 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                       onTap: () async {
                                         final picked = await showDatePicker(
                                           context: context,
-                                          initialDate: _draftEndDate ?? _draftStartDate ?? _draftDate,
-                                          firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                                          initialDate: _draftEndDate ??
+                                              _draftStartDate ??
+                                              _draftDate,
+                                          firstDate: DateTime.now().subtract(
+                                              const Duration(days: 365)),
+                                          lastDate: DateTime.now()
+                                              .add(const Duration(days: 365)),
                                         );
                                         if (picked != null) {
-                                          setSheetState(() => _draftEndDate = picked);
+                                          setSheetState(
+                                              () => _draftEndDate = picked);
                                         }
                                       },
                                       child: _dateBox(
                                         label: 'End date',
-                                        value: _draftEndDate != null ? _formatDate(_draftEndDate!) : 'Select end date',
+                                        value: _draftEndDate != null
+                                            ? _formatDate(_draftEndDate!)
+                                            : 'Select end date',
                                       ),
                                     ),
                                   ),
@@ -476,8 +602,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                   final picked = await showDatePicker(
                                     context: context,
                                     initialDate: _draftDate,
-                                    firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                                    firstDate: DateTime.now()
+                                        .subtract(const Duration(days: 365)),
+                                    lastDate: DateTime.now()
+                                        .add(const Duration(days: 365)),
                                   );
                                   if (picked != null) {
                                     setSheetState(() => _draftDate = picked);
@@ -496,8 +624,10 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                     onPressed: () => Navigator.pop(ctx),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: AppTheme.headText,
-                                      side: const BorderSide(color: AppTheme.borderColor),
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      side: const BorderSide(
+                                          color: AppTheme.borderColor),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 12),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
@@ -516,11 +646,13 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                                         _customEndDate = _draftEndDate;
                                       });
                                       Navigator.pop(ctx);
+                                      _refreshWorkingDays();
                                     },
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: AppTheme.primary,
                                       foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 12),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
@@ -563,7 +695,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           const SizedBox(height: 6),
           Row(
             children: [
-              const Icon(Icons.calendar_today, size: 16, color: AppTheme.mutedText),
+              const Icon(Icons.calendar_today,
+                  size: 16, color: AppTheme.mutedText),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -578,7 +711,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     );
   }
 
-  Widget _periodChoiceInSheet(String period, String selected, void Function(String) onTap) {
+  Widget _periodChoiceInSheet(
+      String period, String selected, void Function(String) onTap) {
     final isSelected = selected == period;
     return GestureDetector(
       onTap: () => onTap(period),
@@ -587,7 +721,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
         decoration: BoxDecoration(
           color: isSelected ? AppTheme.primary : AppTheme.slate50,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: isSelected ? AppTheme.primary : AppTheme.borderColor),
+          border: Border.all(
+              color: isSelected ? AppTheme.primary : AppTheme.borderColor),
         ),
         child: Text(
           period,
@@ -614,12 +749,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           icon: const Icon(Icons.tune, size: 18),
           label: Text(hasActiveFilters ? 'Filters Applied' : 'Filter'),
           style: OutlinedButton.styleFrom(
-            foregroundColor: hasActiveFilters ? AppTheme.primary : AppTheme.headText,
+            foregroundColor:
+                hasActiveFilters ? AppTheme.primary : AppTheme.headText,
             side: BorderSide(
               color: hasActiveFilters ? AppTheme.primary : AppTheme.borderColor,
             ),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999)),
           ),
         ),
       ),
@@ -640,31 +777,99 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: AppTheme.accent))
+          ? const Center(
+              child: CircularProgressIndicator(color: AppTheme.accent))
           : RefreshIndicator(
               color: AppTheme.accent,
               onRefresh: () => _load(showSpinner: false),
               child: _error != null
                   ? _messageState(Icons.error_outline, _error!, isError: true)
-                  : _logs.isEmpty
-                      ? _messageState(
-                          Icons.event_busy, 'No attendance records found.')
-                      : ListView(
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            _buildFilterButton(),
-                            const SizedBox(height: 8),
-                            if (_filteredLogs.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 24),
-                                child: Center(
-                                  child: Text('No records match the selected filters.',
-                                      style: TextStyle(color: AppTheme.mutedText)),
+                  : ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        _buildFilterButton(),
+                        const SizedBox(height: 8),
+                        if (widget.user.isOfficeStaff) ...[
+                          if (_workingDaysError != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                _workingDaysError!,
+                                style: const TextStyle(
+                                  color: AppTheme.error,
+                                  fontSize: 12,
                                 ),
-                              )
-                            else ..._filteredLogs.map(_logCard),
+                              ),
+                            )
+                          else ...[
+                            Row(children: [
+                              _statCard(
+                                Icons.check_circle_outline,
+                                '$_presentCount',
+                                'Present',
+                                AppTheme.accent,
+                              ),
+                              const SizedBox(width: 8),
+                              _statCard(
+                                Icons.cancel_outlined,
+                                '$_absentCount',
+                                'Absent',
+                                AppTheme.error,
+                              ),
+                              const SizedBox(width: 8),
+                              _statCard(
+                                Icons.schedule,
+                                '$_lateCount',
+                                'Late',
+                                AppTheme.warning,
+                              ),
+                              const SizedBox(width: 8),
+                              _statCard(
+                                Icons.calendar_month,
+                                '${_workingDates.length}',
+                                'Work Days',
+                                AppTheme.primary,
+                              ),
+                            ]),
+                            if (_joiningDate != null &&
+                                _joiningDate!.isNotEmpty)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    'Working days from $_joiningDate',
+                                    style: const TextStyle(
+                                      color: AppTheme.mutedText,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
-                        ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_logs.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(
+                              child: Text('No attendance records found.',
+                                  style: TextStyle(color: AppTheme.mutedText)),
+                            ),
+                          )
+                        else if (_filteredLogs.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(
+                              child: Text(
+                                  'No records match the selected filters.',
+                                  style: TextStyle(color: AppTheme.mutedText)),
+                            ),
+                          )
+                        else
+                          ..._filteredLogs.map(_logCard),
+                      ],
+                    ),
             ),
     );
   }
@@ -707,7 +912,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     final pending = status == 'Pending Review';
     final color = pending
         ? AppTheme.warning
-        : (status.toLowerCase() == 'half_day' || status.toLowerCase() == 'half day')
+        : (status.toLowerCase() == 'half_day' ||
+                status.toLowerCase() == 'half day')
             ? AppTheme.warning
             : AppTheme.accent;
     final checkIn = _checkInOf(log);
@@ -770,8 +976,8 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
                 if (channel != null) ...[
                   const SizedBox(width: 10),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: AppTheme.slate50,
                       borderRadius: BorderRadius.circular(20),

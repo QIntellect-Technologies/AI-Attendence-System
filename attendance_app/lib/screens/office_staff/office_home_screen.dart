@@ -1783,6 +1783,8 @@ import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/offline_queue_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/attendance_status.dart';
+import '../../utils/attendance_summary.dart';
 import '../../widgets/hr_chatbot_widget.dart';
 import '../../widgets/notification_widget.dart';
 import '../auth/login_screen.dart';
@@ -1809,6 +1811,9 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
   int _presentDays = 0;
   int _absentDays = 0;
   int _attendanceRate = 0;
+  int _lateDays = 0;
+  int _totalWorkingDays = 0;
+  String? _attendanceStatsError;
   bool _todayPresent = false;
 
   // True until the very first _fetchAll() resolves. While true, the today
@@ -2196,24 +2201,41 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
 
   Future<void> _fetchStats() async {
     try {
-      final logs = await ApiService.getOfficeAttendance(
-          widget.user.token, widget.user.name);
+      final now = DateTime.now();
+      final results = await Future.wait([
+        ApiService.getOfficeAttendance(widget.user.token, widget.user.name),
+        ApiService.getOfficeAttendanceWorkingDays(
+          widget.user.token,
+          startDate: DateTime(now.year, now.month, 1),
+          endDate: DateTime(now.year, now.month + 1, 0),
+        ),
+      ]);
       if (!mounted) return;
-      final uniqueDates = <String>{};
-      for (final r in logs) {
-        if (r['date'] != null) uniqueDates.add(r['date'].toString());
-      }
-      final present = uniqueDates.length;
-      const total = 22;
+      final logs = results[0] as List<dynamic>;
+      final calendar = results[1] as Map<String, dynamic>;
+      final workingDays = AttendanceWorkingDays.fromResponse(
+        calendar,
+        asOf: now,
+      );
+      final summary = AttendanceSummary.fromLogs(
+        logs,
+        workingDays.scheduledDates,
+        elapsedWorkingDates: workingDays.elapsedDates,
+      );
       final today = DateTime.now().toIso8601String().split('T')[0];
       final todayRec = logs.cast<Map<String, dynamic>?>().firstWhere(
             (r) => (r?['date'] ?? '').toString().startsWith(today),
             orElse: () => null,
           );
       setState(() {
-        _presentDays = present;
-        _absentDays = (total - present).clamp(0, total);
-        _attendanceRate = total > 0 ? ((present / total) * 100).round() : 0;
+        _presentDays = summary.presentDays;
+        _absentDays = summary.absentDays;
+        _attendanceRate = summary.elapsedWorkingDays > 0
+            ? ((summary.presentDays / summary.elapsedWorkingDays) * 100).round()
+            : 0;
+        _lateDays = summary.lateDays;
+        _totalWorkingDays = summary.totalWorkingDays;
+        _attendanceStatsError = null;
         if (todayRec != null) {
           // Server se confirm ho gaya — cached present clear karo
           _todayCachedPresent = false;
@@ -2224,7 +2246,14 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
         _todayOutTime = todayRec?['outTime'] ?? '';
         _todayDuration = todayRec?['workDuration'] ?? 'In Progress';
       });
-    } catch (_) {}
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _attendanceStatsError =
+              'Could not load configured working days: $error';
+        });
+      }
+    }
   }
 
   Future<void> _fetchLeaves() async {
@@ -2624,8 +2653,10 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
             ),
             HRChatbotWidget(user: widget.user),
             NotificationPoller(
-              department: widget.user.department,
-              staffType: 'office',
+              user: widget.user,
+              onAttendanceDetected: () async {
+                await Future.wait([_fetchStats(), _fetchTodayStatus()]);
+              },
             ),
           ],
         ),
@@ -2780,6 +2811,16 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
         _buildTodayStatus(),
         const SizedBox(height: 10),
         _buildStatsRow(),
+        const SizedBox(height: 8),
+        _buildConfiguredDaysRow(),
+        if (_attendanceStatsError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              _attendanceStatsError!,
+              style: const TextStyle(color: AppTheme.error, fontSize: 12),
+            ),
+          ),
         const SizedBox(height: 10),
         _buildLeaveStats(),
         const SizedBox(height: 10),
@@ -3000,7 +3041,8 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: _green.withValues(alpha: 0.3)),
                 ),
-                child: Text(_checkInStatus == 'early' ? 'EARLY' : 'ON TIME',
+                child: Text(
+                    checkInStatusLabel(_checkInStatus, notes: _todayNotes),
                     style: const TextStyle(
                         color: _green,
                         fontSize: 10,
@@ -3344,6 +3386,17 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
       _statCard(Icons.cancel_outlined, '$_absentDays', 'Absent', _red),
       const SizedBox(width: 8),
       _statCard(Icons.bar_chart_rounded, '$_attendanceRate%', 'Rate', _indigo),
+    ]);
+  }
+
+  Widget _buildConfiguredDaysRow() {
+    return Row(children: [
+      _statCard(Icons.schedule, '$_lateDays', 'Late', _amber),
+      const SizedBox(width: 8),
+      _statCard(
+          Icons.calendar_month, '$_totalWorkingDays', 'Work Days', _indigo),
+      const SizedBox(width: 8),
+      const Expanded(child: SizedBox.shrink()),
     ]);
   }
 
