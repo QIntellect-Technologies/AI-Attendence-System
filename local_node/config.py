@@ -44,6 +44,12 @@ YOLO_MODEL = "yolov8n.pt"
 INSIGHTFACE_MODEL = "buffalo_l"
 FACE_DETECTION_CONFIDENCE = 0.42
 FACE_MATCHING_THRESHOLD = 0.40
+MATCH_STRATEGY = os.getenv("QINTELLECT_MATCH_STRATEGY", "per_vector").strip().lower()
+if MATCH_STRATEGY not in {"per_vector", "centroid"}:
+    raise ValueError(
+        "QINTELLECT_MATCH_STRATEGY must be 'per_vector' or 'centroid'; "
+        f"got {MATCH_STRATEGY!r}"
+    )
 FACE_QUALITY_THRESHOLD = 0.7
 MIN_EMBEDDINGS_PER_USER = 5
 

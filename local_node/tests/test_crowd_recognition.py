@@ -114,44 +114,43 @@ def test_best_match_uses_imran_default_and_keeps_explicit_override(
     configured_threshold,
     expected_threshold,
 ):
-    seen_thresholds = []
+    seen_calls = []
     monkeypatch.setattr(
         recognition_worker,
-        "load_config",
+        "_runtime_config",
         lambda: {
             "branch_id": "branch-1",
             "match_threshold": configured_threshold,
         },
     )
-    monkeypatch.setattr(recognition_worker, "_cached_branch_id", "branch-1")
-    monkeypatch.setattr(
-        recognition_worker,
-        "_cached_candidates",
-        {"staff::001": [np.ones(2, dtype=np.float32)]},
-    )
-    monkeypatch.setattr(recognition_worker, "_cached_prepared", None)
-    monkeypatch.setattr(
-        recognition_worker,
-        "_cached_meta",
-        {
-            "staff::001": {
+    monkeypatch.setattr(recognition_worker, "MATCH_STRATEGY", "per_vector")
+
+    def ensure_cache(_branch_id):
+        return (
+            {"staff::001": [np.ones(2, dtype=np.float32)]},
+            None,
+            None,
+            {
+                "staff::001": {
                 "people_type": "staff",
                 "person_code": "001",
                 "full_name": "Staff One",
                 "department_id": "",
                 "class_id": "",
                 "section_id": "",
-            }
-        },
-    )
+                }
+            },
+        )
 
-    def match(_embedding, _prepared, *, threshold):
-        seen_thresholds.append(threshold)
+    monkeypatch.setattr(recognition_worker, "_ensure_cache", ensure_cache)
+
+    def closest(_embedding, _prepared):
+        seen_calls.append(True)
         return "staff::001", 0.5
 
-    monkeypatch.setattr(recognition_worker, "_shared_best_match", match)
+    monkeypatch.setattr(recognition_worker, "_shared_closest_candidate", closest)
 
     result = recognition_worker.best_match(np.ones(2, dtype=np.float32))
 
-    assert result is not None
-    assert seen_thresholds == [expected_threshold]
+    assert (result is not None) is (expected_threshold == 0.40)
+    assert seen_calls == [True]

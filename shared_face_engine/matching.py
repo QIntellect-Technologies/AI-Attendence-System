@@ -22,12 +22,13 @@ in shared_face_engine vs. face_processor.py did.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 DEFAULT_MATCH_THRESHOLD = 0.60
+EMBEDDING_DIM = 512
 # Ignore embeddings whose norm is effectively zero before normalization.
 AGGREGATE_VECTOR_MIN_NORM = 1e-6
 # Stabilize normalization of a centroid, matching the existing reference.
@@ -43,6 +44,14 @@ AGGREGATE_OUTLIER_MIN_KEEP = 3
 @dataclass(frozen=True)
 class PreparedMultiCandidates:
     """Normalized enrollment matrix and owner key for multi-vector matching."""
+
+    matrix: np.ndarray
+    owner_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CentroidIndex:
+    """One normalized aggregate embedding row per owner."""
 
     matrix: np.ndarray
     owner_ids: tuple[str, ...]
@@ -82,6 +91,98 @@ def compute_aggregate_embedding(
             )
 
     return centroid
+
+
+def build_centroid_index(
+    vectors_by_owner: Mapping[str, Sequence[ArrayLike] | np.ndarray],
+) -> tuple[CentroidIndex | None, list[str]]:
+    """Build an ordered centroid matrix and return owners with unusable data."""
+    matrix_rows: list[np.ndarray] = []
+    owner_ids: list[str] = []
+    skipped_owner_ids: list[str] = []
+
+    for owner_id, vectors in vectors_by_owner.items():
+        try:
+            vector_rows = [np.asarray(vector, dtype=np.float32) for vector in vectors]
+            if not vector_rows:
+                skipped_owner_ids.append(owner_id)
+                continue
+            if any(vector.shape != (EMBEDDING_DIM,) for vector in vector_rows):
+                skipped_owner_ids.append(owner_id)
+                continue
+            stacked = np.stack(vector_rows, axis=0)
+            if not np.isfinite(stacked).all():
+                skipped_owner_ids.append(owner_id)
+                continue
+            centroid = compute_aggregate_embedding(stacked)
+        except (TypeError, ValueError, OverflowError):
+            skipped_owner_ids.append(owner_id)
+            continue
+
+        if centroid is None:
+            skipped_owner_ids.append(owner_id)
+            continue
+
+        norm = np.linalg.norm(centroid)
+        if not np.isfinite(norm) or norm <= AGGREGATE_VECTOR_MIN_NORM:
+            skipped_owner_ids.append(owner_id)
+            continue
+        matrix_rows.append(np.asarray(centroid / norm, dtype=np.float32))
+        owner_ids.append(owner_id)
+
+    index = (
+        CentroidIndex(
+            np.stack(matrix_rows).astype(np.float32, copy=False),
+            tuple(owner_ids),
+        )
+        if matrix_rows
+        else None
+    )
+    return index, skipped_owner_ids
+
+
+def _centroid_similarities(
+    query: ArrayLike,
+    index: CentroidIndex | None,
+) -> np.ndarray | None:
+    if index is None or not index.owner_ids:
+        return None
+
+    normalized_query = np.asarray(query, dtype=np.float32)
+    if normalized_query.shape != (index.matrix.shape[1],):
+        return None
+    if not np.isfinite(normalized_query).all():
+        return None
+
+    norm = np.linalg.norm(normalized_query)
+    if not np.isfinite(norm) or norm <= AGGREGATE_VECTOR_MIN_NORM:
+        return None
+    normalized_query = normalized_query / norm
+    return index.matrix @ normalized_query
+
+
+def closest_centroid(
+    query: ArrayLike,
+    index: CentroidIndex | None,
+) -> tuple[str, float] | None:
+    """Return the highest-scoring indexed owner without applying a threshold."""
+    similarities = _centroid_similarities(query, index)
+    if similarities is None:
+        return None
+    best_row = int(np.argmax(similarities))
+    return index.owner_ids[best_row], float(similarities[best_row])
+
+
+def match_centroid(
+    query: ArrayLike,
+    index: CentroidIndex | None,
+    threshold: float,
+) -> tuple[str, float] | None:
+    """Return the highest-scoring centroid owner when its score meets threshold."""
+    closest = closest_centroid(query, index)
+    if closest is None or closest[1] < threshold:
+        return None
+    return closest
 
 
 def compare_embeddings(
