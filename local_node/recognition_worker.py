@@ -269,7 +269,7 @@ def best_match(test_embedding: Any, threshold: float | None = None) -> dict[str,
 
     matched_key, similarity = result
     info = meta[matched_key]
-    logger.info(
+    logger.debug(
         "recognition_worker.best_match: MATCH %s:%s (%s) similarity=%.4f threshold=%.2f",
         info["people_type"], info["person_code"], info.get("full_name") or "?", similarity, min_score,
     )

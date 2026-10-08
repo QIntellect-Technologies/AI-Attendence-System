@@ -53,6 +53,7 @@ from local_node.face_tracker import (
     ACTIVE_TRACKER_CONFIG,
     FaceTrack,
     FaceTracker,
+    verify_identity,
 )
 from local_node import local_db
 from local_node import shift_gate
@@ -1476,7 +1477,13 @@ class CameraStreamManager:
 
         # Assign detections together so competing detections claim the
         # strongest track association before lower-scoring alternatives.
+        assign_started = perf_stats.now()
         track_assignments = self._assign_tracks(state, faces, now, set())
+        perf_stats.record(
+            state.camera_id,
+            "detect.track_assign",
+            assign_started,
+        )
         for face, (_, track) in zip(faces, track_assignments):
             embedding = face.get("embedding")
             if embedding is None:
@@ -1492,6 +1499,63 @@ class CameraStreamManager:
             bbox = face.get("bbox")
 
             was_matched = bool(track.get("matched"))
+            if was_matched and state.face_tracker.config.reverify_misses_to_drop > 0:
+                match_started = perf_stats.now()
+                verification_match = best_match(embedding)
+                perf_stats.record(
+                    state.camera_id,
+                    "detect.reverify",
+                    match_started,
+                )
+                verdict = verify_identity(
+                    track,
+                    verification_match,
+                    state.face_tracker.config,
+                )
+                if verdict == "confirmed":
+                    perf_stats.count(state.camera_id, "detect.reverify_confirmed")
+                    track["match"] = verification_match
+                    track["reverify_misses"] = 0
+                else:
+                    expected = track.get("match") or {}
+                    expected_key = (
+                        f'{expected.get("people_type")}:{expected.get("person_code")}'
+                    )
+                    seen_key = (
+                        f'{verification_match["people_type"]}:'
+                        f'{verification_match["person_code"]}'
+                        if verification_match
+                        else "no match"
+                    )
+                    log_on_change(
+                        logger,
+                        (
+                            f"reverify:{state.camera_id}:{track.get('id')}:"
+                            f"{expected_key}:{seen_key}"
+                        ),
+                        (
+                            "Camera %s: identity re-verification %s for track %s; "
+                            "expected %s, saw %s"
+                        ),
+                        state.camera_id,
+                        verdict,
+                        track.get("id"),
+                        expected_key,
+                        seen_key,
+                        level=logging.WARNING,
+                    )
+                if verdict == "unconfirmed":
+                    perf_stats.count(state.camera_id, "detect.reverify_unconfirmed")
+                    track["reverify_misses"] = track.get("reverify_misses", 0) + 1
+                    continue
+                if verdict == "dropped":
+                    perf_stats.count(state.camera_id, "detect.reverify_dropped")
+                    track["matched"] = False
+                    track["match"] = None
+                    track["reverify_misses"] = 0
+                    track["last_match_attempt_at"] = None
+                    track["last_embedded_at"] = None
+                    continue
 
             # Unknown tracks are retried at the selected profile's cadence;
             # confirmed tracks keep their identity unless profile verification is enabled.

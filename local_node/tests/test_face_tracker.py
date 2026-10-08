@@ -10,6 +10,7 @@ from local_node.face_tracker import (
     LEGACY_TRACKER_CONFIG,
     FaceTracker,
     _iou,
+    verify_identity,
 )
 
 
@@ -234,8 +235,44 @@ def test_tracker_config_rejects_idle_interval_at_or_above_max_age():
     with pytest.raises(ValueError, match="idle_recheck_seconds"):
         replace(LEGACY_TRACKER_CONFIG, idle_recheck_seconds=2.0)
 
+    with pytest.raises(ValueError, match="reverify_misses_to_drop"):
+        replace(IMRAN_TRACKER_CONFIG, reverify_misses_to_drop=-1)
+
     with pytest.raises(ValueError, match="velocity_max_gap_seconds"):
         replace(IMRAN_TRACKER_CONFIG, velocity_max_gap_seconds=-0.1)
+
+
+@pytest.mark.parametrize(
+    ("track", "new_match", "expected"),
+    [
+        (
+            {"match": {"people_type": "staff", "person_code": "1"}, "reverify_misses": 1},
+            {"people_type": "staff", "person_code": "1", "confidence": 0.9},
+            "confirmed",
+        ),
+        (
+            {"match": {"people_type": "staff", "person_code": "1"}, "reverify_misses": 0},
+            None,
+            "unconfirmed",
+        ),
+        (
+            {"match": {"people_type": "staff", "person_code": "1"}, "reverify_misses": 0},
+            {"people_type": "staff", "person_code": "2"},
+            "unconfirmed",
+        ),
+        (
+            {"match": {"people_type": "staff", "person_code": "1"}, "reverify_misses": 1},
+            {"people_type": "staff", "person_code": "2"},
+            "dropped",
+        ),
+    ],
+)
+def test_verify_identity_verdicts_are_pure(track, new_match, expected):
+    original = deepcopy(track)
+    verdict = verify_identity(track, new_match, IMRAN_TRACKER_CONFIG)
+
+    assert verdict == expected
+    assert track == original
 
 
 def test_prediction_is_clamped_and_short_intervals_do_not_update_velocity():
@@ -289,6 +326,50 @@ def test_confirmed_track_survives_skipped_embeddings_without_matching(monkeypatc
     assert matches == []
     assert len(state.tracked_faces) == 1
     assert state.tracked_faces[1]["last_seen"] == 10.0
+
+
+def test_legacy_confirmed_track_with_embedding_does_not_reverify(monkeypatch):
+    clock = FakeClock(1000.0)
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "ACTIVE_TRACKER_CONFIG",
+        LEGACY_TRACKER_CONFIG,
+    )
+    state = camera_stream_manager._CameraState("cam", "Camera", "", clock=clock)
+    state.tracked_faces[1] = {
+        "bbox": _bbox(100),
+        "last_seen": 999.0,
+        "last_embedded_at": 999.0,
+        "matched": True,
+        "match": {"people_type": "staff", "person_code": "001"},
+    }
+    manager = camera_stream_manager.CameraStreamManager()
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "detect_and_extract",
+        lambda _frame, **_kwargs: [{
+            "bbox": _bbox(100),
+            "embedding": np.ones(4, dtype=np.float32),
+        }],
+    )
+    match_calls = []
+
+    def unexpected_reverify(_embedding):
+        match_calls.append(True)
+        return None
+
+    monkeypatch.setattr(camera_stream_manager, "best_match", unexpected_reverify)
+    monkeypatch.setattr(
+        camera_stream_manager.CameraStreamManager,
+        "_camera_allows_match",
+        staticmethod(lambda _state, _match: False),
+    )
+
+    manager._detect_and_record(state, None, "branch")
+
+    assert match_calls == []
+    assert state.tracked_faces[1]["matched"] is True
+    assert state.tracked_faces[1]["match"]["person_code"] == "001"
 
 
 def test_confirmed_person_reembeds_at_configured_cadence_for_ninety_seconds(monkeypatch):
@@ -370,7 +451,7 @@ def test_confirmed_person_reembeds_at_configured_cadence_for_ninety_seconds(monk
     assert len(embedding_times) >= 90
     assert np.all(embedding_intervals >= cadence - 0.2 - 1e-6)
     assert np.all(embedding_intervals <= cadence + 0.2 + 1e-6)
-    assert len(match_times) == 1
+    assert len(match_times) == len(embedding_times)
     assert np.all(np.diff(match_times) >= cadence - 0.2 - 1e-6)
     assert len(attendance_times) == 4
     assert np.all(attendance_intervals >= 30.0 - 1e-6)
@@ -419,6 +500,281 @@ def _mock_recording_path(monkeypatch, clock, attendance_times):
         "load_config",
         lambda: {"shift_windows": {}, "shift_mode_enabled": False},
     )
+
+
+def test_confirmed_identity_is_refreshed_with_new_confidence(monkeypatch):
+    clock = FakeClock(50.7)
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "ACTIVE_TRACKER_CONFIG",
+        IMRAN_TRACKER_CONFIG,
+    )
+    state = camera_stream_manager._CameraState("cam", "Camera", "", clock=clock)
+    state.tracked_faces[1] = {
+        "bbox": _bbox(100),
+        "last_seen": 50.0,
+        "last_embedded_at": 50.0,
+        "matched": True,
+        "match": {
+            "people_type": "staff",
+            "person_code": "001",
+            "confidence": 0.5,
+        },
+        "reverify_misses": 1,
+    }
+    manager = camera_stream_manager.CameraStreamManager()
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "detect_and_extract",
+        lambda _frame, **_kwargs: [{
+            "bbox": _bbox(100),
+            "embedding": np.ones(4, dtype=np.float32),
+        }],
+    )
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "best_match",
+        lambda _embedding: {
+            "people_type": "staff",
+            "person_code": "001",
+            "confidence": 0.94,
+        },
+    )
+    _mock_recording_path(monkeypatch, clock, [])
+
+    manager._detect_and_record(state, None, "branch")
+
+    assert state.tracked_faces[1]["matched"] is True
+    assert state.tracked_faces[1]["match"]["confidence"] == 0.94
+    assert state.tracked_faces[1]["reverify_misses"] == 0
+
+
+def test_stranger_is_not_recorded_under_old_identity_and_matches_after_drop(monkeypatch):
+    clock = FakeClock(1000.0)
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "ACTIVE_TRACKER_CONFIG",
+        IMRAN_TRACKER_CONFIG,
+    )
+    state = camera_stream_manager._CameraState("cam", "Camera", "", clock=clock)
+    state.tracked_faces[1] = {
+        "bbox": _bbox(100),
+        "last_seen": 999.0,
+        "last_embedded_at": 999.0,
+        "matched": True,
+        "match": {
+            "people_type": "staff",
+            "person_code": "old",
+            "confidence": 0.9,
+        },
+        "reverify_misses": 0,
+    }
+    manager = camera_stream_manager.CameraStreamManager()
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "detect_and_extract",
+        lambda _frame, **_kwargs: [{
+            "bbox": _bbox(100),
+            "embedding": np.ones(4, dtype=np.float32),
+        }],
+    )
+    stranger_match = {
+        "people_type": "staff",
+        "person_code": "stranger",
+        "confidence": 0.95,
+    }
+    matches = iter((
+        {"people_type": "staff", "person_code": "stranger", "confidence": 0.7},
+        {"people_type": "staff", "person_code": "stranger", "confidence": 0.75},
+        stranger_match,
+    ))
+    match_calls = []
+
+    def next_match(_embedding):
+        result = next(matches)
+        match_calls.append(result)
+        return result
+
+    monkeypatch.setattr(camera_stream_manager, "best_match", next_match)
+    attendance_times = []
+    _mock_recording_path(monkeypatch, clock, attendance_times)
+
+    for now in (1000.0, 1000.7, 1001.0):
+        clock.now = now
+        manager._detect_and_record(state, None, "branch")
+        if now < 1001.0:
+            assert attendance_times == []
+
+    track = next(iter(state.tracked_faces.values()))
+    assert [match["person_code"] for match in match_calls] == [
+        "stranger", "stranger", "stranger",
+    ]
+    assert track["matched"] is True
+    assert track["match"] == stranger_match
+    assert track["reverify_misses"] == 0
+    assert attendance_times == [1001.0]
+
+
+def test_lost_track_iou_sliver_is_reverified_before_attendance(monkeypatch):
+    clock = FakeClock(1000.0)
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "ACTIVE_TRACKER_CONFIG",
+        IMRAN_TRACKER_CONFIG,
+    )
+    state = camera_stream_manager._CameraState("cam", "Camera", "", clock=clock)
+    original_bbox = _bbox(100)
+    assigned = state.face_tracker.assign_many([original_bbox], clock.now, set())
+    original_id, original_track = assigned[0]
+    original_track.update(
+        matched=True,
+        match={
+            "people_type": "staff",
+            "person_code": "person-A",
+            "confidence": 0.9,
+        },
+        last_embedded_at=clock.now,
+    )
+    candidate_bbox = _bbox(139.5)
+    assert 0.10 < _iou(candidate_bbox, original_bbox) < 0.15
+
+    manager = camera_stream_manager.CameraStreamManager()
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "detect_and_extract",
+        lambda _frame, **_kwargs: [{
+            "bbox": candidate_bbox,
+            "embedding": np.ones(4, dtype=np.float32),
+        }],
+    )
+    stranger_match = {
+        "people_type": "staff",
+        "person_code": "person-B",
+        "confidence": 0.95,
+    }
+    matches = iter((None, stranger_match, stranger_match))
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "best_match",
+        lambda _embedding: next(matches),
+    )
+    attendance_people = []
+    _mock_recording_path(monkeypatch, clock, attendance_people)
+    reverify_counters = []
+    recorded_stages = []
+    original_count = camera_stream_manager.perf_stats.count
+    original_record = camera_stream_manager.perf_stats.record
+    monkeypatch.setattr(
+        camera_stream_manager.perf_stats,
+        "count",
+        lambda camera_id, stage: (
+            reverify_counters.append(stage),
+            original_count(camera_id, stage),
+        ),
+    )
+
+    def record_stage(camera_id, stage, started_at, **kwargs):
+        recorded_stages.append(stage)
+        return original_record(camera_id, stage, started_at, **kwargs)
+
+    monkeypatch.setattr(camera_stream_manager.perf_stats, "record", record_stage)
+
+    def record_person(**kwargs):
+        attendance_people.append(
+            f'{kwargs["people_type"]}:{kwargs["person_code"]}'
+        )
+        return {
+            "event_type": "locked_by_manual_override",
+            "outside_shift": False,
+            "sync_status": "pending",
+        }
+
+    monkeypatch.setattr(
+        camera_stream_manager.local_db,
+        "record_attendance_local",
+        record_person,
+    )
+
+    clock.now = 1000.2
+    manager._detect_and_record(state, None, "branch")
+    inherited_id, inherited = next(iter(state.tracked_faces.items()))
+    assert inherited_id != original_id
+    assert inherited["match"]["person_code"] == "person-A"
+    assert inherited["reverify_misses"] == 1
+    assert attendance_people == []
+
+    clock.now = 1000.8
+    manager._detect_and_record(state, None, "branch")
+    dropped_id, dropped = next(iter(state.tracked_faces.items()))
+    assert dropped_id == inherited_id
+    assert dropped["matched"] is False
+    assert dropped["match"] is None
+    assert attendance_people == []
+
+    clock.now = 1001.4
+    manager._detect_and_record(state, None, "branch")
+
+    assert next(iter(state.tracked_faces.values()))["match"]["person_code"] == "person-B"
+    assert attendance_people == ["staff:person-B"]
+    assert reverify_counters.count("detect.reverify_unconfirmed") == 1
+    assert reverify_counters.count("detect.reverify_dropped") == 1
+    assert recorded_stages.count("detect.reverify") == 2
+    assert recorded_stages.count("detect.best_match") == 1
+
+
+def test_one_noisy_mismatch_followed_by_same_identity_resets_misses(monkeypatch):
+    clock = FakeClock(2000.0)
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "ACTIVE_TRACKER_CONFIG",
+        IMRAN_TRACKER_CONFIG,
+    )
+    state = camera_stream_manager._CameraState("cam", "Camera", "", clock=clock)
+    state.tracked_faces[1] = {
+        "bbox": _bbox(100),
+        "last_seen": 1999.0,
+        "last_embedded_at": 1999.0,
+        "matched": True,
+        "match": {
+            "people_type": "staff",
+            "person_code": "001",
+            "confidence": 0.8,
+        },
+        "reverify_misses": 0,
+    }
+    manager = camera_stream_manager.CameraStreamManager()
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "detect_and_extract",
+        lambda _frame, **_kwargs: [{
+            "bbox": _bbox(100),
+            "embedding": np.ones(4, dtype=np.float32),
+        }],
+    )
+    matches = iter((
+        {"people_type": "staff", "person_code": "other", "confidence": 0.8},
+        {"people_type": "staff", "person_code": "001", "confidence": 0.97},
+    ))
+    monkeypatch.setattr(
+        camera_stream_manager,
+        "best_match",
+        lambda _embedding: next(matches),
+    )
+    attendance_times = []
+    _mock_recording_path(monkeypatch, clock, attendance_times)
+
+    manager._detect_and_record(state, None, "branch")
+    assert attendance_times == []
+    assert state.tracked_faces[1]["reverify_misses"] == 1
+
+    clock.now = 2000.7
+    manager._detect_and_record(state, None, "branch")
+
+    track = state.tracked_faces[1]
+    assert track["matched"] is True
+    assert track["match"]["confidence"] == 0.97
+    assert track["reverify_misses"] == 0
+    assert attendance_times == [2000.7]
 
 
 def test_unknown_track_matching_respects_retry_interval(monkeypatch):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, MutableMapping, Sequence, TypedDict
+from typing import Any, Literal, MutableMapping, Sequence, TypedDict
 
 from local_node.config import (
     TRACK_ACTIVE_DIST_FACTOR,
@@ -27,6 +27,7 @@ class FaceTrack(TypedDict, total=False):
     match: dict[str, Any] | None
     last_match_attempt_at: float | None
     last_embedded_at: float | None
+    reverify_misses: int
     velocity: tuple[float, float]
 
 
@@ -52,6 +53,7 @@ class TrackerConfig:
     lost_distance_multiplier: float
     unknown_retry_interval_seconds: float
     confirmed_skip_seconds: float
+    reverify_misses_to_drop: int
     velocity_smoothing_factor: float
     velocity_max_gap_seconds: float
 
@@ -62,6 +64,8 @@ class TrackerConfig:
             )
         if self.prediction_horizon_seconds < 0:
             raise ValueError("prediction_horizon_seconds must not be negative")
+        if self.reverify_misses_to_drop < 0:
+            raise ValueError("reverify_misses_to_drop must not be negative")
         if not self.velocity_max_gap_seconds >= 0:
             raise ValueError("velocity_max_gap_seconds must not be negative")
 
@@ -87,6 +91,7 @@ LEGACY_TRACKER_CONFIG = TrackerConfig(
     lost_distance_multiplier=1.5,
     unknown_retry_interval_seconds=0.0,
     confirmed_skip_seconds=1.0,
+    reverify_misses_to_drop=0,
     velocity_smoothing_factor=0.5,
     velocity_max_gap_seconds=1.0,
 )
@@ -112,6 +117,7 @@ IMRAN_TRACKER_CONFIG = TrackerConfig(
     lost_distance_multiplier=1.0,
     unknown_retry_interval_seconds=TRACK_UNKNOWN_RETRY_INTERVAL,
     confirmed_skip_seconds=0.6,
+    reverify_misses_to_drop=2,
     velocity_smoothing_factor=0.5,
     velocity_max_gap_seconds=1.0,
 )
@@ -242,6 +248,7 @@ class FaceTracker:
             if self.config.reuse_lost_track_id:
                 self._refresh_track(old_track, normalized_bboxes[box_index], now)
                 old_track["last_embedded_at"] = None
+                old_track["reverify_misses"] = 0
                 track_id, track = old_track_id, old_track
             else:
                 track_id, track = self._new_track(
@@ -407,7 +414,33 @@ class FaceTracker:
             "match": inherited_match,
             "last_match_attempt_at": None,
             "last_embedded_at": None,
+            "reverify_misses": 0,
             "velocity": (0.0, 0.0),
         }
         self.tracks[track_id] = track
         return track_id, track
+
+
+IdentityVerdict = Literal["confirmed", "unconfirmed", "dropped"]
+
+
+def verify_identity(
+    track: FaceTrack,
+    new_match: dict[str, Any] | None,
+    config: TrackerConfig,
+) -> IdentityVerdict:
+    """Return the verification verdict without mutating the track."""
+    misses = track.get("reverify_misses", 0)
+    if new_match is not None:
+        current_match = track.get("match")
+        if (
+            current_match is not None
+            and current_match.get("people_type") == new_match.get("people_type")
+            and current_match.get("person_code") == new_match.get("person_code")
+        ):
+            return "confirmed"
+
+    misses += 1
+    if config.reverify_misses_to_drop > 0 and misses >= config.reverify_misses_to_drop:
+        return "dropped"
+    return "unconfirmed"
