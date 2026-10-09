@@ -1,0 +1,115 @@
+.shift-allocation-tab {
+  min-width: 0;
+  width: 100%;
+}
+
+.shift-allocation-tab__page-header {
+  min-width: 0;
+}
+
+.shift-allocation-tab__page-header > div:first-child {
+  min-width: 0;
+}
+
+.shift-allocation-tab__allocation-card,
+.shift-allocation-tab__summary-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.shift-allocation-tab__form {
+  min-width: 0;
+}
+
+.shift-allocation-tab__form > div {
+  min-width: 0;
+}
+
+.shift-allocation-tab__apply-button > button {
+  width: 100%;
+  justify-content: center;
+}
+
+.shift-allocation-tab__selection-summary {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.shift-allocation-tab__summary-header {
+  min-width: 0;
+}
+
+.shift-allocation-tab__table-scroll {
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shift-allocation-tab__pagination {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.shift-allocation-tab__default-shift-card {
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .shift-allocation-tab__form {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .shift-allocation-tab__page-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+    padding: 16px !important;
+  }
+
+  .shift-allocation-tab__page-header > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .shift-allocation-tab__allocation-card {
+    padding: 14px !important;
+  }
+
+  .shift-allocation-tab__form {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .shift-allocation-tab__summary-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+    padding: 12px 14px !important;
+  }
+
+  .shift-allocation-tab__pagination {
+    padding: 0 10px 8px !important;
+  }
+
+  .shift-allocation-tab__default-shift-card {
+    align-items: stretch !important;
+    flex-direction: column;
+    justify-content: flex-start !important;
+    gap: 12px !important;
+    padding: 14px !important;
+  }
+
+  .shift-allocation-tab__default-shift-card > div:first-child {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  .shift-allocation-tab__default-shift-controls {
+    align-items: stretch !important;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .shift-allocation-tab__default-shift-controls > * {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+}

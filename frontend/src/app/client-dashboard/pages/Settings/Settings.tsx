@@ -4368,6 +4368,7 @@ import {
   ChipList,
   EmptyText,
 } from "./SettingsUi";
+import "./Settings.css";
 // Re-exported under this path too: ChangePasswordCard.tsx and
 // AccountSettings.tsx import C/ConfigCard/inputStyle from "./Settings" —
 // keep that working without touching those files.
@@ -6080,6 +6081,7 @@ export default function Settings() {
 
   return (
     <div
+      className="settings-page"
       style={{
         minHeight: "100%",
         background: C.bg,
@@ -6089,6 +6091,7 @@ export default function Settings() {
     >
       <div style={{ maxWidth: 1180, margin: "0 auto" }}>
         <div
+          className="settings-page__header"
           style={{
             display: "flex",
             alignItems: "flex-start",

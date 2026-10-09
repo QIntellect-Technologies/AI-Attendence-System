@@ -33,6 +33,7 @@ import { formatShiftWindow } from "../utils/shiftOverlap";
 import { ShiftTimingsModal } from "./ShiftTimingsModal";
 import { BranchDefaultShiftCard } from "./BranchDefaultShiftCard";
 import { FastPagination } from "../../../components/common/FastPagination";
+import "./ShiftAllocationTab.css";
 
 // ─── Summary table (same visual language as the Staff Member Directory) ──────
 
@@ -84,6 +85,7 @@ const SummaryRow: FC<{
 
     return (
       <div
+        className="shift-allocation-tab__summary-row"
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
         onClick={selectable ? onSelect : undefined}
@@ -659,8 +661,9 @@ export const ShiftAllocationTab: FC<{
     };
 
     return (
-      <div style={{ display: "grid", gap: 16 }}>
+      <div className="shift-allocation-tab" style={{ display: "grid", gap: 16 }}>
         <div
+          className="shift-allocation-tab__page-header"
           style={{
             background: T.card,
             border: `1px solid ${T.border}`,
@@ -716,6 +719,7 @@ export const ShiftAllocationTab: FC<{
         />
 
         <div
+          className="shift-allocation-tab__allocation-card"
           style={{
             background: T.card,
             border: `1px solid ${T.border}`,
@@ -726,6 +730,7 @@ export const ShiftAllocationTab: FC<{
           }}
         >
           <div
+            className="shift-allocation-tab__form"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(5, minmax(150px, 1fr)) auto",
@@ -869,14 +874,16 @@ export const ShiftAllocationTab: FC<{
               />
             </div>
 
-            <JellyButton
-              type="button"
-              variant="primary"
-              disabled={!canApply}
-              onClick={() => void handleApply()}
-            >
-              {isApplying ? "Applying…" : "Apply Shift"}
-            </JellyButton>
+            <div className="shift-allocation-tab__apply-button">
+              <JellyButton
+                type="button"
+                variant="primary"
+                disabled={!canApply}
+                onClick={() => void handleApply()}
+              >
+                {isApplying ? "Applying…" : "Apply Shift"}
+              </JellyButton>
+            </div>
           </div>
 
           {liveShifts.length === 0 && !isLoadingShifts && (
@@ -900,6 +907,7 @@ export const ShiftAllocationTab: FC<{
           )}
 
           <div
+            className="shift-allocation-tab__selection-summary"
             style={{
               marginTop: 12,
               display: "flex",
@@ -931,6 +939,7 @@ export const ShiftAllocationTab: FC<{
         </div>
 
         <div
+          className="shift-allocation-tab__summary-card"
           style={{
             background: T.card,
             border: `1px solid ${T.border}`,
@@ -939,6 +948,7 @@ export const ShiftAllocationTab: FC<{
           }}
         >
           <div
+            className="shift-allocation-tab__summary-header"
             style={{
               padding: "14px 18px",
               borderBottom: `1px solid ${T.border}`,
@@ -973,7 +983,7 @@ export const ShiftAllocationTab: FC<{
             </div>
           ) : (
             <div
-              className="staff-directory-table-scroll"
+              className="staff-directory-table-scroll shift-allocation-tab__table-scroll"
               style={{ overflowX: "auto", overflowY: "hidden", minWidth: 0 }}
             >
               <div
@@ -1042,7 +1052,10 @@ export const ShiftAllocationTab: FC<{
             </div>
           )}
           {summaryRows.length > 0 && (
-            <div style={{ padding: "0 16px 8px 16px" }}>
+            <div
+              className="shift-allocation-tab__pagination"
+              style={{ padding: "0 16px 8px 16px" }}
+            >
               <FastPagination
                 page={shiftPage}
                 pageSize={shiftPageSize}

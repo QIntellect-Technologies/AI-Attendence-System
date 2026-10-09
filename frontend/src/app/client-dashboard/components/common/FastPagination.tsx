@@ -33,11 +33,11 @@ export function FastPagination({ page, pageSize, total, onPageChange, onPageSize
   });
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 0" }}>
+    <div className="fast-pagination" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 0" }}>
       <div style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>
         Showing {from}–{to} of {total}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="fast-pagination__controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <ModernSelect
           value={String(pageSize)}
           options={[25, 50].map((size) => ({
@@ -57,7 +57,7 @@ export function FastPagination({ page, pageSize, total, onPageChange, onPageSize
         >
           Prev
         </button>
-        <span style={{ fontSize: 13, color: "#475569", fontWeight: 600, padding: "0 4px" }}>
+        <span className="fast-pagination__page" style={{ fontSize: 13, color: "#475569", fontWeight: 600, padding: "0 4px" }}>
           Page {page} / {totalPages}
         </span>
         <button

@@ -1,0 +1,62 @@
+.my-account-page,
+.my-account-page__content,
+.my-account-page__cards,
+.my-account-page section {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.my-account-page {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.my-account-page__details {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.my-account-page section > div > div {
+  min-width: 0;
+}
+
+.my-account-page section > div > div > div:last-child {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .my-account-page {
+    padding: 16px 12px !important;
+  }
+
+  .my-account-page section {
+    padding: 14px !important;
+  }
+
+  .my-account-page__header {
+    align-items: flex-start !important;
+    margin-bottom: 16px !important;
+  }
+
+  .my-account-page__header h1 {
+    font-size: 21px !important;
+  }
+
+  .my-account-page__identity {
+    align-items: flex-start !important;
+    min-width: 0;
+  }
+
+  .my-account-page__identity > div {
+    overflow-wrap: anywhere;
+  }
+
+  .my-account-page__details {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+  }
+
+  .my-account-page section form > div:first-child {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

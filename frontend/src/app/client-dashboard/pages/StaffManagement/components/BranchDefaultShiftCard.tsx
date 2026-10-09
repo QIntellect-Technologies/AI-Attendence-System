@@ -418,6 +418,7 @@ export const BranchDefaultShiftCard: FC<{
                 )}
 
                 <div
+                    className="shift-allocation-tab__default-shift-card"
                     style={{
                         background: T.card,
                         border: `1px solid ${status.warn ? "#fecdd3" : T.border}`,
@@ -446,7 +447,10 @@ export const BranchDefaultShiftCard: FC<{
                         </div>
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div
+                        className="shift-allocation-tab__default-shift-controls"
+                        style={{ display: "flex", alignItems: "center", gap: 12 }}
+                    >
                         <ModernSelect
                             value={draftShiftId}
                             onChange={setDraftShiftId}

@@ -787,7 +787,9 @@ export default function AdminLayout() {
           </div>
 
           {/* Search bar */}
-          <GlobalHeaderSearch />
+          <div className="admin-dashboard-header__search">
+            <GlobalHeaderSearch />
+          </div>
 
           {/* Right: notification bell, settings, user chip */}
           <div

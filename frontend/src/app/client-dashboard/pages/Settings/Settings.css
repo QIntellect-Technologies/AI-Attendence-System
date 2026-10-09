@@ -1,0 +1,70 @@
+.settings-page,
+.settings-page *,
+.settings-page *::before,
+.settings-page *::after {
+  box-sizing: border-box;
+}
+
+.settings-page {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 800px) {
+  .settings-page {
+    padding: 18px !important;
+  }
+
+  .settings-page__header {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 12px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .settings-page__header h1 {
+    font-size: 24px !important;
+  }
+
+  .settings-page__header > button {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .settings-page [style*="grid-template-columns"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .settings-page [style*="display: flex"] {
+    flex-wrap: wrap;
+  }
+
+  .settings-page [style*="grid-template-columns"] > button {
+    justify-self: start;
+  }
+
+  .settings-page input,
+  .settings-page select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .settings-page section {
+    padding: 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-page {
+    padding: 12px !important;
+  }
+
+  .settings-page__header h1 {
+    font-size: 22px !important;
+  }
+
+  .settings-page section {
+    padding: 13px !important;
+    border-radius: 13px !important;
+  }
+}

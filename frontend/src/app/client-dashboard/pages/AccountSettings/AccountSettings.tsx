@@ -7,6 +7,7 @@ import { useAuth } from "../../contexts/useAuth";
 import { ChangePasswordCard } from "../../components/ui/ChangePasswordCard";
 import { C, ConfigCard, ReadOnlyLine } from "../Settings/Settings";
 import { loadClientBootstrap } from "../../services/clintApi";
+import "./AccountSettings.css";
 
 /**
  * AccountSettings
@@ -178,6 +179,7 @@ export default function AccountSettings() {
 
   return (
     <div
+      className="my-account-page"
       style={{
         minHeight: "100%",
         background: C.bg,
@@ -185,8 +187,12 @@ export default function AccountSettings() {
         fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
       }}
     >
-      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+      <div
+        className="my-account-page__content"
+        style={{ maxWidth: 720, margin: "0 auto" }}
+      >
         <div
+          className="my-account-page__header"
           style={{
             display: "flex",
             alignItems: "center",
@@ -228,9 +234,20 @@ export default function AccountSettings() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gap: 18 }}>
+        <div
+          className="my-account-page__cards"
+          style={{ display: "grid", gap: 18 }}
+        >
           <ConfigCard icon={<UserCircle2 size={18} />} title="My Profile">
-            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
+            <div
+              className="my-account-page__identity"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                marginBottom: 18,
+              }}
+            >
               <Avatar src={photo} label={displayName || "User"} size={72} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 18, fontWeight: 900, color: C.primary }}>
@@ -238,7 +255,14 @@ export default function AccountSettings() {
                 </div>
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div
+              className="my-account-page__details"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 14,
+              }}
+            >
               {profileRows.map((row) => (
                 <ReadOnlyLine key={row.label} label={row.label} value={row.value} />
               ))}
@@ -249,7 +273,15 @@ export default function AccountSettings() {
               icon={<Building2 size={18} />}
               title="Organization Profile"
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
+              <div
+                className="my-account-page__identity"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 16,
+                  marginBottom: 18,
+                }}
+              >
                 {canManageOrgLogo ? (
                   <OrgLogoCard />
                 ) : (
@@ -265,7 +297,7 @@ export default function AccountSettings() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                   gap: 14,
                   marginBottom: 14,
                 }}

@@ -92,6 +92,14 @@
   min-height: 0;
 }
 
+.fast-pagination {
+  min-width: 0;
+}
+
+.fast-pagination__controls {
+  min-width: 0;
+}
+
 .staff-management-mobile-tab-select {
   display: none;
 }
@@ -227,7 +235,29 @@
   }
 
   .staff-management-page {
-    padding: 16px 12px !important;
+    padding: 16px 20px 16px 12px !important;
+  }
+
+  .staff-management-page > section,
+  .staff-management-page > section > * {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .fast-pagination {
+    align-items: flex-start !important;
+    flex-direction: column;
+    gap: 8px !important;
+  }
+
+  .fast-pagination__controls {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .fast-pagination__page {
+    white-space: nowrap;
   }
 
   .module-shell-header {
@@ -367,6 +397,16 @@
     gap: 12px;
     padding: 10px 16px;
     border-bottom: 1px solid #e5e7eb;
+  }
+
+  .admin-dashboard-header__search {
+    margin: 8px 12px 12px;
+  }
+
+  .admin-dashboard-header__search > div {
+    min-width: 0 !important;
+    width: 100%;
+    max-width: none !important;
   }
 
   .admin-dashboard-header__mobile-brand {

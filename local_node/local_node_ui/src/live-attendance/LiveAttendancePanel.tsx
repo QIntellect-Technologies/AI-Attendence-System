@@ -109,6 +109,15 @@ const PANEL_KEYFRAMES = `
     border-color: #cbd5e1 !important;
   }
 
+  .detection-feed {
+    scrollbar-width: thin;
+    scrollbar-color: #94a3b8 #f1f5f9;
+  }
+  .detection-feed::-webkit-scrollbar { width: 8px; }
+  .detection-feed::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+  .detection-feed::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 8px; }
+  .detection-feed::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
   @media (max-width: 380px) {
     .qa-btn { flex-basis: 100%; }
   }
@@ -481,7 +490,7 @@ export default function LiveAttendancePanel({
       </div>
 
       {/* Detections Stream Feed */}
-      <div style={styles.feed}>
+      <div className="detection-feed" style={styles.feed}>
         {todayEvents.length === 0 ? (
           <div style={styles.empty}>
             <div style={styles.emptyIcon}>
@@ -645,13 +654,16 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
   },
   feed: {
-    flex: 1,
+    flex: "1 1 0",
     minHeight: 0,
     padding: 16,
     display: "grid",
+    gridAutoRows: "max-content",
     gap: 14,
     alignContent: "start",
     overflowY: "auto",
+    overflowX: "hidden",
+    scrollbarGutter: "stable",
   },
   viewAllButton: {
     display: "inline-flex",
@@ -668,6 +680,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   card: {
     display: "flex",
+    flexShrink: 0,
     border: `1px solid ${TOKEN.border}`,
     borderRadius: 16,
     overflow: "hidden",

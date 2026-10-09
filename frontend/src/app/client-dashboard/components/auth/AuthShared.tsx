@@ -74,6 +74,54 @@ export const AUTH_CSS = `
 
   ::-webkit-scrollbar { width:6px; }
   ::-webkit-scrollbar-thumb { background:${A.tealMedium}; border-radius:10px; }
+
+  .auth-layout {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .auth-brand-panel {
+    flex: 0 1 48%;
+    min-width: 0 !important;
+  }
+  .auth-form-panel {
+    min-width: 0 !important;
+  }
+  .auth-glass-card {
+    min-width: 0;
+  }
+  @media (max-width: 760px) {
+    .auth-layout {
+      height: auto !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+    }
+    .auth-brand-panel {
+      display: none !important;
+    }
+    .auth-form-panel {
+      flex: 1 1 100% !important;
+      width: 100% !important;
+      min-height: 100vh;
+      min-height: 100dvh;
+      overflow: visible !important;
+      padding: 24px 16px !important;
+    }
+    .auth-form-content {
+      margin: auto 0;
+    }
+    .auth-glass-card {
+      padding: 28px 22px !important;
+      border-radius: 22px !important;
+    }
+  }
+  @media (max-width: 380px) {
+    .auth-form-panel {
+      padding: 16px 12px !important;
+    }
+    .auth-glass-card {
+      padding: 24px 18px !important;
+    }
+  }
 `;
 
 // ─── BRAND PANEL (left side — same on both pages) ─────────────────────────────
@@ -88,10 +136,12 @@ export const BrandPanel: React.FC<BrandPanelProps> = ({
   footer,
 }) => (
   <div
-    className="auth-left"
+    className="auth-left auth-brand-panel"
+    data-auth-brand-panel
     style={{
       width: "48%",
-      minWidth: 460,
+      minWidth: 0,
+      flex: "0 1 48%",
       position: "relative",
       overflow: "hidden",
       background: `linear-gradient(180deg, ${A.tealSidebar} 0%, ${A.tealPale} 48%, ${A.tealLight} 100%)`,
@@ -247,9 +297,11 @@ export const SplitAuthLayout: React.FC<{
   right: ReactNode;
 }> = ({ left, right }) => (
   <div
+    className="auth-layout"
     style={{
       display: "flex",
       height: "100vh",
+      minHeight: "100vh",
       fontFamily: "var(--font-body)",
       overflow: "hidden",
       background: A.bg,
@@ -264,10 +316,10 @@ export const SplitAuthLayout: React.FC<{
 // ─── FORM CARD WRAPPER ────────────────────────────────────────────────────────
 export const AuthCard: React.FC<{ children: ReactNode }> = ({ children }) => (
   <div
-    className="auth-right"
+    className="auth-right auth-form-panel"
     style={{
       flex: 1,
-      minWidth: 420,
+      minWidth: 0,
       overflow: "auto",
       display: "flex",
       alignItems: "center",
@@ -304,6 +356,7 @@ export const AuthCard: React.FC<{ children: ReactNode }> = ({ children }) => (
     />
 
     <div
+      className="auth-form-content"
       style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}
     >
       {/* Top bar */}
@@ -325,6 +378,7 @@ export const AuthCard: React.FC<{ children: ReactNode }> = ({ children }) => (
 
       {/* Glass card */}
       <div
+        className="auth-glass-card"
         style={{
           background: "#fff",
           borderRadius: 28,
