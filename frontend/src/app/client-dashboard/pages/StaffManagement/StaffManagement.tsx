@@ -1,22 +1,22 @@
 /**
  * pages / StaffManagement / StaffManagement.tsx
-  * ─────────────────────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────────
  * Staff Directory — container component.
  * Scope - aware: global shows all branches, branch shows only that branch.
  *
  * Features:
  *   • Search across name / person code
-  *   • Filter by status, branch(global only), department
-    *   • Add / Edit modal with full form + module access checklist
-      *   • Profile drawer(right - side panel with full details)
+ *   • Filter by status, branch(global only), department
+ *   • Add / Edit modal with full form + module access checklist
+ *   • Profile drawer(right - side panel with full details)
  *   • Bulk selection
-  *   • CSV export
-  *   • Profile image upload for Local Node attendance UI
-    *
+ *   • CSV export
+ *   • Profile image upload for Local Node attendance UI
+ *
  * Presentational pieces live in ./ components, pure helpers in ./ utils and
-  * ./ types.This file keeps the data fetching, filtering / sorting, and the
-    * save / delete/restore orchestration.
-    * ─────────────────────────────────────────────────────────────────────────────
+ * ./ types.This file keeps the data fetching, filtering / sorting, and the
+ * save / delete/restore orchestration.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import React, {
@@ -108,16 +108,22 @@ import { peopleCodeModel } from "./types/types";
 // modal, and StaffModal / VisitPlansTab are by far the largest files here.
 const VisitPlansTab = lazy(() => import("./VisitPlansTab"));
 const ShiftAllocationTab = lazy(() =>
-  import("./components/ShiftAllocationTab").then((m) => ({ default: m.ShiftAllocationTab })),
+  import("./components/ShiftAllocationTab").then((m) => ({
+    default: m.ShiftAllocationTab,
+  })),
 );
 const ProfileDrawer = lazy(() =>
-  import("./components/ProfileDrawer").then((m) => ({ default: m.ProfileDrawer })),
+  import("./components/ProfileDrawer").then((m) => ({
+    default: m.ProfileDrawer,
+  })),
 );
 const StaffModal = lazy(() =>
   import("./components/StaffModal").then((m) => ({ default: m.StaffModal })),
 );
 const StaffCredentialsModal = lazy(() =>
-  import("./components/StaffCredentialsModal").then((m) => ({ default: m.StaffCredentialsModal })),
+  import("./components/StaffCredentialsModal").then((m) => ({
+    default: m.StaffCredentialsModal,
+  })),
 );
 
 const TabFallback: FC = () => (
@@ -146,7 +152,6 @@ import {
   getColumnAlign,
   getPeopleTableColumns,
   staffColumnText,
-  staffGridTemplate,
 } from "./utils/staffTable";
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -243,7 +248,7 @@ const StaffDirectory: FC = () => {
     templateFilterByKey.get("designation");
 
   const [query, setQuery] = useState(
-    (location.state as any)?.shiftFilter ?? searchParams.get("q") ?? ""
+    (location.state as any)?.shiftFilter ?? searchParams.get("q") ?? "",
   );
   const [statusFilter, setStatusFilter] = useState<
     StaffMember["status"] | "all"
@@ -283,10 +288,6 @@ const StaffDirectory: FC = () => {
       templateColumnModel.peopleColumns,
     ],
   );
-  const peopleTableGridTemplate = useMemo(
-    () => staffGridTemplate(peopleTableColumns),
-    [peopleTableColumns],
-  );
   const selectedBranch = useMemo(
     () =>
       branchFilter === "all"
@@ -310,10 +311,10 @@ const StaffDirectory: FC = () => {
     const relevantBranches =
       isGlobalDashboard && branchFilter !== "all"
         ? visibleBranches.filter(
-          (branch) =>
-            (getBackendBranchId(branch) ?? String(branch.id)) ===
-            branchFilter,
-        )
+            (branch) =>
+              (getBackendBranchId(branch) ?? String(branch.id)) ===
+              branchFilter,
+          )
         : visibleBranches;
     return Array.from(
       new Set(
@@ -641,7 +642,7 @@ const StaffDirectory: FC = () => {
     () => [
       {
         value: "all",
-        label: "All Branches",
+        label: "Branches",
         count: scopedStaffItems.length,
       },
       ...visibleBranches.map((branch) => ({
@@ -737,7 +738,7 @@ const StaffDirectory: FC = () => {
           status === "all"
             ? branchScopedItems.length
             : branchScopedItems.filter((member) => member.status === status)
-              .length,
+                .length,
       })),
     [branchScopedItems],
   );
@@ -802,7 +803,12 @@ const StaffDirectory: FC = () => {
           (m.role ?? "").toLowerCase().includes(q) ||
           (m.branchName ?? "").toLowerCase().includes(q) ||
           staffTypeText(m).toLowerCase().includes(q) ||
-          getShiftDefinition(shiftDefinitions, String((m as any).shiftId ?? (m as any).shift)).label.toLowerCase().includes(q) ||
+          getShiftDefinition(
+            shiftDefinitions,
+            String((m as any).shiftId ?? (m as any).shift),
+          )
+            .label.toLowerCase()
+            .includes(q) ||
           shiftText(m).toLowerCase().includes(q),
       );
     }
@@ -840,13 +846,13 @@ const StaffDirectory: FC = () => {
 
       return sortDir === "asc"
         ? String(av ?? "").localeCompare(String(bv ?? ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        })
+            numeric: true,
+            sensitivity: "base",
+          })
         : String(bv ?? "").localeCompare(String(av ?? ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
+            numeric: true,
+            sensitivity: "base",
+          });
     });
   }, [
     scopedStaffItems,
@@ -878,24 +884,24 @@ const StaffDirectory: FC = () => {
   const staffFilterSections = useMemo<DynamicFilterSection[]>(
     () => [
       ...(templateFilterByKey.has("peopleType") &&
-        peopleModel.hasMultiplePeopleTypes
+      peopleModel.hasMultiplePeopleTypes
         ? ([
-          {
-            id: "peopleType",
-            type: "select",
-            label:
-              templateFilterByKey.get("peopleType")?.label ?? "People Type",
-            value: peopleModel.peopleType,
-            options: peopleModel.selectablePeopleTypes,
-            minWidth: 180,
-            onChange: (value: string) => {
-              setSelectedPeopleType(value);
-              setDeptFilter("all");
-              setRoleFilter("all");
-              setSelected(new Set());
+            {
+              id: "peopleType",
+              type: "select",
+              label:
+                templateFilterByKey.get("peopleType")?.label ?? "People Type",
+              value: peopleModel.peopleType,
+              options: peopleModel.selectablePeopleTypes,
+              minWidth: 180,
+              onChange: (value: string) => {
+                setSelectedPeopleType(value);
+                setDeptFilter("all");
+                setRoleFilter("all");
+                setSelected(new Set());
+              },
             },
-          },
-        ] as DynamicFilterSection[])
+          ] as DynamicFilterSection[])
         : []),
       {
         id: "branch",
@@ -1226,34 +1232,34 @@ const StaffDirectory: FC = () => {
 
           updateExistingUserAccess(
             updatedStaff ??
-            ({
-              ...editMember,
-              ...data,
-              branchName: selectedBranchName,
-              position: data.role,
-              shift: shift.id,
-              shiftId: shift.id,
-              shiftLabel: shift.label,
-              shiftStart: shift.start,
-              shiftEnd: shift.end,
-              accessModules: data.moduleAccess,
-              benefits: data.benefits,
-              updatedAt: now,
-              // `data` (StaffFormData) keeps these as raw input strings
-              // so the lat/lng/radius text fields can be typed into
-              // freely; StaffMember stores them as number | null. The
-              // spread above pulls in the string versions, so they need
-              // to be re-parsed here rather than left as-is.
-              geofenceLat: data.geofenceLat.trim()
-                ? Number(data.geofenceLat)
-                : null,
-              geofenceLng: data.geofenceLng.trim()
-                ? Number(data.geofenceLng)
-                : null,
-              geofenceRadiusMeters: data.geofenceRadiusMeters.trim()
-                ? Number(data.geofenceRadiusMeters)
-                : null,
-            } as StaffMember),
+              ({
+                ...editMember,
+                ...data,
+                branchName: selectedBranchName,
+                position: data.role,
+                shift: shift.id,
+                shiftId: shift.id,
+                shiftLabel: shift.label,
+                shiftStart: shift.start,
+                shiftEnd: shift.end,
+                accessModules: data.moduleAccess,
+                benefits: data.benefits,
+                updatedAt: now,
+                // `data` (StaffFormData) keeps these as raw input strings
+                // so the lat/lng/radius text fields can be typed into
+                // freely; StaffMember stores them as number | null. The
+                // spread above pulls in the string versions, so they need
+                // to be re-parsed here rather than left as-is.
+                geofenceLat: data.geofenceLat.trim()
+                  ? Number(data.geofenceLat)
+                  : null,
+                geofenceLng: data.geofenceLng.trim()
+                  ? Number(data.geofenceLng)
+                  : null,
+                geofenceRadiusMeters: data.geofenceRadiusMeters.trim()
+                  ? Number(data.geofenceRadiusMeters)
+                  : null,
+              } as StaffMember),
             data,
           );
 
@@ -1369,11 +1375,12 @@ const StaffDirectory: FC = () => {
             } catch (shiftAssignError) {
               alert(
                 `Staff created, but assigning the selected shift failed: ` +
-                `${shiftAssignError instanceof Error
-                  ? shiftAssignError.message
-                  : "Unknown error"
-                }\n\nYou can assign it again by editing this staff member ` +
-                `or from the Shift Allocation tab.`,
+                  `${
+                    shiftAssignError instanceof Error
+                      ? shiftAssignError.message
+                      : "Unknown error"
+                  }\n\nYou can assign it again by editing this staff member ` +
+                  `or from the Shift Allocation tab.`,
               );
             }
           }
@@ -1397,10 +1404,11 @@ const StaffDirectory: FC = () => {
             } catch (departmentAssignError) {
               alert(
                 `Staff created, but assigning the selected department failed: ` +
-                `${departmentAssignError instanceof Error
-                  ? departmentAssignError.message
-                  : "Unknown error"
-                }\n\nYou can assign it again by editing this staff member.`,
+                  `${
+                    departmentAssignError instanceof Error
+                      ? departmentAssignError.message
+                      : "Unknown error"
+                  }\n\nYou can assign it again by editing this staff member.`,
               );
             }
           }
@@ -1431,10 +1439,11 @@ const StaffDirectory: FC = () => {
             } catch (designationAssignError) {
               alert(
                 `Staff created, but assigning the selected designation failed: ` +
-                `${designationAssignError instanceof Error
-                  ? designationAssignError.message
-                  : "Unknown error"
-                }\n\nYou can assign it again by editing this staff member.`,
+                  `${
+                    designationAssignError instanceof Error
+                      ? designationAssignError.message
+                      : "Unknown error"
+                  }\n\nYou can assign it again by editing this staff member.`,
               );
             }
           }
@@ -1459,9 +1468,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (managerAssignError) {
               hierarchyIssues.push(
-                `Manager: ${managerAssignError instanceof Error
-                  ? managerAssignError.message
-                  : "Unknown error"
+                `Manager: ${
+                  managerAssignError instanceof Error
+                    ? managerAssignError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1476,9 +1486,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (linkedAccountError) {
               hierarchyIssues.push(
-                `Linked dashboard account: ${linkedAccountError instanceof Error
-                  ? linkedAccountError.message
-                  : "Unknown error"
+                `Linked dashboard account: ${
+                  linkedAccountError instanceof Error
+                    ? linkedAccountError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1493,9 +1504,10 @@ const StaffDirectory: FC = () => {
               );
             } catch (scopeError) {
               hierarchyIssues.push(
-                `Dashboard visibility: ${scopeError instanceof Error
-                  ? scopeError.message
-                  : "Unknown error"
+                `Dashboard visibility: ${
+                  scopeError instanceof Error
+                    ? scopeError.message
+                    : "Unknown error"
                 }`,
               );
             }
@@ -1504,9 +1516,9 @@ const StaffDirectory: FC = () => {
           if (hierarchyIssues.length > 0) {
             alert(
               `Staff created, but some Reporting Hierarchy settings failed ` +
-              `to apply:\n\n${hierarchyIssues.join(
-                "\n",
-              )}\n\nYou can set these again by editing this staff member.`,
+                `to apply:\n\n${hierarchyIssues.join(
+                  "\n",
+                )}\n\nYou can set these again by editing this staff member.`,
             );
           }
 
@@ -1703,27 +1715,47 @@ const StaffDirectory: FC = () => {
       return;
     }
 
-    const confirmed = await confirmDialog({
-      title: `Generate new credentials for ${member.name}?`,
-      text: "This creates a new password and immediately signs this person out of any device they're currently logged into.",
-      icon: "warning",
-      confirmButtonText: "Generate",
-      cancelButtonText: "Cancel",
-    });
-
-    if (!confirmed.isConfirmed) return;
-
     setPendingCredentialsId(member.id);
-    toastInfo(`Generating new credentials for ${member.name}…`);
-    const startedAt = performance.now();
+    let startedAt: number | null = null;
+    const generatedCredentialsResponse: {
+      value?: { email?: string; password: string };
+    } = {};
     try {
-      const result = await generateStaffCredentials(userId);
+      const confirmed = await confirmDialog({
+        title: `Generate new credentials for ${member.name}?`,
+        text: "This creates a new password and immediately signs this person out of any device they're currently logged into.",
+        icon: "warning",
+        confirmButtonText: "Generate",
+        cancelButtonText: "Cancel",
+        loadingButtonText: "Generating…",
+        preConfirm: async () => {
+          startedAt = performance.now();
+          try {
+            const result = await generateStaffCredentials(userId);
+            const password = result.credentials?.password;
+            if (!password) {
+              throw new Error(
+                "Server did not return a generated password for this account.",
+              );
+            }
+            generatedCredentialsResponse.value = {
+              email: result.credentials?.email,
+              password,
+            };
+            return true;
+          } catch (error) {
+            toastError(
+              error instanceof Error
+                ? error.message
+                : "Failed to generate new credentials. Please try again.",
+            );
+            return false;
+          }
+        },
+      });
 
-      if (!result.credentials?.password) {
-        throw new Error(
-          "Server did not return a generated password for this account.",
-        );
-      }
+      if (!confirmed.isConfirmed || !generatedCredentialsResponse.value) return;
+      const result = generatedCredentialsResponse.value;
 
       const generatedCredentials = buildStaffCredentials(
         member,
@@ -1734,9 +1766,8 @@ const StaffDirectory: FC = () => {
 
       const credentials: StaffLoginCredentials = {
         ...generatedCredentials,
-        username:
-          result.credentials.email?.trim() || generatedCredentials.username,
-        password: result.credentials.password,
+        username: result.email?.trim() || generatedCredentials.username,
+        password: result.password,
         createdAt: new Date().toISOString(),
       };
 
@@ -1749,8 +1780,8 @@ const StaffDirectory: FC = () => {
           : "Failed to generate new credentials. Please try again.",
       );
     } finally {
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < MIN_SPINNER_VISIBLE_MS) {
+      const elapsed = startedAt === null ? 0 : performance.now() - startedAt;
+      if (startedAt !== null && elapsed < MIN_SPINNER_VISIBLE_MS) {
         await new Promise((r) =>
           setTimeout(r, MIN_SPINNER_VISIBLE_MS - elapsed),
         );
@@ -1855,8 +1886,9 @@ const StaffDirectory: FC = () => {
     }
 
     const bulkDeleteReason = await reasonDialog({
-      title: `Permanently delete ${selectedMembers.length} archived employee${selectedMembers.length === 1 ? "" : "s"
-        }?`,
+      title: `Permanently delete ${selectedMembers.length} archived employee${
+        selectedMembers.length === 1 ? "" : "s"
+      }?`,
       text: "This will remove their archived HR profiles and linked records from the database. This cannot be undone. Please note why these records are being deleted.",
       placeholder: "Reason for permanent deletion…",
       confirmButtonText: "Delete Permanently",
@@ -1892,7 +1924,8 @@ const StaffDirectory: FC = () => {
       await refreshArchivedStaff?.();
 
       toastSuccess(
-        `Deleted ${result.deleted_count ?? deletedIds.size} archived employee${(result.deleted_count ?? deletedIds.size) === 1 ? "" : "s"
+        `Deleted ${result.deleted_count ?? deletedIds.size} archived employee${
+          (result.deleted_count ?? deletedIds.size) === 1 ? "" : "s"
         } permanently.`,
       );
     } catch (error) {
@@ -1948,7 +1981,9 @@ const StaffDirectory: FC = () => {
       });
 
       if (targetMembers.length === 0) {
-        throw new Error("No staff members match the selected branch and department.");
+        throw new Error(
+          "No staff members match the selected branch and department.",
+        );
       }
 
       const assignedCount = await assignShifts(
@@ -1984,19 +2019,19 @@ const StaffDirectory: FC = () => {
       { key: "directory", label: peopleModel.directoryTitle, Icon: Users },
       ...(peopleModel.showShiftAllocation
         ? ([
-          { key: "shifts", label: "Shift Allocation", Icon: CalendarClock },
-        ] as Array<{
-          key: StaffDirectoryTab;
-          label: string;
-          Icon: React.ElementType;
-        }>)
+            { key: "shifts", label: "Shift Allocation", Icon: CalendarClock },
+          ] as Array<{
+            key: StaffDirectoryTab;
+            label: string;
+            Icon: React.ElementType;
+          }>)
         : []),
       ...(scopedStaffItems.some((s) => s.staffType === "field")
         ? ([{ key: "visits", label: "Visit Plans", Icon: MapPin }] as Array<{
-          key: StaffDirectoryTab;
-          label: string;
-          Icon: React.ElementType;
-        }>)
+            key: StaffDirectoryTab;
+            label: string;
+            Icon: React.ElementType;
+          }>)
         : []),
       {
         key: "archived",
@@ -2208,10 +2243,11 @@ const StaffDirectory: FC = () => {
               <div
                 className="staff-directory-table-scroll"
                 style={{
-                  background: "#ffffff",
-                  border: `1px solid #d2dce4`,
-                  borderRadius: 12,
-                  boxShadow: "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
+                  background: T.card,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 16,
+                  boxShadow:
+                    "0 1px 3px rgba(15,45,74,0.07), 0 1px 2px rgba(15,45,74,0.04)",
                   overflowX: "auto",
                   overflowY: "hidden",
                   width: "100%",
@@ -2219,100 +2255,138 @@ const StaffDirectory: FC = () => {
                   minWidth: 0,
                 }}
               >
-                {/* Table header */}
                 <div
-                  className="staff-directory-table-grid"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: peopleTableGridTemplate,
-                    minWidth: 1120,
-                    width: "100%",
-                    boxSizing: "border-box",
-                    gap: 12,
-                    padding: "12px 16px",
-                    background: "#f8fafc",
-                    borderBottom: `1px solid #e2e8f0`,
+                    padding: "15px 20px",
+                    borderBottom: `1px solid ${T.border}`,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
                   }}
                 >
-                  {headerCols.map((column) => {
-                    const align = getColumnAlign(column);
-                    return (
-                      <div
-                        key={column.key}
-                        onClick={() =>
-                          column.sortable !== false &&
-                          toggleSort(columnSortKey(column))
-                        }
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 700,
-                          color: T.muted,
-                          textTransform: "uppercase",
-                          letterSpacing: ".07em",
-                          cursor:
-                            column.sortable !== false ? "pointer" : "default",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent:
-                            align === "right"
-                              ? "flex-end"
-                              : align === "center"
-                                ? "center"
-                                : "flex-start",
-                          gap: 4,
-                          userSelect: "none",
-                          width: "100%",
-                          // Mirrors the padding rule in StaffRow.renderCell so a
-                          // header label lines up with its column's values
-                          // pixel-for-pixel, not just by CSS justify-content.
-                          paddingLeft:
-                            align === "center" ? 8 : align === "left" ? 4 : 0,
-                          paddingRight:
-                            align === "center" || align === "right" ? 8 : 0,
-                        }}
-                      >
-                        {column.label}
-                        {column.sortable !== false && (
-                          <SortIcon k={columnSortKey(column)} />
-                        )}
-                      </div>
-                    );
-                  })}
-                  <div aria-hidden="true" />
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: 14,
+                      fontWeight: 900,
+                      color: T.head,
+                    }}
+                  >
+                    {peopleModel.isStudent
+                      ? "Student Directory"
+                      : "Staff Directory"}
+                  </h2>
+                  <span
+                    style={{
+                      background: T.teal50,
+                      border: `1px solid ${T.teal100}`,
+                      color: T.teal600,
+                      borderRadius: 999,
+                      padding: "4px 10px",
+                      fontSize: 11,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {staffTotal} result{staffTotal !== 1 ? "s" : ""}
+                  </span>
                 </div>
 
-                {/* Rows */}
-                {filtered.map((member) => (
-                  <StaffRow
-                    key={member.id}
-                    domId={`staff-row-${member.userId || member.id}`}
-                    member={member}
-                    onView={() => setViewMember(member)}
-                    onEdit={() => {
-                      void openEditModal(member);
+                <div style={{ overflowX: "auto" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      minWidth: 1120,
+                      borderCollapse: "collapse",
                     }}
-                    editLoading={pendingEditId === member.id}
-                    onDelete={() => handleDelete(member.id)}
-                    onGenerateCredentials={() =>
-                      handleGenerateCredentials(member)
-                    }
-                    generatingCredentials={pendingCredentialsId === member.id}
-                    onOverride={() => {
-                      setActiveTab("shifts");
-                      setOverrideTargetStaffId(member.id);
-                    }}
-                    canDelete={can("delete")}
-                    branchName={branchName}
-                    peopleModel={peopleModel}
-                    columns={peopleTableColumns}
-                    gridTemplateColumns={peopleTableGridTemplate}
-                    highlighted={
-                      Boolean(highlightedStaffId) &&
-                      (String(member.userId) === highlightedStaffId ||
-                        String(member.id) === highlightedStaffId)
-                    }
-                  />
-                ))}
+                  >
+                    <thead>
+                      <tr style={{ background: T.slate50 }}>
+                        {headerCols.map((column) => {
+                          const align = getColumnAlign(column);
+                          return (
+                            <th
+                              key={column.key}
+                              onClick={() =>
+                                column.sortable !== false &&
+                                toggleSort(columnSortKey(column))
+                              }
+                              style={{
+                                padding: "12px 16px",
+                                textAlign: align,
+                                fontSize: 10,
+                                fontWeight: 900,
+                                color: T.muted,
+                                textTransform: "uppercase",
+                                letterSpacing: "0.08em",
+                                borderBottom: `1px solid ${T.border}`,
+                                whiteSpace: "nowrap",
+                                cursor:
+                                  column.sortable !== false
+                                    ? "pointer"
+                                    : "default",
+                                userSelect: "none",
+                              }}
+                            >
+                              {column.label}
+                              {column.sortable !== false && (
+                                <SortIcon k={columnSortKey(column)} />
+                              )}
+                            </th>
+                          );
+                        })}
+                        <th
+                          style={{
+                            padding: "12px 16px",
+                            textAlign: "center",
+                            fontSize: 10,
+                            fontWeight: 900,
+                            color: T.muted,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            borderBottom: `1px solid ${T.border}`,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((member) => (
+                        <StaffRow
+                          key={member.id}
+                          domId={`staff-row-${member.userId || member.id}`}
+                          member={member}
+                          onView={() => setViewMember(member)}
+                          onEdit={() => {
+                            void openEditModal(member);
+                          }}
+                          editLoading={pendingEditId === member.id}
+                          onDelete={() => handleDelete(member.id)}
+                          onGenerateCredentials={() =>
+                            handleGenerateCredentials(member)
+                          }
+                          generatingCredentials={
+                            pendingCredentialsId === member.id
+                          }
+                          onOverride={() => {
+                            setActiveTab("shifts");
+                            setOverrideTargetStaffId(member.id);
+                          }}
+                          canDelete={can("delete")}
+                          branchName={branchName}
+                          peopleModel={peopleModel}
+                          columns={peopleTableColumns}
+                          highlighted={
+                            Boolean(highlightedStaffId) &&
+                            (String(member.userId) === highlightedStaffId ||
+                              String(member.id) === highlightedStaffId)
+                          }
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -2359,7 +2433,8 @@ const StaffDirectory: FC = () => {
               organizationId={organizationId}
               effectiveBranchId={effectiveBranchId}
               currentAdminId={
-                (user as { id?: string | number } | null)?.id?.toString() ?? null
+                (user as { id?: string | number } | null)?.id?.toString() ??
+                null
               }
             />
           </Suspense>
@@ -2394,11 +2469,6 @@ const StaffDirectory: FC = () => {
               <div>
                 <div style={{ fontSize: 14, fontWeight: 900, color: T.head }}>
                   Archived Employees
-                </div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
-                  HR records retained by policy. Biometrics were deleted at
-                  archive time. Use permanent delete only when you intentionally
-                  want to remove archived data from the database.
                 </div>
               </div>
 
@@ -2508,202 +2578,265 @@ const StaffDirectory: FC = () => {
                 <Spinner size={16} />
                 Loading archived employees…
               </div>
-            ) : archivedStaffItems.length === 0 ? (
-              <EmptyState
-                Icon={ArchiveRestore}
-                title="No archived employees"
-                sub="Archived employees will appear here until their retention period expires."
-              />
             ) : (
-              <>
-                <div
-                  className="staff-directory-table-grid"
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns:
-                      showBranchColumn
-                        ? "36px 1.3fr 1fr 1.1fr 1fr 1fr .9fr 1.5fr 1fr 210px"
-                        : "36px 1.3fr 1fr 1.1fr 1fr .9fr 1.5fr 1fr 210px",
-                    gap: 12,
-                    minWidth: 1180,
-                    padding: "12px 16px",
-                    background: "#f8fafc",
-                    borderBottom: "1px solid #e2e8f0",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    color: T.muted,
-                    textTransform: "uppercase",
-                    letterSpacing: ".07em",
-                    alignItems: "center",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={
-                      archivedStaffItems.length > 0 &&
-                      selectedArchived.size === archivedStaffItems.length
-                    }
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        selectAllArchived();
-                      } else {
-                        clearArchivedSelection();
-                      }
-                    }}
-                    style={{ cursor: "pointer", accentColor: T.teal600 }}
-                  />
-                  <div>Name</div>
-                  <div>{peopleCodeModel(peopleModel.peopleType).label}</div>
-                  <div>Phone</div>
-                  {showBranchColumn && <div>Branch</div>}
-                  <div>Department</div>
-                  <div>Status</div>
-                  <div>Reason</div>
-                  <div>Biometrics</div>
-                  <div>Actions</div>
-                </div>
-
-                {archivedStaffItems.map((member) => {
-                  const isSelected = selectedArchived.has(member.id);
-                  const isRestoring = pendingRestoreId === member.id;
-
-                  return (
-                    <div
-                      key={member.id}
-                      className={`staff-directory-table-grid staff-directory-table-row${isSelected ? " staff-directory-table-row-selected" : ""}`}
+              <table
+                style={{
+                  width: "100%",
+                  minWidth: 1180,
+                  borderCollapse: "collapse",
+                }}
+              >
+                <thead>
+                  <tr style={{ background: T.slate50 }}>
+                    <th
                       style={{
-                        display: "grid",
-                        gridTemplateColumns: showBranchColumn
-                          ? "36px 1.3fr 1fr 1.1fr 1fr 1fr .9fr 1.5fr 1fr 210px"
-                          : "36px 1.3fr 1fr 1.1fr 1fr .9fr 1.5fr 1fr 210px",
-                        gap: 12,
-                        minWidth: 1180,
-                        padding: "11px 16px",
-                        borderBottom: "1px solid #f1f5f9",
-                        alignItems: "center",
-                        fontSize: 12,
-                        background: isSelected ? T.teal50 : "#ffffff",
+                        padding: "12px 16px",
+                        textAlign: "center",
+                        borderBottom: `1px solid ${T.border}`,
                       }}
                     >
                       <input
                         type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleArchivedSelection(member.id)}
-                        style={{ cursor: "pointer", accentColor: T.teal600 }}
-                      />
-
-                      <div>
-                        <strong style={{ color: T.head }}>{member.name}</strong>
-                        <div style={{ fontSize: 11, color: T.muted }}>
-                          {member.personCode || member.employeeId || "—"}
-                        </div>
-                      </div>
-
-                      <div style={{ color: T.muted }}>
-                        {member.personCode || member.employeeId || "—"}
-                      </div>
-
-                      <div style={{ color: T.head, whiteSpace: "nowrap" }}>
-                        {member.phone?.trim() || "—"}
-                      </div>
-
-                      {showBranchColumn && (
-                        <div style={{ color: T.navy600, fontWeight: 700 }}>
-                          {branchName(member.branchId)}
-                        </div>
-                      )}
-
-                      <div style={{ color: T.head }}>
-                        {member.department || "—"}
-                      </div>
-
-                      <div style={{ color: T.amber, fontWeight: 800 }}>
-                        Archived
-                      </div>
-
-                      <div
-                        title={member.archiveReason || undefined}
+                        aria-label="Select all archived staff"
+                        checked={
+                          archivedStaffItems.length > 0 &&
+                          selectedArchived.size === archivedStaffItems.length
+                        }
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            selectAllArchived();
+                          } else {
+                            clearArchivedSelection();
+                          }
+                        }}
                         style={{
-                          color: member.archiveReason ? T.head : T.muted,
-                          fontSize: 12,
-                          lineHeight: 1.35,
-                          overflowWrap: "anywhere",
-                          display: "-webkit-box",
-                          WebkitLineClamp: 3,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
+                          cursor: "pointer",
+                          accentColor: T.teal600,
+                        }}
+                      />
+                    </th>
+                    {[
+                      "Name",
+                      peopleCodeModel(peopleModel.peopleType).label,
+                      "Phone",
+                      ...(showBranchColumn ? ["Branch"] : []),
+                      "Department",
+                      "Status",
+                      "Reason",
+                      "Biometrics",
+                      "Actions",
+                    ].map((label) => (
+                      <th
+                        key={label}
+                        style={{
+                          padding: "12px 16px",
+                          textAlign: "left",
+                          fontSize: 10,
+                          fontWeight: 900,
+                          color: T.muted,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.08em",
+                          borderBottom: `1px solid ${T.border}`,
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        {member.archiveReason || "—"}
-                      </div>
-
-                      <div style={{ color: "#e11d48", fontWeight: 800 }}>
-                        Import Required
-                      </div>
-
-                      <div
-                        style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedStaffItems.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={showBranchColumn ? 10 : 9}
+                        style={{
+                          height: 220,
+                          padding: 24,
+                          textAlign: "center",
+                          color: T.muted,
+                        }}
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleRestore(member)}
-                          disabled={pendingRestoreId !== null}
-                          aria-busy={isRestoring}
+                        <div
                           style={{
-                            border: `1px solid ${T.teal200}`,
-                            background: isRestoring ? "#fff" : T.teal50,
-                            color: T.teal700,
-                            borderRadius: 8,
-                            padding: "7px 10px",
-                            cursor:
-                              pendingRestoreId !== null
-                                ? "not-allowed"
-                                : "pointer",
-                            fontSize: 12,
-                            fontWeight: 900,
-                            fontFamily: "inherit",
-                            opacity:
-                              pendingRestoreId !== null && !isRestoring
-                                ? 0.6
-                                : 1,
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: 6,
-                          }}
-                        >
-                          {isRestoring ? (
-                            <>
-                              <Spinner size={13} color={T.teal700} />
-                              Restoring…
-                            </>
-                          ) : (
-                            "Restore"
-                          )}
-                        </button>
+                            fontSize: 14,
 
-                        <button
-                          type="button"
-                          onClick={() => handlePermanentDeleteArchived(member)}
-                          style={{
-                            border: "1px solid #fecdd3",
-                            background: "#fff1f2",
-                            color: "#e11d48",
-                            borderRadius: 8,
-                            padding: "7px 10px",
-                            cursor: "pointer",
-                            fontSize: 12,
-                            fontWeight: 900,
-                            fontFamily: "inherit",
+                            color: T.muted,
+                            marginBottom: 6,
                           }}
                         >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </>
+                          No archived employees
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    archivedStaffItems.map((member) => {
+                      const isSelected = selectedArchived.has(member.id);
+                      const isRestoring = pendingRestoreId === member.id;
+
+                      return (
+                        <tr
+                          key={member.id}
+                          className={`staff-directory-table-row${isSelected ? " staff-directory-table-row-selected" : ""}`}
+                          style={{
+                            background: isSelected ? T.teal50 : T.card,
+                            borderBottom: `1px solid ${T.slate100}`,
+                          }}
+                        >
+                          <td
+                            style={{
+                              padding: "13px 16px",
+                              textAlign: "center",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              aria-label={`Select ${member.name}`}
+                              onChange={() =>
+                                toggleArchivedSelection(member.id)
+                              }
+                              style={{
+                                cursor: "pointer",
+                                accentColor: T.teal600,
+                              }}
+                            />
+                          </td>
+                          <td style={{ padding: "13px 16px" }}>
+                            <strong style={{ color: T.body }}>
+                              {member.name}
+                            </strong>
+                          </td>
+                          <td style={{ padding: "13px 16px", color: T.muted }}>
+                            {member.personCode || member.employeeId || "—"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "13px 16px",
+                              color: T.body,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {member.phone?.trim() || "—"}
+                          </td>
+                          {showBranchColumn && (
+                            <td
+                              style={{
+                                padding: "13px 16px",
+                                color: T.navy600,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {branchName(member.branchId)}
+                            </td>
+                          )}
+                          <td style={{ padding: "13px 16px", color: T.body }}>
+                            {member.department || "—"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "13px 16px",
+                              color: T.amber,
+                              fontWeight: 800,
+                            }}
+                          >
+                            Archived
+                          </td>
+                          <td
+                            title={member.archiveReason || undefined}
+                            style={{
+                              padding: "13px 16px",
+                              color: member.archiveReason ? T.body : T.muted,
+                              fontSize: 12,
+                              lineHeight: 1.35,
+                              overflowWrap: "anywhere",
+                              minWidth: 180,
+                              maxWidth: 260,
+                            }}
+                          >
+                            {member.archiveReason || "—"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "13px 16px",
+                              color: "#e11d48",
+                              fontWeight: 800,
+                            }}
+                          >
+                            Import Required
+                          </td>
+                          <td style={{ padding: "13px 16px" }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleRestore(member)}
+                                disabled={pendingRestoreId !== null}
+                                aria-busy={isRestoring}
+                                style={{
+                                  border: `1px solid ${T.teal200}`,
+                                  background: isRestoring ? "#fff" : T.teal50,
+                                  color: T.teal700,
+                                  borderRadius: 8,
+                                  padding: "7px 10px",
+                                  cursor:
+                                    pendingRestoreId !== null
+                                      ? "not-allowed"
+                                      : "pointer",
+                                  fontSize: 12,
+                                  fontWeight: 900,
+                                  fontFamily: "inherit",
+                                  opacity:
+                                    pendingRestoreId !== null && !isRestoring
+                                      ? 0.6
+                                      : 1,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  gap: 6,
+                                }}
+                              >
+                                {isRestoring ? (
+                                  <>
+                                    <Spinner size={13} color={T.teal700} />
+                                    Restoring…
+                                  </>
+                                ) : (
+                                  "Restore"
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handlePermanentDeleteArchived(member)
+                                }
+                                style={{
+                                  border: "1px solid #fecdd3",
+                                  background: "#fff1f2",
+                                  color: "#e11d48",
+                                  borderRadius: 8,
+                                  padding: "7px 10px",
+                                  cursor: "pointer",
+                                  fontSize: 12,
+                                  fontWeight: 900,
+                                  fontFamily: "inherit",
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             )}
           </div>
         )}

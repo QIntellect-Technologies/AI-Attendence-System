@@ -170,8 +170,20 @@ function noteForLeg(
 ): string | null {
   const prefix = status === "checked_out" ? "Check-out: " : "Check-in: ";
   const line = (notes || "").split("\n").find((l) => l.startsWith(prefix));
-  if (line) return line.slice(prefix.length);
+  if (line) return formatClockTimes(line.slice(prefix.length));
   return status === "checked_out" ? `Checked out at ${time}.` : null;
+}
+
+function formatClockTimes(value: string): string {
+  return value.replace(
+    /\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b/g,
+    (_match, hourText: string, minute: string) => {
+      const hour = Number(hourText);
+      const period = hour >= 12 ? "PM" : "AM";
+      const hour12 = hour % 12 || 12;
+      return `${String(hour12).padStart(2, "0")}:${minute} ${period}`;
+    },
+  );
 }
 
 export function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
@@ -182,6 +194,7 @@ export function DetectionCard({ event }: { event: LiveAttendanceEventView }) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hour12: true,
   });
   const date = eventDate.toLocaleDateString("en-US", {
     month: "short",

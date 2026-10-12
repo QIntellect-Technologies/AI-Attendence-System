@@ -14,6 +14,7 @@ import {
 } from "../../../contexts/OrgConfigContext";
 import { type StaffFormData } from "../types/staffForm";
 import { type StaffMember } from "../types/staffTypes";
+import { formatDisplayTime } from "../../../utils/formatDate";
 
 // ─── Shift helpers ───────────────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ export const resolveEffectiveShift = (
 };
 
 export const shiftText = (member: StaffMember): string => {
-  // The mapper defaults every row to "Morning 09:00–17:00" when the
+  // The mapper defaults every row to "Morning 9:00 AM–5:00 PM" when the
   // backend has no shift text, and the create form used to save that
   // default as legacy text. Only show a shift when the person is linked
   // to a real shift row (the same field the Edit modal and the shift
@@ -96,7 +97,7 @@ export const shiftText = (member: StaffMember): string => {
   );
   const start = String((member as any).shiftStart ?? "09:00");
   const end = String((member as any).shiftEnd ?? "17:00");
-  return `${shift} · ${start}–${end}`;
+  return `${shift} · ${formatDisplayTime(start)}–${formatDisplayTime(end)}`;
 };
 
 export const staffTypeText = (member: StaffMember): string =>

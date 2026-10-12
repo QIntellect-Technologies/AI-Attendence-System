@@ -2469,11 +2469,13 @@ def mark_client_staff_absent_today(
     from support_db_payroll import _invalidate_payroll_breakdown_cache
     _invalidate_payroll_breakdown_cache(org_key)
 
-    # Queue manual instruction so local node syncs the absent/deletion status
-    try:
-        from support_db_attendance_settings import create_manual_instruction
-        target_branch = str(backend_branch_id or staff.get("backend_branch_id") or staff.get("branch_id") or "")
-        if target_branch and target_branch != "all":
+    # Queue the node instruction before reporting success. Swallowing a
+    # queue failure here made the dashboard claim success while the local
+    # node continued to show the old attendance card.
+    from support_db_attendance_settings import create_manual_instruction
+    target_branch = str(backend_branch_id or staff.get("backend_branch_id") or staff.get("branch_id") or "")
+    if target_branch and target_branch != "all":
+        try:
             create_manual_instruction(
                 org_id=org_key,
                 branch_id=target_branch,
@@ -2487,8 +2489,15 @@ def mark_client_staff_absent_today(
                 },
                 created_by=None,
             )
-    except Exception as exc:
-        logger.warning("mark_client_staff_absent_today: failed to queue manual instruction for node: %s", exc)
+        except Exception:
+            logger.exception(
+                "mark_client_staff_absent_today: failed to queue local-node absent instruction "
+                "for staff_id=%s branch_id=%s date=%s",
+                staff_key,
+                target_branch,
+                _log_date,
+            )
+            raise
 
     try:
         from support_db_fast import clear_fast_cache

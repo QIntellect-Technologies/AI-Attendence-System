@@ -70,8 +70,81 @@
   display: none;
 }
 
+.attendance-view-filter-toolbar {
+  min-width: 0;
+}
+
+.dynamic-filter-toolbar__desktop .attendance-view-filter-toolbar>div {
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+
+.dynamic-filter-toolbar__desktop .attendance-view-filter-toolbar>div>* {
+  min-width: 0;
+}
+
 .staff-management-mobile-filter {
   display: none;
+}
+
+.reports-page {
+  container-name: reports-layout;
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.reports-mobile-tab-select {
+  display: none;
+}
+
+.reports-stat-grid,
+.reports-chart-grid,
+.reports-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reports-stat-grid > *,
+.reports-chart-grid > * {
+  min-width: 0;
+}
+
+.overtime-management-page {
+  container-name: overtime-layout;
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.overtime-stat-grid,
+.overtime-filter-grid,
+.overtime-table-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.overtime-stat-grid > *,
+.overtime-filter-grid > * {
+  min-width: 0;
+}
+
+.overtime-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+
+.payroll-date-filter,
+.payroll-page-actions {
+  min-width: 0;
+}
+
+.payroll-header-utility-actions {
+  display: contents;
+}
+
+.payroll-tab-button {
+  white-space: nowrap;
 }
 
 .attendance-action-filter,
@@ -217,6 +290,92 @@
   }
 }
 
+@media (max-width: 425px) {
+  .payroll-page {
+    padding: 16px 12px 32px !important;
+  }
+
+  .payroll-page-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 14px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .payroll-page-header h1 {
+    font-size: 20px !important;
+    line-height: 1.2;
+  }
+
+  .payroll-page-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .payroll-date-filter {
+    width: 100%;
+  }
+
+  .payroll-date-filter>div {
+    align-items: stretch !important;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .payroll-date-filter>div>div:first-child {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 6px !important;
+  }
+
+  .payroll-date-filter>div>div:first-child>button {
+    justify-content: center;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .payroll-date-filter input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .payroll-date-filter>div>div:nth-child(2) {
+    width: 100%;
+  }
+
+  .payroll-header-utility-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .payroll-header-utility-actions>* {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    justify-content: center;
+  }
+
+  .payroll-tab-list {
+    display: flex !important;
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .payroll-tab-button {
+    flex: 1 1 0;
+    justify-content: center;
+    gap: 4px !important;
+    min-width: 0;
+    padding: 8px 6px !important;
+    font-size: 11px !important;
+  }
+}
+
 @media (max-width: 768px) {
   .attendance-action-filter {
     order: 1;
@@ -243,6 +402,10 @@
     box-sizing: border-box;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .overtime-filter-grid {
+    display: none !important;
   }
 
   .fast-pagination {
@@ -492,6 +655,198 @@
 @media (max-width: 480px) {
   .staff-management-stats {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 425px) {
+  .staff-management-page {
+    padding: 12px !important;
+  }
+
+  .staff-management-page .module-shell-actions {
+    justify-content: flex-start !important;
+    gap: 6px !important;
+  }
+
+  .staff-management-export-action {
+    margin-left: 0;
+  }
+
+  .staff-management-mobile-tab-select {
+    width: 100%;
+    margin: 0 0 12px;
+  }
+
+  .staff-management-stats {
+    gap: 10px !important;
+  }
+}
+
+@media (max-width: 425px) {
+  .reports-page {
+    padding: 16px 12px 24px !important;
+  }
+
+  .reports-chart-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reports-panel {
+    min-width: 0;
+  }
+
+  .reports-page .module-shell-actions {
+    width: 100%;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+  }
+
+  .reports-tab-list {
+    display: none !important;
+  }
+
+  .reports-mobile-tab-select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    margin: 0 0 16px;
+  }
+
+  .reports-panel {
+    padding: 14px !important;
+  }
+
+  .reports-panel > div:first-child {
+    gap: 8px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .reports-panel h3 {
+    font-size: 14px !important;
+    line-height: 1.35;
+  }
+
+  .reports-chart {
+    height: 280px !important;
+    min-width: 0;
+  }
+
+  .reports-table-scroll {
+    max-width: 100%;
+  }
+}
+
+@container reports-layout (max-width: 1000px) {
+  .reports-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .reports-chart-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reports-panel {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@container reports-layout (max-width: 425px) {
+  .reports-tab-list {
+    display: none !important;
+  }
+
+  .reports-mobile-tab-select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    margin: 0 0 16px;
+  }
+}
+
+@container reports-layout (max-width: 520px) {
+  .reports-stat-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reports-stat-grid > div {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 16px !important;
+    gap: 10px;
+  }
+
+  .reports-stat-grid > div > div:first-child {
+    min-width: 0;
+  }
+
+  .reports-stat-grid > div > div:first-child > div {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+@container overtime-layout (max-width: 1150px) {
+  .overtime-stat-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+@container overtime-layout (max-width: 980px) {
+  .overtime-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .overtime-filter-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+@container overtime-layout (max-width: 700px) {
+  .overtime-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .overtime-filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .overtime-page-header {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .overtime-page-actions {
+    justify-content: flex-start !important;
+  }
+}
+
+@container overtime-layout (max-width: 500px) {
+  .overtime-management-page {
+    padding: 16px 12px 32px !important;
+  }
+
+  .overtime-stat-grid,
+  .overtime-filter-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .overtime-filter-grid {
+    padding: 12px !important;
+  }
+
+  .overtime-filter-search {
+    grid-column: 1 / -1 !important;
+    align-items: stretch !important;
+  }
+
+  .overtime-filter-search > div {
+    flex: 1 1 auto;
+  }
+
+  .overtime-filter-search > button {
+    align-self: flex-end;
   }
 }
 

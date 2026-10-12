@@ -281,7 +281,7 @@ export const ShiftTimingsModal: FC<{
         anySucceeded = true;
       } catch (error) {
         // A 409 carries the specific shift it collided with, so the row can
-        // say "Overlaps Morning (09:00–17:00) by 180 min" instead of the
+        // say "Overlaps Morning (9:00 AM–5:00 PM) by 180 min" instead of the
         // generic failure every other error falls back to. This catches the
         // case the pre-flight above can't: a colliding shift that exists on
         // the server but isn't loaded in this modal — another admin added it

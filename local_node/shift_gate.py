@@ -49,10 +49,23 @@ from local_node.config_store import load_config
 def _parse_time(value: Any) -> dt_time | None:
     if not value:
         return None
-    parts = str(value).split(":")
-    if len(parts) < 2:
+    try:
+        return dt_time.fromisoformat(str(value))
+    except ValueError:
         return None
-    return dt_time(hour=int(parts[0]), minute=int(parts[1]))
+
+
+def _local_seconds_since_midnight(value: datetime) -> float:
+    return (
+        value.hour * 3600
+        + value.minute * 60
+        + value.second
+        + value.microsecond / 1_000_000
+    )
+
+
+def _time_seconds_since_midnight(value: dt_time) -> float:
+    return value.hour * 3600 + value.minute * 60 + value.second + value.microsecond / 1_000_000
 
 
 def _branch_zone(config: dict[str, Any]) -> ZoneInfo:
@@ -277,9 +290,9 @@ def is_check_in_window_closed(
     grace = int(window.get("check_in_grace_minutes") or 0)
     dt = event_dt_utc if event_dt_utc.tzinfo else event_dt_utc.replace(tzinfo=timezone.utc)
     local = dt.astimezone(_branch_zone(cfg))
-    local_minutes = local.hour * 60 + local.minute
-    target_minutes = target.hour * 60 + target.minute
-    return local_minutes > (target_minutes + grace)
+    local_seconds = _local_seconds_since_midnight(local)
+    target_seconds = _time_seconds_since_midnight(target)
+    return local_seconds > (target_seconds + grace * 60)
 
 
 def is_event_within_shift(
@@ -293,8 +306,8 @@ def is_event_within_shift(
     """True if no window is configured for this person (neither a personal
     override nor a branch default for their people_type -> nothing to gate
     against -> never hold, unchanged pre-feature behavior), or if
-    event_dt_utc falls within [target - grace, target + grace] in the
-    branch's own local time, evaluated against whichever window applies:
+    event_dt_utc falls within [target, target + grace] in branch-local time,
+    evaluated against whichever window applies:
     the person's own synced shift if one exists, otherwise the branch
     default for their people_type.
     
@@ -326,9 +339,9 @@ def is_event_within_shift(
     grace = int(window.get(grace_key) or 0)
     dt = event_dt_utc if event_dt_utc.tzinfo else event_dt_utc.replace(tzinfo=timezone.utc)
     local = dt.astimezone(_branch_zone(cfg))
-    local_minutes = local.hour * 60 + local.minute
-    target_minutes = target.hour * 60 + target.minute
-    return (target_minutes - grace) <= local_minutes <= (target_minutes + grace)
+    local_seconds = _local_seconds_since_midnight(local)
+    target_seconds = _time_seconds_since_midnight(target)
+    return target_seconds <= local_seconds <= (target_seconds + grace * 60)
 
 
 def resolve_attendance_bucket_date(
@@ -380,9 +393,9 @@ def resolve_attendance_bucket_date(
 
     if check_in and check_out and (check_out < check_in):
         grace = int(window.get("check_out_grace_minutes") or 0)
-        boundary_minutes = check_out.hour * 60 + check_out.minute + grace
-        local_minutes = local.hour * 60 + local.minute
-        if local_minutes <= boundary_minutes:
+        boundary_seconds = _time_seconds_since_midnight(check_out) + grace * 60
+        local_seconds = _local_seconds_since_midnight(local)
+        if local_seconds <= boundary_seconds:
             local_date = local_date - timedelta(days=1)
 
     return local_date.isoformat()
@@ -396,8 +409,8 @@ def classify_check_out_timing(
     person_code: str | None = None,
 ) -> str:
     """Classify a checkout-leg sighting as 'early' (before the checkout
-    window opens, target - grace), 'late' (after the checkout window
-    closes, target + grace), or 'within'.
+    time), 'late' (after the checkout window closes, target + grace), or
+    'within'.
 
     This is the checkout-leg counterpart to is_check_in_window_closed: that
     function only needed a boolean (has the check-in window's one-sided
@@ -431,12 +444,12 @@ def classify_check_out_timing(
     grace = int(window.get("check_out_grace_minutes") or 0)
     dt = event_dt_utc if event_dt_utc.tzinfo else event_dt_utc.replace(tzinfo=timezone.utc)
     local = dt.astimezone(_branch_zone(cfg))
-    local_minutes = local.hour * 60 + local.minute
-    target_minutes = target.hour * 60 + target.minute
+    local_seconds = _local_seconds_since_midnight(local)
+    target_seconds = _time_seconds_since_midnight(target)
 
-    if local_minutes < (target_minutes - grace):
+    if local_seconds < target_seconds:
         return "early"
-    if local_minutes > (target_minutes + grace):
+    if local_seconds > (target_seconds + grace * 60):
         return "late"
     return "within"
 

@@ -32,6 +32,9 @@ import {
   X,
   Inbox,
   BarChart2,
+  Users,
+  UserCheck,
+  UserX,
 } from "lucide-react";
 
 import { useOrg } from "../../contexts/OrgConfigContext";
@@ -57,6 +60,7 @@ import DynamicFilterToolbar, {
 } from "../../components/ui/DynamicFilterToolbar";
 import JellyButton from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
+import StatCard from "../../components/dashboard/overview/StatCard";
 
 import { useLeaveFilters } from "./hooks/useLeaveFilters";
 import { useLeaveExport } from "./hooks/useLeaveExport";
@@ -159,46 +163,6 @@ function buildHistoryExportColumns(
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-const StatCard: React.FC<{
-  label: string;
-  value: number | string;
-  sub: string;
-}> = ({ label, value, sub }) => (
-  <div
-    style={{
-      background: T.bgCard,
-      border: `1px solid ${T.border}`,
-      borderRadius: 16,
-      boxShadow: T.shadow,
-      padding: "18px 20px",
-    }}
-  >
-    <p
-      style={{
-        margin: 0,
-        fontSize: 10,
-        fontWeight: 800,
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: T.textMuted,
-      }}
-    >
-      {label}
-    </p>
-    <p
-      style={{
-        margin: "8px 0 0",
-        fontSize: 28,
-        fontWeight: 900,
-        color: T.navy700,
-      }}
-    >
-      {value}
-    </p>
-    <p style={{ margin: "3px 0 0", fontSize: 11, color: T.textLight }}>{sub}</p>
-  </div>
-);
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.Pending;
@@ -458,7 +422,7 @@ export default function LeaveManagement() {
 
   // Which people types Leave is actually enabled for, in this scope —
   // per-branch when viewing a single branch, unioned across branches when
-  // viewing "All Branches". Falls back to the org-wide list automatically
+  // viewing "Branches". Falls back to the org-wide list automatically
   // for orgs that haven't been backfilled yet (see resolveModulePeopleTypes).
   const leavePeopleTypes = useMemo(
     () =>
@@ -589,10 +553,11 @@ export default function LeaveManagement() {
   });
 
   // ── Pagination ────────────────────────────────────────────────────────────
+  const [leavePageSize, setLeavePageSize] = useState(25);
   const { paginatedItems, page, totalPages, totalItems, goToPage } =
     useStatefulPagination({
       items: leaveFilters.fullyFilteredLeaves,
-      itemsPerPage: 25,
+      itemsPerPage: leavePageSize,
     });
 
   // ── Leave History tab: per-employee aggregation ────────────────────────────
@@ -634,15 +599,16 @@ export default function LeaveManagement() {
     leaveFilters.filters.search,
   ]);
 
-  const [leavePageSize, setLeavePageSize] = useState(25);
-
   const {
     paginatedItems: paginatedHistoryRows,
     page: historyPage,
     totalPages: historyTotalPages,
     totalItems: historyTotalItems,
     goToPage: goToHistoryPage,
-  } = useStatefulPagination({ items: historyRows, itemsPerPage: leavePageSize });
+  } = useStatefulPagination({
+    items: historyRows,
+    itemsPerPage: leavePageSize,
+  });
 
   // ── Scroll highlighted row into view ──────────────────────────────────────
   useLayoutEffect(() => {
@@ -669,7 +635,7 @@ export default function LeaveManagement() {
     dateLabel: filter.label,
     branchLabel: isGlobal
       ? branch.isAllBranches
-        ? "All Branches"
+        ? "Branches"
         : (branchFilterOptions.find((b) => b.id === branch.selectedBranchId)
             ?.name ?? "Branch")
       : (branchName ?? "Branch"),
@@ -686,7 +652,7 @@ export default function LeaveManagement() {
   // ── Context label ─────────────────────────────────────────────────────────
   const contextLabel = isGlobal
     ? branch.isAllBranches
-      ? "All Branches"
+      ? "Branches"
       : (branchFilterOptions.find((b) => b.id === branch.selectedBranchId)
           ?.name ?? branch.selected.name)
     : (branchName ?? "Branch");
@@ -705,6 +671,12 @@ export default function LeaveManagement() {
   // no longer varies with the period selector the way it used to.
   const kpiLabel = "Pending Leaves";
   const kpiSub = "Awaiting approval";
+  const todayLabel = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 
   // ── Filter toolbar sections ───────────────────────────────────────────────
   const groupFilterTemplate = useMemo(
@@ -821,13 +793,13 @@ export default function LeaveManagement() {
       }}
     >
       {/* Header */}
-      <div
+      <header
+        className="module-shell-header mb-6"
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 22,
-          gap: 14,
+          alignItems: "center",
+          gap: 16,
           flexWrap: "wrap",
         }}
       >
@@ -835,24 +807,55 @@ export default function LeaveManagement() {
           <h1
             style={{
               margin: 0,
-              color: T.textHeading,
-              fontSize: 24,
-              fontWeight: 900,
+              color: "#0F172A",
+              fontSize: 22,
+              fontWeight: 800,
+              letterSpacing: "-0.5px",
               display: "flex",
               alignItems: "center",
               gap: 10,
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
             }}
           >
             <CalendarDays size={22} color={T.teal600} />
             Leave Management
           </h1>
+          <p
+            style={{
+              margin: "4px 0 0",
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#64748B",
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
+            }}
+          >
+            {todayLabel}
+          </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          className="module-shell-actions"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          {activeView === "requests" && (
+            <DateFilterBar filter={filter} compact maxDate={null} />
+          )}
           <RefreshButton
             size="md"
             loading={leavesRefreshing}
             onClick={refreshLeaves}
             ariaLabel="Refresh leave requests"
+            className="staff-management-refresh-button staff-management-mobile-icon-button"
+          />
+          <DynamicFilterToolbar
+            sections={toolbarSections}
+            mobileOnly
+            className="staff-management-mobile-filter"
           />
           {activeView === "requests" ? (
             <ExportButton
@@ -892,7 +895,7 @@ export default function LeaveManagement() {
             />
           )}
         </div>
-      </div>
+      </header>
 
       {/* Tabs */}
       <div
@@ -926,40 +929,47 @@ export default function LeaveManagement() {
       </div>
 
       {/* KPI Cards */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-          gap: 14,
-          marginBottom: 20,
-        }}
-      >
+      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label={templateModel.statsTotalLabel}
+          title={templateModel.statsTotalLabel}
           value={stats.totalStaff}
           sub={isGlobal ? `${stats.totalBranches} branches` : "Current branch"}
+          icon={Users}
+          iconBg="#E0F2FE"
+          iconColor="#1A699F"
         />
         <StatCard
-          label={kpiLabel}
+          title={kpiLabel}
           value={leaveFilters.pendingCount}
           sub={kpiSub}
+          icon={Clock}
+          iconBg="#FEF3C7"
+          iconColor="#D97706"
         />
         <StatCard
-          label="Present Today"
+          title="Present Today"
           value={stats.presentToday}
           sub={`${stats.avgAttendance}% attendance`}
+          icon={UserCheck}
+          iconBg="#ECFDF5"
+          iconColor="#16A34A"
         />
         <StatCard
-          label="Absent Today"
+          title="Absent Today"
           value={stats.absentToday}
           sub={`${stats.lateToday} late arrivals`}
+          icon={UserX}
+          iconBg="#FFF1F2"
+          iconColor="#E11D48"
         />
       </div>
 
       {/* Filter Toolbar */}
       <DynamicFilterToolbar
         sections={toolbarSections}
-        style={{ marginBottom: 16 }}
+        desktopOnly
+        bordered
+        style={{ marginBottom: 24 }}
       />
 
       {activeView === "requests" ? (
@@ -995,15 +1005,6 @@ export default function LeaveManagement() {
                 >
                   Pending Leave Requests
                 </h2>
-                <p
-                  style={{
-                    margin: "2px 0 0",
-                    fontSize: 11,
-                    color: T.textMuted,
-                  }}
-                >
-                  All pending, plus approved/rejected history for {filter.label}
-                </p>
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1088,7 +1089,9 @@ export default function LeaveManagement() {
                   {leavesLoading ? (
                     <tr>
                       <td
-                        colSpan={(isGlobal ? 8 : 7) - (showPayrollTreatment ? 0 : 1)}
+                        colSpan={
+                          (isGlobal ? 8 : 7) - (showPayrollTreatment ? 0 : 1)
+                        }
                         style={{
                           padding: 48,
                           textAlign: "center",
@@ -1232,88 +1235,88 @@ export default function LeaveManagement() {
 
                             {/* Payroll treatment */}
                             {showPayrollTreatment && (
-                            <td
-                              style={{
-                                padding: "13px 16px",
-                                textAlign: "center",
-                              }}
-                            >
-                              {(() => {
-                                const mode = String(
-                                  leave.leaveCompensation ?? "not_configured",
-                                ).toLowerCase();
-                                const payrollDecision = String(
-                                  leave.leavePayrollDecision ?? "",
-                                ).toLowerCase();
+                              <td
+                                style={{
+                                  padding: "13px 16px",
+                                  textAlign: "center",
+                                }}
+                              >
+                                {(() => {
+                                  const mode = String(
+                                    leave.leaveCompensation ?? "not_configured",
+                                  ).toLowerCase();
+                                  const payrollDecision = String(
+                                    leave.leavePayrollDecision ?? "",
+                                  ).toLowerCase();
 
-                                const appearance =
-                                  mode === "unpaid"
-                                    ? {
-                                        bg: T.red100,
-                                        border: `${T.red600}33`,
-                                        color: T.red600,
-                                        label: "Unpaid",
-                                      }
-                                    : mode === "excluded"
+                                  const appearance =
+                                    mode === "unpaid"
                                       ? {
-                                          bg: T.slate100,
-                                          border: `${T.textMuted}33`,
-                                          color: T.textMuted,
-                                          label: "Excluded",
+                                          bg: T.red100,
+                                          border: `${T.red600}33`,
+                                          color: T.red600,
+                                          label: "Unpaid",
                                         }
-                                      : mode === "paid"
+                                      : mode === "excluded"
                                         ? {
-                                            bg: T.green100,
-                                            border: `${T.green600}33`,
-                                            color: T.green600,
-                                            label: "Paid",
+                                            bg: T.slate100,
+                                            border: `${T.textMuted}33`,
+                                            color: T.textMuted,
+                                            label: "Excluded",
                                           }
-                                        : {
-                                            bg: T.amber100,
-                                            border: `${T.amber600}33`,
-                                            color: T.amber600,
-                                            label: "Not Configured",
-                                          };
+                                        : mode === "paid"
+                                          ? {
+                                              bg: T.green100,
+                                              border: `${T.green600}33`,
+                                              color: T.green600,
+                                              label: "Paid",
+                                            }
+                                          : {
+                                              bg: T.amber100,
+                                              border: `${T.amber600}33`,
+                                              color: T.amber600,
+                                              label: "Not Configured",
+                                            };
 
-                                return (
-                                  <div
-                                    style={{
-                                      display: "inline-flex",
-                                      flexDirection: "column",
-                                      alignItems: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    <span
+                                  return (
+                                    <div
                                       style={{
-                                        background: appearance.bg,
-                                        border: `1px solid ${appearance.border}`,
-                                        color: appearance.color,
-                                        borderRadius: 999,
-                                        padding: "4px 10px",
-                                        fontSize: 10,
-                                        fontWeight: 800,
-                                        textTransform: "uppercase",
+                                        display: "inline-flex",
+                                        flexDirection: "column",
+                                        alignItems: "center",
+                                        gap: 4,
                                       }}
                                     >
-                                      {appearance.label}
-                                    </span>
-                                    {payrollDecision && (
                                       <span
                                         style={{
+                                          background: appearance.bg,
+                                          border: `1px solid ${appearance.border}`,
+                                          color: appearance.color,
+                                          borderRadius: 999,
+                                          padding: "4px 10px",
                                           fontSize: 10,
-                                          fontWeight: 700,
-                                          color: T.textMuted,
-                                          textTransform: "capitalize",
+                                          fontWeight: 800,
+                                          textTransform: "uppercase",
                                         }}
                                       >
-                                        Decision: {payrollDecision}
+                                        {appearance.label}
                                       </span>
-                                    )}
-                                  </div>
-                                );
-                              })()}
-                            </td>
+                                      {payrollDecision && (
+                                        <span
+                                          style={{
+                                            fontSize: 10,
+                                            fontWeight: 700,
+                                            color: T.textMuted,
+                                            textTransform: "capitalize",
+                                          }}
+                                        >
+                                          Decision: {payrollDecision}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </td>
                             )}
 
                             {/* Days */}
@@ -1413,7 +1416,10 @@ export default function LeaveManagement() {
                       {paginatedItems.length === 0 && (
                         <tr>
                           <td
-                            colSpan={(isGlobal ? 8 : 7) - (showPayrollTreatment ? 0 : 1)}
+                            colSpan={
+                              (isGlobal ? 8 : 7) -
+                              (showPayrollTreatment ? 0 : 1)
+                            }
                             style={{
                               padding: 48,
                               textAlign: "center",
@@ -1429,7 +1435,7 @@ export default function LeaveManagement() {
                                 margin: "0 auto 10px",
                               }}
                             />
-                            No pending requests, and no leave history
+                            No pending requests
                             {isRangeMode ? ` for ${filter.label}` : ""} matches
                             your filters.
                           </td>
@@ -1440,43 +1446,47 @@ export default function LeaveManagement() {
                 </tbody>
               </table>
             </div>
-
-            {/* Pagination Controls */}
-            {historyTotalItems > 0 && (
-              <div
-                style={{
-                  padding: "8px 20px",
-                  borderTop: `1px solid ${T.border}`,
-                }}
-              >
-                <FastPagination
-                  page={historyPage}
-                  pageSize={leavePageSize}
-                  total={historyTotalItems}
-                  onPageChange={goToHistoryPage}
-                  onPageSizeChange={setLeavePageSize}
-                  disabled={historyLoading}
-                />
-              </div>
-            )}
           </div>
+          {totalItems > 0 && (
+            <div style={{ padding: "12px 20px" }} className="mt-3">
+              <FastPagination
+                page={page}
+                pageSize={leavePageSize}
+                total={totalItems}
+                onPageChange={goToPage}
+                onPageSizeChange={setLeavePageSize}
+                disabled={leavesLoading}
+              />
+            </div>
+          )}
         </>
       ) : (
-        <LeaveHistoryTable
-          rows={paginatedHistoryRows}
-          loading={historyLoading}
-          showBranch={isGlobal}
-          year={historyYear}
-          yearOptions={historyYearOptions}
-          onYearChange={setHistoryYear}
-          quotaConfigured={historyQuotaConfigured}
-          page={historyPage}
-          pageSize={leavePageSize}
-          totalPages={historyTotalPages}
-          totalItems={historyTotalItems}
-          goToPage={goToHistoryPage}
-          onPageSizeChange={setLeavePageSize}
-        />
+        <>
+          <LeaveHistoryTable
+            rows={paginatedHistoryRows}
+            loading={historyLoading}
+            showBranch={isGlobal}
+            year={historyYear}
+            yearOptions={historyYearOptions}
+            onYearChange={setHistoryYear}
+            quotaConfigured={historyQuotaConfigured}
+            page={historyPage}
+            totalPages={historyTotalPages}
+            totalItems={historyTotalItems}
+          />
+          {historyTotalItems > 0 && (
+            <div style={{ padding: "12px 20px" }} className="mt-3">
+              <FastPagination
+                page={historyPage}
+                pageSize={leavePageSize}
+                total={historyTotalItems}
+                onPageChange={goToHistoryPage}
+                onPageSizeChange={setLeavePageSize}
+                disabled={historyLoading}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {detailsLeave && (

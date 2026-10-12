@@ -34,6 +34,8 @@
  * flat segments before comparison, so wrap is handled once, here.
  */
 
+import { formatDisplayTime } from "../../../utils/formatDate";
+
 export const DAY_MINUTES = 24 * 60;
 
 export type ShiftConflictSeverity = "conflict" | "warning";
@@ -58,7 +60,7 @@ export interface ShiftConflict {
   shiftName: string;
   severity: ShiftConflictSeverity;
   overlapMinutes: number;
-  /** "09:00–17:00", or "09:00 (open-ended)". */
+  /** "9:00 AM–5:00 PM", or "9:00 AM (open-ended)". */
   window: string;
 }
 
@@ -86,9 +88,9 @@ export const toMinutes = (value: unknown): number | null => {
 const formatTime = (value: unknown): string => {
   const minutes = toMinutes(value);
   if (minutes === null) return String(value ?? "").trim() || "??:??";
-  const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
+  const hh = Math.floor(minutes / 60);
   const mm = String(minutes % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
+  return formatDisplayTime(`${hh}:${mm}`);
 };
 
 /** True when this shift captures a checkout leg at all. Draft rows express

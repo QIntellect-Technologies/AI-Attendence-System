@@ -1,6 +1,7 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
 import { useOrg } from "../contexts/OrgConfigContext";
+import DashboardLoader from "./common/DashboardLoader";
 
 const ALLOWED_CLIENT_STATUSES = new Set([
   "active",
@@ -13,20 +14,6 @@ function statusLabel(status: string | null): string {
   if (!status) return "not ready";
   return status.replace(/_/g, " ");
 }
-
-const GateLoader: React.FC = () => (
-  <div
-    style={{
-      minHeight: "55vh",
-      display: "grid",
-      placeItems: "center",
-      color: "#64748b",
-      fontSize: 14,
-    }}
-  >
-    Loading dashboard configuration…
-  </div>
-);
 
 // Shown when the bootstrap/config request itself failed (network error, a
 // transient 500, etc.) -- distinct from a confirmed "this account has no
@@ -129,7 +116,7 @@ export const TenantGate: React.FC<{ children: React.ReactNode }> = ({
     refreshOrgConfig,
   } = useOrg();
 
-  if (!isOrgReady) return <GateLoader />;
+  if (!isOrgReady) return <DashboardLoader />;
 
   // The fetch itself failed -- do NOT treat this as "no org" and redirect
   // to onboarding. Offer a retry instead; the session/token is fine.

@@ -158,7 +158,11 @@ def record_simple_attendance(
             if not shift_gate.capture_check_out_enabled(people_type, person_code, config=cfg):
                 return {**row, "already_marked": True, "event_type": "check_out_capture_disabled"}
 
-            if bool(row.get("check_out_confirmed")):
+            hold_reason = shift_gate.classify_check_out_timing(
+                people_type, event_dt, person_code=person_code, config=cfg,
+            )
+
+            if bool(row.get("check_out_confirmed")) and hold_reason != "within":
                 note = _format_stray_after_checkout_note(now, cfg)
                 notes = _merge_note(row.get("notes"), "check_out", note)
                 cur.execute(
@@ -170,10 +174,6 @@ def record_simple_attendance(
                     **row, "notes": notes, "check_out_last_late_seen_at": now,
                     "already_marked": True, "event_type": "stray_after_checkout",
                 }
-
-            hold_reason = shift_gate.classify_check_out_timing(
-                people_type, event_dt, person_code=person_code, config=cfg,
-            )
 
             if hold_reason == "within":
                 check_out_ready_at = shift_gate.resolve_leg_ready_at_utc(

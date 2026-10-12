@@ -297,7 +297,7 @@ export function useLeaveFilters({
     const branchLabel = isGlobal
       ? selectedBranchId
         ? `Branch ${selectedBranchId}`
-        : "All Branches"
+        : "Branches"
       : "Current Branch";
 
     return buildFilterMetadata(filterState, dateFilter.label, branchLabel);

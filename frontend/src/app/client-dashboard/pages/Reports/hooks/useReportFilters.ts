@@ -130,7 +130,7 @@ export function useReportFilters(
     return [
       {
         value: "all",
-        label: "All Branches",
+        label: "Branches",
         count: staffCount,
       },
       ...allBranches.map((b) => ({

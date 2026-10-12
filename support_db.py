@@ -847,62 +847,18 @@ def mark_client_staff_absent_today(
     people_type: str | None = None,
     date_value: str | None = None,
 ) -> dict:
-    """Remove today's attendance rows for one tenant-owned person.
-
-    This is the UUID/Supabase counterpart of the legacy SQLite absent action.
-    It validates organization ownership and optional people_type before deleting
-    attendance, so student/staff/worker attendance cannot cross tenant scope.
-    """
-    from support_db_branches import list_branches
-    from support_db_staff import _normalize_people_type, get_client_staff_member
-    org_key = str(org_id)
-    staff_key = str(staff_id)
-    if not org_key:
-        raise ValueError('organization_id is required')
-    if not staff_key:
-        raise ValueError('staff_id is required')
-
-    staff = get_client_staff_member(staff_key)
-    if str(staff.get('organization_id') or '') != org_key:
-        raise ValueError('Person does not belong to this organization')
-
-    normalized_people_type = _normalize_people_type(people_type, '') if people_type else ''
-    if normalized_people_type:
-        staff_people_type = _normalize_people_type(
-            staff.get('people_type') or staff.get('peopleType') or staff.get('person_type') or staff.get('personType') or 'staff',
-            '',
-        )
-        if staff_people_type != normalized_people_type:
-            raise ValueError('Person does not belong to the requested attendance scope')
-
-    branches = list_branches(org_key)
-    backend_branch_id = _resolve_attendance_branch_id(branch_id, branches) if branch_id not in (None, '') else None
-    if backend_branch_id and str(staff.get('backend_branch_id') or '') != str(backend_branch_id):
-        raise ValueError('Person does not belong to the requested branch')
-
-    log_date, start_iso, end_iso = _dashboard_day_window_utc(date_value)
-    from support_db_time_utils import ensure_attendance_on_or_after_join_date
-    ensure_attendance_on_or_after_join_date(staff.get('join_date'), log_date)
-    query = (
-        get_supabase()
-        .table('attendance')
-        .delete()
-        .eq('org_id', org_key)
-        .eq('staff_id', staff_key)
-        .gte('timestamp', start_iso)
-        .lt('timestamp', end_iso)
+    """Delegate to the attendance implementation that also queues node cleanup."""
+    from support_db_attendance_dashboard import (
+        mark_client_staff_absent_today as mark_absent,
     )
-    if backend_branch_id:
-        query = query.eq('branch_id', str(backend_branch_id))
 
-    result = query.execute()
-    return {
-        'success': True,
-        'staff_id': staff_key,
-        'organization_id': org_key,
-        'branch_id': backend_branch_id,
-        'deleted_count': len(result.data or []),
-    }
+    return mark_absent(
+        org_id=org_id,
+        staff_id=staff_id,
+        branch_id=branch_id,
+        people_type=people_type,
+        date_value=date_value,
+    )
 
 _EDITABLE_ATTENDANCE_STATUS_VALUES = {'on_time', 'late', 'early', 'unscheduled'}
 

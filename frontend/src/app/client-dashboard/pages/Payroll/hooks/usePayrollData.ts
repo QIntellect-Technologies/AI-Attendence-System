@@ -69,6 +69,7 @@ export interface UsePayrollDataOptions {
   branch_uuid?: PayrollId | null;
   month?: string;
   peopleType?: string | null;
+  enabled?: boolean;
   autoRefresh?: boolean;
   refreshMs?: number;
 }
@@ -721,7 +722,7 @@ export function usePayrollData(
       abortRef.current?.abort();
       const requestId = ++requestIdRef.current;
 
-      if (!scope?.organizationId) {
+      if (options.enabled === false || !scope?.organizationId) {
         setSalaryRows([]);
         setStaffRows([]);
         setLoadedPayrollKey(null);
@@ -779,6 +780,7 @@ export function usePayrollData(
     [
       fetchPayrollPage,
       currentPayrollKey,
+      options.enabled,
       options.month,
       resolvedPeopleType,
       scope?.apiBranchId,
@@ -795,6 +797,7 @@ export function usePayrollData(
   }, [refresh]);
 
   useEffect(() => {
+    if (options.enabled === false) return undefined;
     const handlePayrollInvalidation = () => {
       invalidatePayrollPageCache(scope?.organizationId);
       void refresh({ force: true });
@@ -808,16 +811,16 @@ export function usePayrollData(
         "payroll-data-invalidated",
         handlePayrollInvalidation,
       );
-  }, [refresh, scope?.organizationId]);
+  }, [options.enabled, refresh, scope?.organizationId]);
 
   useEffect(() => {
-    if (!options.autoRefresh) return undefined;
+    if (options.enabled === false || !options.autoRefresh) return undefined;
     const id = window.setInterval(
       () => void refresh(),
       Math.max(10_000, options.refreshMs ?? 30_000),
     );
     return () => window.clearInterval(id);
-  }, [options.autoRefresh, options.refreshMs, refresh]);
+  }, [options.autoRefresh, options.enabled, options.refreshMs, refresh]);
 
   // Org/branch-default OT rate, used as the fallback whenever a staff
   // member has no per-staff override — same source PayrollModule.tsx

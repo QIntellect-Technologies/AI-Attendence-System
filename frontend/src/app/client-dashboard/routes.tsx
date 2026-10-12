@@ -663,6 +663,7 @@ import { useAuth } from "./contexts/useAuth";
 import { useOrg } from "./contexts/OrgConfigContext";
 import { ModuleProvider } from "./contexts/ModuleContext";
 import TenantGate from "./components/TenantGate";
+import DashboardLoader from "./components/common/DashboardLoader";
 import { isModuleEnabled } from "./components/ModuleGate";
 import {
   MODULE_REGISTRY,
@@ -702,34 +703,8 @@ const BranchOverviewPage = lazy(() =>
   })),
 );
 
-const PageLoader: React.FC = () => (
-  <div
-    style={{
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      height: "40vh",
-      gap: 12,
-      color: "var(--text-light, #94a3b8)",
-    }}
-  >
-    <div
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: "50%",
-        border: "3px solid var(--teal-100, #e6f3f9)",
-        borderTopColor: "var(--teal-600, #1a699f)",
-        animation: "spin .65s linear infinite",
-      }}
-    />
-    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    <span style={{ fontSize: 13, fontWeight: 500 }}>Loading…</span>
-  </div>
-);
-
 const suspense = (children: React.ReactNode): React.ReactElement => (
-  <Suspense fallback={<PageLoader />}>{children}</Suspense>
+  <Suspense fallback={<DashboardLoader />}>{children}</Suspense>
 );
 
 interface AuthUser {

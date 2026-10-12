@@ -269,16 +269,18 @@ function buildMetricRow(
   monthlyPayroll: number,
   pendingLeaves: number,
 ): ReportMetricRow {
-  const absent = Math.max(0, totalStaff - present);
+  const roundedPresent = Math.round(present);
+  const roundedLate = Math.min(roundedPresent, Math.round(late));
+  const absent = Math.max(0, totalStaff - roundedPresent);
   return {
     branchId,
     backendBranchId,
     branchName: branchNameValue,
     department,
     totalStaff,
-    present,
+    present: roundedPresent,
     absent,
-    late,
+    late: roundedLate,
     attendanceRate:
       totalStaff > 0 ? Math.round((present / totalStaff) * 100) : 0,
     monthlyPayroll,
@@ -315,7 +317,9 @@ export function useReportMetrics(
   // large org's year view needs more than 3000. Bounded by the backend's own
   // ceiling (see support_db_attendance_dashboard.py's max_rows=20000).
   const rangeDayCount = useMemo(
-    () => getDatesBetween(input.dateRange.startDate, input.dateRange.endDate).length,
+    () =>
+      getDatesBetween(input.dateRange.startDate, input.dateRange.endDate)
+        .length,
     [input.dateRange.startDate, input.dateRange.endDate],
   );
   const logsLimit = useMemo(
@@ -360,13 +364,27 @@ export function useReportMetrics(
     // from, so a branch/department/total figure over a 1-day range and a
     // 365-day range use the exact same logic — just averaged over more days.
     const presenceByDay = new Map<string, Set<string>>();
+    const latePresenceByDay = new Map<string, Set<string>>();
     rangeDates.forEach((day) => presenceByDay.set(day, new Set()));
     attendanceLogs.forEach((row) => {
       const day = dateKey(row);
       const bucket = presenceByDay.get(day);
       if (!bucket) return; // outside the requested range
       const id = staffIdentity(row);
-      if (id) bucket.add(id);
+      if (!id) return;
+      bucket.add(id);
+      const status = [
+        row.checkInStatus ?? row.check_in_status,
+        row.dayStatus ?? row.day_status,
+        row.status,
+      ]
+        .map((value) => String(value ?? "").toLowerCase())
+        .some((value) => value.includes("late"));
+      if (status) {
+        const lateBucket = latePresenceByDay.get(day) ?? new Set<string>();
+        lateBucket.add(id);
+        latePresenceByDay.set(day, lateBucket);
+      }
     });
 
     /** Average number of `staffIds` present per day across the whole range. */
@@ -375,6 +393,17 @@ export function useReportMetrics(
       let total = 0;
       presenceByDay.forEach((presentOnDay) => {
         presentOnDay.forEach((id) => {
+          if (staffIds.has(id)) total += 1;
+        });
+      });
+      return total / rangeDates.length;
+    }
+
+    function averageLate(staffIds: Set<string>): number {
+      if (rangeDates.length === 0 || staffIds.size === 0) return 0;
+      let total = 0;
+      latePresenceByDay.forEach((lateOnDay) => {
+        lateOnDay.forEach((id) => {
           if (staffIds.has(id)) total += 1;
         });
       });
@@ -438,7 +467,8 @@ export function useReportMetrics(
       const branchStaffIds = new Set(
         branchStaff.map(staffIdentity).filter(Boolean),
       );
-      const present = Math.round(averagePresent(branchStaffIds));
+      const present = averagePresent(branchStaffIds);
+      const late = averageLate(branchStaffIds);
       const backendBranchId =
         cleanId(
           branch.backendBranchId ??
@@ -462,7 +492,7 @@ export function useReportMetrics(
         "Departments",
         branchStaff.length,
         present,
-        0,
+        late,
         monthlyPayroll,
         pendingLeaves,
       );
@@ -500,7 +530,8 @@ export function useReportMetrics(
         const staffIds = new Set(
           bucket.staff.map(staffIdentity).filter(Boolean),
         );
-        const present = Math.round(averagePresent(staffIds));
+        const present = averagePresent(staffIds);
+        const late = averageLate(staffIds);
         const monthlyPayroll = bucket.staff.reduce((sum, row) => {
           const id = staffIdentity(row);
           return sum + (payrollByStaff.get(id) ?? Number(row.salary ?? 0) ?? 0);
@@ -516,7 +547,7 @@ export function useReportMetrics(
           bucket.department,
           bucket.staff.length,
           present,
-          0,
+          late,
           monthlyPayroll,
           pendingLeaves,
         );
@@ -525,8 +556,12 @@ export function useReportMetrics(
 
     const totalStaff = scopedStaff.length;
     const allStaffIds = new Set(scopedStaff.map(staffIdentity).filter(Boolean));
-    const present = Math.min(totalStaff, Math.round(averagePresent(allStaffIds)));
+    const present = Math.min(
+      totalStaff,
+      Math.round(averagePresent(allStaffIds)),
+    );
     const absent = Math.max(0, totalStaff - present);
+    const late = Math.min(present, Math.round(averageLate(allStaffIds)));
     const monthlyPayroll = branchMetrics.reduce(
       (sum, row) => sum + row.monthlyPayroll,
       0,
@@ -540,7 +575,7 @@ export function useReportMetrics(
       present,
       attended: present,
       absent,
-      late: 0,
+      late,
       attendanceRate:
         totalStaff > 0 ? Math.round((present / totalStaff) * 100) : 0,
       monthlyPayroll,

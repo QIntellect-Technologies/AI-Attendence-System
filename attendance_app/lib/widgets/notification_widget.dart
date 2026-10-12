@@ -23,6 +23,7 @@ class _NotificationPollerState extends State<NotificationPoller>
     with SingleTickerProviderStateMixin {
   Timer? _timer;
   final Set<String> _seenIds = {};
+  final Map<String, String?> _seenCheckoutTimes = {};
   final List<Map<String, dynamic>> _queue = [];
   bool _showing = false;
   bool _fetching = false;
@@ -89,8 +90,25 @@ class _NotificationPollerState extends State<NotificationPoller>
                 '')
             .toString();
         final id = (log['id'] ?? '$date-$time-$channel').toString();
-        if (!_seenIds.add(id)) continue;
-        attendanceDetected = true;
+        final checkOutTime = (log['checkOutTime'] ??
+                log['check_out_time'] ??
+                log['checkOut'] ??
+                log['check_out'] ??
+                log['outTime'] ??
+                log['out_time'] ??
+                log['check_out_timestamp'])
+            ?.toString();
+        final isNewAttendance = _seenIds.add(id);
+        final previousCheckOutTime = _seenCheckoutTimes[id];
+        _seenCheckoutTimes[id] = checkOutTime;
+        if (isNewAttendance) {
+          attendanceDetected = true;
+        } else if (checkOutTime != null &&
+            checkOutTime.isNotEmpty &&
+            checkOutTime != previousCheckOutTime) {
+          attendanceDetected = true;
+        }
+        if (!isNewAttendance) continue;
 
         final checkInStatus = resolveCheckInStatus(
           log['checkInStatus'] ?? log['check_in_status'],

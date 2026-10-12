@@ -14,7 +14,6 @@ import { T } from "./theme";
 import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
 import type { LeaveHistoryRow } from "./types/leave";
-import { FastPagination } from "../../components/common/FastPagination";
 
 export interface LeaveHistoryTableProps {
   rows: LeaveHistoryRow[];
@@ -24,12 +23,9 @@ export interface LeaveHistoryTableProps {
   yearOptions: number[];
   onYearChange: (year: number) => void;
   quotaConfigured: boolean;
-  page: number;
-  pageSize?: number;
-  totalPages: number;
   totalItems: number;
-  goToPage: (page: number) => void;
-  onPageSizeChange?: (pageSize: number) => void;
+  totalPages: number;
+  page: number;
 }
 
 const thStyle: React.CSSProperties = {
@@ -85,12 +81,8 @@ export function LeaveHistoryTable({
   yearOptions,
   onYearChange,
   quotaConfigured,
-  page,
-  pageSize = 25,
   totalPages,
   totalItems,
-  goToPage,
-  onPageSizeChange,
 }: LeaveHistoryTableProps): React.ReactElement {
   const yearSelectOptions = yearOptions.map((y) => ({
     value: String(y),
@@ -318,25 +310,6 @@ export function LeaveHistoryTable({
           </tbody>
         </table>
       </div>
-
-      {/* Pagination */}
-      {totalItems > 0 && (
-        <div
-          style={{
-            padding: "8px 20px",
-            borderTop: `1px solid ${T.border}`,
-          }}
-        >
-          <FastPagination
-            page={page}
-            pageSize={pageSize}
-            total={totalItems}
-            onPageChange={goToPage}
-            onPageSizeChange={(s) => onPageSizeChange?.(s)}
-            disabled={loading}
-          />
-        </div>
-      )}
     </div>
   );
 }

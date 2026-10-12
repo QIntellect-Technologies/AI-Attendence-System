@@ -111,7 +111,7 @@ def _rows_for(db_path: str, person_code: str) -> list[dict]:
 def test_overnight_checkout_completes_the_prior_nights_check_in(temp_local_db):
     with patch.object(shift_gate, "load_config", return_value=OVERNIGHT_CONFIG):
         check_in_evt = real_dt_mod.datetime(2026, 8, 24, 23, 5, tzinfo=real_dt_mod.timezone.utc)
-        check_out_evt = real_dt_mod.datetime(2026, 8, 25, 0, 45, tzinfo=real_dt_mod.timezone.utc)
+        check_out_evt = real_dt_mod.datetime(2026, 8, 25, 1, 0, tzinfo=real_dt_mod.timezone.utc)
 
         check_in_result = _record_at(
             check_in_evt,
@@ -177,3 +177,19 @@ def test_late_morning_detection_after_overnight_window_starts_a_new_day(temp_loc
             "staff", "0001", late_evt, config=OVERNIGHT_CONFIG
         )
     assert bucket == "2026-08-25"
+
+
+def test_overnight_checkout_grace_boundary_uses_seconds():
+    with patch.object(shift_gate, "load_config", return_value=OVERNIGHT_CONFIG):
+        at_cutoff = real_dt_mod.datetime(2026, 8, 25, 1, 15, 0, tzinfo=real_dt_mod.timezone.utc)
+        after_cutoff = real_dt_mod.datetime(2026, 8, 25, 1, 15, 1, tzinfo=real_dt_mod.timezone.utc)
+
+        cutoff_bucket = shift_gate.resolve_attendance_bucket_date(
+            "staff", "0001", at_cutoff, config=OVERNIGHT_CONFIG
+        )
+        after_bucket = shift_gate.resolve_attendance_bucket_date(
+            "staff", "0001", after_cutoff, config=OVERNIGHT_CONFIG
+        )
+
+    assert cutoff_bucket == "2026-08-24"
+    assert after_bucket == "2026-08-25"

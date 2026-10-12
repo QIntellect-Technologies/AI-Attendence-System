@@ -148,7 +148,7 @@ export function useLiveCctvTracking({
   const isGlobalScope = scope.branchId === undefined || scope.branchId === null;
 
   const scopeLabel = useMemo(() => {
-    if (isGlobalScope) return "All Branches";
+    if (isGlobalScope) return "Branches";
 
     const branch = cfg.branches.find((item) => {
       const candidate = item as typeof item & {

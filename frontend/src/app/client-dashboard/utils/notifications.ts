@@ -46,6 +46,8 @@ export async function confirmDialog(opts: {
   icon?: "warning" | "info" | "question" | "success" | "error";
   confirmButtonText?: string;
   cancelButtonText?: string;
+  loadingButtonText?: string;
+  preConfirm?: () => unknown | Promise<unknown>;
 }) {
   const {
     title,
@@ -53,6 +55,8 @@ export async function confirmDialog(opts: {
     icon = "warning",
     confirmButtonText = "OK",
     cancelButtonText = "Cancel",
+    loadingButtonText,
+    preConfirm,
   } = opts;
   return Swal.fire({
     ...swalDefaults,
@@ -64,6 +68,20 @@ export async function confirmDialog(opts: {
     cancelButtonText,
     focusCancel: true,
     confirmButtonColor: T.teal600,
+    showLoaderOnConfirm: false,
+    allowOutsideClick: () => !Swal.isLoading(),
+    preConfirm: preConfirm
+      ? async () => {
+          if (loadingButtonText) {
+            Swal.update({ confirmButtonText: loadingButtonText });
+          }
+          const result = await preConfirm();
+          if (result === false) {
+            Swal.update({ confirmButtonText });
+          }
+          return result;
+        }
+      : undefined,
   });
 }
 

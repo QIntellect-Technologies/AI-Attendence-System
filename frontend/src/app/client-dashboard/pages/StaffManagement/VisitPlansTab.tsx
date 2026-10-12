@@ -34,6 +34,7 @@
  * so once the tables exist you'll see the real reason here if something
  * else goes wrong, instead of just the generic string.
  */
+import { formatDisplayTime } from "../../utils/formatDate";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   MapPin,
@@ -428,7 +429,7 @@ const VisitPlansTab = React.forwardRef<VisitPlansTabHandle, VisitPlansTabProps>(
                 value={branchId}
                 onChange={(value) => setBranchId(value)}
                 options={[
-                  { value: "all", label: "All branches" },
+                  { value: "all", label: "Branches" },
                   ...visibleBranches.map((b) => ({
                     value: String(b.id),
                     label: b.name,
@@ -1504,13 +1505,7 @@ const PlanDetailPanel: React.FC<{
                             }}
                           >
                             {visit.timestamp
-                              ? new Date(visit.timestamp).toLocaleTimeString(
-                                  [],
-                                  {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  },
-                                )
+                              ? formatDisplayTime(visit.timestamp)
                               : ""}
                           </span>
                         </div>

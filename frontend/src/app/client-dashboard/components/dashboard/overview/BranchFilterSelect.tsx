@@ -54,7 +54,7 @@ const BranchFilterSelect: React.FC<BranchFilterSelectProps> = ({
         maxWidth: 170,
       }}
     >
-      {showAllOption && <option value="all">All Branches</option>}
+      {showAllOption && <option value="all">Branches</option>}
       {options.map((branch) => (
         <option key={branch.id} value={branch.id}>
           {branch.name}

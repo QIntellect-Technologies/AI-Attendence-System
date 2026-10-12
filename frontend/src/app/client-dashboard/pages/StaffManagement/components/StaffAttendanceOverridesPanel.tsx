@@ -24,6 +24,7 @@ import {
   type ManualInstruction,
 } from "../api/attendanceSettingsApi";
 import { type StaffMember } from "../types/staffTypes";
+import { formatDisplayTime } from "../../../utils/formatDate";
 
 // ─── Profile Drawer ───────────────────────────────────────────────────────────
 // department, role, joinDate are plain strings — no lookup callbacks needed.
@@ -406,7 +407,7 @@ export const StaffAttendanceOverridesPanel: FC<{ member: StaffMember }> = ({
                   {inst.attendance_date}
                 </div>
                 <div style={{ fontSize: 11, color: T.muted }}>
-                  {inst.check_in_time ?? "—"} → {inst.check_out_time ?? "—"}
+                  {formatDisplayTime(inst.check_in_time)} → {formatDisplayTime(inst.check_out_time)}
                   {inst.reason ? ` · ${inst.reason}` : ""}
                 </div>
               </div>

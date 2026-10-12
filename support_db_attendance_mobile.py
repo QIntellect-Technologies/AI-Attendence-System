@@ -902,9 +902,11 @@ def get_client_staff_attendance_today(
     whether the resolved shift for THIS person, right now, allows a
     checkout mark at all (capture_check_out) -- needed to decide whether to
     show a Check Out button immediately after check-in, not just after the
-    app discovers it by attempting one. Shares its window resolution with
-    mark_client_staff_attendance via _resolve_client_staff_attendance_window
-    so the two never disagree about which shift applies.
+    app discovers it by attempting one. It also returns the current resolved
+    shift schedule, so the mobile app can refresh edited shift times while
+    open. Shares its window resolution with mark_client_staff_attendance via
+    _resolve_client_staff_attendance_window so the two never disagree about
+    which shift applies.
     """
     sb = get_supabase()
     org_key = str(org_id)
@@ -938,6 +940,13 @@ def get_client_staff_attendance_today(
         'marked': existing is not None,
         'checked_out': bool(existing and existing.get('check_out_timestamp')),
         'capture_check_out': bool(window and window.get('capture_check_out')),
+        'shift_name': window.get('name') if window else None,
+        'scheduled_check_in_time': (
+            str(window.get('check_in_time') or '')[:5] if window else ''
+        ),
+        'scheduled_check_out_time': (
+            str(window.get('check_out_time') or '')[:5] if window else ''
+        ),
         'time': str(existing.get('timestamp'))[11:16] if existing and existing.get('timestamp') else '',
         'out_time': (
             str(existing.get('check_out_timestamp'))[11:16]

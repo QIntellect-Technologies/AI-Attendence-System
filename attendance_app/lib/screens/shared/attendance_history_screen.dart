@@ -7,7 +7,14 @@ import '../../widgets/common_widgets.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   final UserModel user;
-  const AttendanceHistoryScreen({super.key, required this.user});
+  final int refreshToken;
+
+  const AttendanceHistoryScreen({
+    super.key,
+    required this.user,
+    this.refreshToken = 0,
+  });
+
   @override
   State<AttendanceHistoryScreen> createState() =>
       _AttendanceHistoryScreenState();
@@ -34,6 +41,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant AttendanceHistoryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) {
+      _load(showSpinner: false);
+    }
   }
 
   // Kept separate from initState's call so RefreshIndicator/the AppBar

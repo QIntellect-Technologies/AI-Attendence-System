@@ -13,6 +13,7 @@ import JellyButton from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { T } from "../../components/ui/theme";
 import { useOrg } from "../../contexts/OrgConfigContext";
+import { formatDisplayTime } from "../../utils/formatDate";
 import { useLiveCctvTracking } from "./hooks/useLiveCCTVTracking";
 import {
   resolveActivePeopleTypes,
@@ -57,11 +58,11 @@ const liveDotStyle: React.CSSProperties = {
 };
 
 function useClock(): string {
-  const [time, setTime] = useState(() => new Date().toLocaleTimeString());
+  const [time, setTime] = useState(() => formatDisplayTime(new Date()));
 
   useEffect(() => {
     const timer = window.setInterval(
-      () => setTime(new Date().toLocaleTimeString()),
+      () => setTime(formatDisplayTime(new Date())),
       1_000,
     );
 
@@ -195,9 +196,7 @@ function displayRoleValue(person: LiveTrackingPerson): string {
 function formatDetectionTime(value: unknown): string {
   const text = String(value ?? "").trim();
   if (!text) return "—";
-  const timestamp = Date.parse(text);
-  if (!Number.isFinite(timestamp)) return text;
-  return new Date(timestamp).toLocaleString();
+  return formatDisplayTime(text, { includeDate: true });
 }
 
 export default function LiveCCTVTracking() {
@@ -228,7 +227,7 @@ export default function LiveCCTVTracking() {
 
   const branchOptions = useMemo(
     () => [
-      { value: "all", label: "All Branches" },
+      { value: "all", label: "Branches" },
       ...cfg.branches.map((branch) => ({
         value: String(branch.id),
         label: branch.name,

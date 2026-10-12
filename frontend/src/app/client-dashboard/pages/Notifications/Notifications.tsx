@@ -29,6 +29,7 @@ import { useOrgReady } from "../../hooks/useOrgReady";
 import { useOrg } from "../../contexts/OrgConfigContext";
 import { isModuleEnabled } from "../../utils/moduleAccess";
 import { T } from "../../components/ui/theme";
+import { formatDisplayTime } from "../../utils/formatDate";
 import { JellyButton } from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import {
@@ -44,6 +45,7 @@ import {
   validateAndCallNotificationApi,
 } from "./api/notificationApi.validation";
 import { setPayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
+import "./Notifications.css";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & UTILITIES
@@ -81,12 +83,7 @@ function cleanId(value: unknown): string | null {
 function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDisplayTime(date, { includeDate: true });
 }
 
 function notificationIcon(
@@ -578,6 +575,7 @@ export default function NotificationsPage() {
 
   return (
     <div
+      className="notifications-page"
       style={{
         fontFamily: "'DM Sans','Inter',sans-serif",
         display: "grid",
@@ -586,6 +584,7 @@ export default function NotificationsPage() {
     >
       {/* Header row */}
       <div
+        className="notifications-page__header"
         style={{
           display: "flex",
           alignItems: "flex-start",
@@ -593,7 +592,7 @@ export default function NotificationsPage() {
           gap: 12,
         }}
       >
-        <div>
+        <div className="notifications-page__heading">
           <h2
             style={{
               margin: 0,
@@ -610,7 +609,7 @@ export default function NotificationsPage() {
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="notifications-page__toolbar" style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* Refresh — secondary variant (white bg, slate fill on hover) */}
           <RefreshButton
             variant="secondary"
@@ -647,6 +646,7 @@ export default function NotificationsPage() {
 
       {/* Notification list card */}
       <div
+        className="notifications-page__list"
         style={{
           background: T.card,
           border: `1px solid ${T.border}`,
@@ -706,6 +706,7 @@ export default function NotificationsPage() {
               return (
                 <div
                   key={notification.id}
+                  className="notifications-page__item"
                   role="button"
                   tabIndex={0}
                   onClick={() => void handleOpen(notification)}
@@ -735,6 +736,7 @@ export default function NotificationsPage() {
                   <NotificationBody notification={notification} />
 
                   <div
+                    className="notifications-page__actions"
                     style={{ display: "flex", alignItems: "center", gap: 6 }}
                   >
                     {isPayrollDecisionNotification(notification) ? (

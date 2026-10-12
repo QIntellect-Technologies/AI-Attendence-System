@@ -56,11 +56,14 @@ import type { OvertimeRequest } from "../../contexts/ModuleContext";
 import { T } from "../../components/ui/theme";
 import JellyButton from "../../components/ui/JellyButton";
 import ModernSelect from "../../components/ui/ModernSelect";
+import DynamicFilterToolbar, {
+  type DynamicFilterSection,
+} from "../../components/ui/DynamicFilterToolbar";
 import RefreshButton from "../../components/ui/RefreshButton";
-import { StatCard, StatusBadge } from "../../components/ui/DashboardComponents";
-import ExportExcelButton, {
-  type ExportExcelColumn,
-} from "../../components/ui/ExportExcelButton";
+import { StatusBadge } from "../../components/ui/DashboardComponents";
+import StatCard from "../../components/dashboard/overview/StatCard";
+import ExportButton from "../../components/ui/ExportButton";
+import type { ExportExcelColumn } from "../../components/ui/ExportExcelButton";
 
 import type { BranchOption, DecidableStatus } from "./types/overtime";
 import { API_STATUS_MAP, DEFAULT_OVERTIME_POLICY } from "./types/overtime";
@@ -694,17 +697,187 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
     [policy, getStaffMonthlySalary, isGlobalDashboard],
   );
 
+  const mobileFilterSections: DynamicFilterSection[] = [
+    ...(isGlobalDashboard
+      ? [
+          {
+            id: "branch",
+            type: "select" as const,
+            label: "Branch",
+            value: filters.branch,
+            options: branchOptions.map(({ value, label, count }) => ({
+              value,
+              label,
+              count,
+            })),
+            onChange: setBranch,
+          },
+        ]
+      : []),
+    ...(modulePeopleTypes.length > 1
+      ? [
+          {
+            id: "people",
+            type: "custom" as const,
+            render: (
+              <div>
+                <label style={labelStyle}>People</label>
+                <PeopleTypeSelector
+                  value={peopleFilter}
+                  onChange={setPeopleFilter}
+                  options={peopleOptions}
+                  ariaLabel="Filter overtime by people type"
+                  minWidth={160}
+                />
+              </div>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: "department",
+      type: "select",
+      label: "Department",
+      value: filters.department,
+      options: departmentOptions.map(({ value, label, count }) => ({
+        value,
+        label,
+        count,
+      })),
+      onChange: setDepartment,
+    },
+    {
+      id: "status",
+      type: "select",
+      label: "Status",
+      value: filters.status,
+      options: statusOptions.map(({ value, label, count }) => ({
+        value,
+        label,
+        count,
+      })),
+      onChange: (value) => setStatus(value as typeof filters.status),
+    },
+    {
+      id: "period",
+      type: "select",
+      label: "Period",
+      value: filters.period,
+      options: [
+        { value: "all", label: "All Dates" },
+        { value: "today", label: "Today" },
+        { value: "7d", label: "Last 7 Days" },
+        { value: "30d", label: "Last 30 Days" },
+        { value: "month", label: "This Month" },
+        { value: "custom", label: "Custom Range" },
+      ],
+      onChange: (value) => setPeriod(value as typeof filters.period),
+    },
+    {
+      id: "hours",
+      type: "select",
+      label: "Hours",
+      value: filters.hours,
+      options: [
+        { value: "all", label: "All Hours" },
+        { value: "lt2", label: "Less than 2h" },
+        { value: "2to4", label: "2h to 4h" },
+        { value: "gt4", label: "More than 4h" },
+      ],
+      onChange: (value) => setHours(value as typeof filters.hours),
+    },
+    ...(filters.period === "custom"
+      ? [
+          {
+            id: "customFrom",
+            type: "custom" as const,
+            render: (
+              <div>
+                <label style={labelStyle}>From</label>
+                <input
+                  type="date"
+                  value={filters.customFrom}
+                  onChange={(event) => setCustomFrom(event.target.value)}
+                  style={inputStyle}
+                />
+              </div>
+            ),
+          },
+          {
+            id: "customTo",
+            type: "custom" as const,
+            render: (
+              <div>
+                <label style={labelStyle}>To</label>
+                <input
+                  type="date"
+                  value={filters.customTo}
+                  onChange={(event) => setCustomTo(event.target.value)}
+                  style={inputStyle}
+                />
+              </div>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: "sort",
+      type: "select",
+      label: "Sort By",
+      value: sortKey,
+      options: [
+        { value: "date", label: "Date" },
+        { value: "employee", label: "Employee" },
+        { value: "hours", label: "Hours" },
+        { value: "status", label: "Status" },
+        { value: "appliedOn", label: "Applied On" },
+        { value: "branch", label: "Branch" },
+      ],
+      onChange: (value) => setSortKey(value as typeof sortKey),
+    },
+    {
+      id: "direction",
+      type: "select",
+      label: "Direction",
+      value: sortDir,
+      options: [
+        { value: "desc", label: "Descending" },
+        { value: "asc", label: "Ascending" },
+      ],
+      onChange: (value) => setSortDir(value as typeof sortDir),
+    },
+    {
+      id: "search",
+      type: "search",
+      value: query,
+      placeholder: "Employee, department, task...",
+      onChange: setQuery,
+      minWidth: 220,
+    },
+    {
+      id: "reset",
+      type: "reset",
+      label: "Clear",
+      onClick: resetFilters,
+    },
+  ];
+
   return (
     <div
+      className="overtime-management-page"
       style={{
         padding: "24px 24px 48px",
         fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
         background: T.bgPage,
         minHeight: "100%",
+        minWidth: 0,
+        width: "100%",
+        boxSizing: "border-box",
       }}
     >
       {!embedded && (
         <div
+          className="overtime-page-header"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -717,9 +890,11 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
             <h1
               style={{
                 margin: 0,
-                color: T.textHeading,
-                fontSize: 24,
-                fontWeight: 900,
+                fontSize: 22,
+                fontWeight: 800,
+                color: "#0F172A",
+                letterSpacing: "-0.5px",
+                fontFamily: "'DM Sans', 'Inter', sans-serif",
                 display: "flex",
                 alignItems: "center",
                 gap: 10,
@@ -728,8 +903,25 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
               <CalendarDays size={22} color={T.teal600} />
               Overtime Management
             </h1>
+            <p
+              style={{
+                margin: "4px 0 0",
+                fontSize: 12,
+                fontWeight: 500,
+                color: "#64748B",
+                fontFamily: "'DM Sans', 'Inter', sans-serif",
+              }}
+            >
+              {new Date().toLocaleDateString("en-US", {
+                weekday: "long",
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}
+            </p>
           </div>
           <div
+            className="overtime-page-actions"
             style={{
               display: "flex",
               gap: 10,
@@ -737,29 +929,52 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
               justifyContent: "flex-end",
             }}
           >
+            <DynamicFilterToolbar
+              sections={mobileFilterSections}
+              mobileOnly
+              className="staff-management-mobile-filter"
+            />
             <RefreshButton
               size="md"
               loading={refreshing}
               onClick={refresh}
               ariaLabel="Refresh overtime requests"
             />
-            <ExportExcelButton
+            <ExportButton
               data={finalFilteredRequests}
-              columns={exportColumns}
               filename={`Overtime_${safeBranchName(fallbackBranchId, branches)}_${new Date().toISOString().split("T")[0]}`}
-              organization={{ name: cfg.orgName || undefined }}
-              title="Overtime Report"
-              reportPeriod={new Date().toLocaleDateString(undefined, {
-                day: "numeric",
-                month: "short",
-                year: "numeric",
-              })}
-              summary={[
-                { label: "Pending", value: String(stats.pending) },
-                { label: "Approved", value: String(stats.approved) },
-                { label: "Total Hours", value: stats.totalHours.toFixed(1) },
-              ]}
-              label="Export Excel"
+              organization={{
+                name: cfg.orgName || undefined,
+                logoUrl: cfg.logo,
+              }}
+              excel={{
+                columns: exportColumns,
+                title: "Overtime Report",
+                reportPeriod: new Date().toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                }),
+                summary: [
+                  { label: "Pending", value: String(stats.pending) },
+                  { label: "Approved", value: String(stats.approved) },
+                  { label: "Total Hours", value: stats.totalHours.toFixed(1) },
+                ],
+              }}
+              pdf={{
+                columns: exportColumns,
+                title: "Overtime Report",
+                reportPeriod: new Date().toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                }),
+                summary: [
+                  { label: "Pending", value: String(stats.pending) },
+                  { label: "Approved", value: String(stats.approved) },
+                  { label: "Total Hours", value: stats.totalHours.toFixed(1) },
+                ],
+              }}
               emptyMessage="No overtime requests to export."
             />
             {/*<JellyButton
@@ -776,42 +991,40 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
       )}
 
       {/* KPI Cards */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-          gap: 12,
-          marginBottom: 16,
-        }}
-      >
+      <div className="overtime-stat-grid mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
-          label="Pending"
+          title="Pending"
           value={stats.pending}
-          Icon={Clock}
+          icon={Clock}
+          iconBg="#FEF3C7"
           iconColor="#c2410c"
         />
         <StatCard
-          label="Approved"
+          title="Approved"
           value={stats.approved}
-          Icon={CheckCircle}
+          icon={CheckCircle}
+          iconBg="#ECFDF5"
           iconColor="#16a34a"
         />
         <StatCard
-          label="Rejected"
+          title="Rejected"
           value={stats.rejected}
-          Icon={XCircle}
+          icon={XCircle}
+          iconBg="#FFF1F2"
           iconColor="#e11d48"
         />
         <StatCard
-          label="Total Hours"
+          title="Total Hours"
           value={stats.totalHours.toFixed(1)}
-          Icon={TimerReset}
+          icon={TimerReset}
+          iconBg="#E0F2FE"
           iconColor={T.teal600}
         />
         <StatCard
-          label="Estimated Pay"
+          title="Estimated Pay"
           value={`${policy.currencyLabel} ${stats.estimatedPay.toLocaleString()}`}
-          Icon={Banknote}
+          icon={Banknote}
+          iconBg="#E0F2FE"
           iconColor={T.navy600}
           sub={policyMethodLabel(policy)}
         />
@@ -819,6 +1032,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
 
       {/* Filters */}
       <div
+        className="overtime-filter-grid"
         style={{
           background: T.card,
           border: `1px solid ${T.border}`,
@@ -826,7 +1040,7 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
           padding: 16,
           marginBottom: 18,
           display: "grid",
-          gridTemplateColumns: "repeat(6, minmax(140px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
           gap: 10,
           alignItems: "end",
         }}
@@ -988,194 +1202,269 @@ const OvertimeManagement: React.FC<OvertimeManagementProps> = ({
             minWidth={160}
           />
         </div>
-        {/* Search placed near the end before Clear */}
-        <div style={{ gridColumn: "span 2" }}>
-          <label style={labelStyle}>Search</label>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Employee, department, task..."
-            style={inputStyle}
-            maxLength={100}
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={resetFilters}
+        <div
+          className="overtime-filter-search"
           style={{
-            ...tinyButtonStyle,
-            display: "inline-flex",
-            gap: 8,
-            alignItems: "center",
-            padding: "0 8px",
-            background: T.card,
+            gridColumn: "span 3",
+            display: "flex",
+            alignItems: "end",
+            gap: 10,
+            minWidth: 0,
           }}
-          aria-label="Clear filters"
         >
-          <RefreshCw size={14} color={T.teal600} />
-          <span style={{ marginLeft: 4, fontWeight: 900, fontSize: 12 }}>
-            Clear
-          </span>
-        </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <label style={labelStyle}>Search</label>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Employee, department, task..."
+              style={inputStyle}
+              maxLength={100}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={resetFilters}
+            style={{
+              ...tinyButtonStyle,
+              height: 38,
+              display: "inline-flex",
+              gap: 8,
+              alignItems: "center",
+              padding: "0 12px",
+              background: T.card,
+              flexShrink: 0,
+            }}
+            aria-label="Clear filters"
+          >
+            <RefreshCw size={14} color={T.teal600} />
+            <span style={{ fontWeight: 900, fontSize: 12 }}>Clear</span>
+          </button>
+        </div>
       </div>
 
       {/* Table */}
       <div
+        className="overtime-table-card"
         style={{
           background: T.card,
           border: `1px solid ${T.border}`,
           borderRadius: 16,
           overflow: "hidden",
+          boxShadow: "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
         }}
       >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isGlobalDashboard
-              ? "1.25fr .9fr 1fr .8fr .8fr .8fr .8fr 150px"
-              : "1.25fr 1fr .8fr .8fr .8fr .8fr 150px",
-            gap: 12,
-            padding: "11px 16px",
-            background: T.teal50,
-            borderBottom: `1px solid ${T.border}`,
-            color: T.muted,
-            fontSize: 10,
-            fontWeight: 900,
-            textTransform: "uppercase",
-            letterSpacing: ".07em",
-          }}
-        >
-          <div>Employee</div>
-          {isGlobalDashboard && <div>Branch</div>}
-          <div>Department</div>
-          <div>Date</div>
-          <div>Hours</div>
-          <div>Pay</div>
-          <div>Status</div>
-          <div>Actions</div>
-        </div>
-
-        {finalFilteredRequests.map((request) => {
-          const highlighted = String(request.id) === highlightedOvertimeId;
-          const effective = backendPayrollPolicy
-            ? {
-                ...policy,
-                fixedRatePerHour:
-                  backendPayrollPolicy.otRatePerHour ?? policy.fixedRatePerHour,
-              }
-            : policy;
-          const pay = calculateOvertimePay(
-            request.hours,
-            effective,
-            getStaffMonthlySalary(request),
-          );
-          return (
-            <div
-              id={`overtime-row-${request.id}`}
-              key={request.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: isGlobalDashboard
-                  ? "1.25fr .9fr 1fr .8fr .8fr .8fr .8fr 150px"
-                  : "1.25fr 1fr .8fr .8fr .8fr .8fr 150px",
-                gap: 12,
-                padding: "13px 16px",
-                borderBottom: highlighted
-                  ? "1px solid #fed7aa"
-                  : `1px solid ${T.teal50}`,
-                background: highlighted ? "#fff7ed" : "transparent",
-                boxShadow: highlighted ? "inset 3px 0 0 #f97316" : "none",
-                alignItems: "center",
-                fontSize: 12,
-                color: T.head,
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 900 }}>
-                  {getOvertimeStaffName(request)}
-                </div>
-                <div style={{ color: T.muted, fontSize: 11 }}>
-                  {getStaffPersonCode(request)}
-                </div>
-              </div>
-              {isGlobalDashboard && (
-                <div style={{ color: T.navy600, fontWeight: 800 }}>
-                  {request.branchName}
-                </div>
-              )}
-              <div>{request.department}</div>
-              <div>
-                <div style={{ fontWeight: 800 }}>
-                  {formatDate(getOvertimeDate(request))}
-                </div>
-                <div style={{ color: T.muted, fontSize: 10 }}>
-                  Applied {formatDate(getOvertimeAppliedOn(request))}
-                </div>
-              </div>
-              <div style={{ fontWeight: 900 }}>{request.hours.toFixed(1)}h</div>
-              <div style={{ fontWeight: 900, color: T.teal600 }}>
-                {policy.currencyLabel} {pay.toLocaleString()}
-              </div>
-              <div>
-                <StatusBadge status={request.status} />
-              </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <JellyButton
-                  type="button"
-                  variant="ghost"
-                  iconOnly
-                  leftIcon={<Eye size={14} />}
-                  onClick={() => setSelectedRequest(request)}
-                  title="View details"
-                  aria-label="View overtime details"
-                />
-                {request.status === "Pending" && (
-                  <>
-                    <JellyButton
-                      type="button"
-                      variant="success"
-                      size="sm"
-                      onClick={async () => {
-                        const confirmed = await confirmDialog({
-                          title: "Approve overtime?",
-                          text: `Approve overtime for ${getOvertimeStaffName(request)} on ${formatDate(getOvertimeDate(request))}?`,
-                          confirmButtonText: "Approve",
-                        });
-                        if (confirmed.isConfirmed) {
-                          void handleStatusUpdate(request.id, "Approved");
-                        }
-                      }}
-                    >
-                      Approve
-                    </JellyButton>
-                    <JellyButton
-                      type="button"
-                      variant="danger"
-                      size="sm"
-                      onClick={() => setRejectTarget(request)}
-                    >
-                      Reject
-                    </JellyButton>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {finalFilteredRequests.length === 0 && (
-          <div
+        <div className="overtime-table-scroll" style={{ overflowX: "auto" }}>
+          <table
             style={{
-              padding: "50px 16px",
-              textAlign: "center",
-              color: T.muted,
-              fontSize: 13,
+              width: "100%",
+              minWidth: isGlobalDashboard ? 980 : 850,
+              borderCollapse: "collapse",
+              textAlign: "left",
             }}
           >
-            No overtime requests match the selected filters.
-          </div>
-        )}
+            <thead>
+              <tr style={{ background: "#f8fafc" }}>
+                {[
+                  "Employee",
+                  ...(isGlobalDashboard ? ["Branch"] : []),
+                  "Department",
+                  "Date",
+                  "Hours",
+                  "Pay",
+                  "Status",
+                  "Actions",
+                ].map((heading) => (
+                  <th
+                    key={heading}
+                    scope="col"
+                    style={{
+                      padding: "12px 16px",
+                      textAlign: "left",
+                      fontSize: 10,
+                      fontWeight: 900,
+                      color: "#94a3b8",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                      borderBottom: `1px solid ${T.border}`,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {heading}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {finalFilteredRequests.map((request) => {
+                const highlighted = String(request.id) === highlightedOvertimeId;
+                const effective = backendPayrollPolicy
+                  ? {
+                      ...policy,
+                      fixedRatePerHour:
+                        backendPayrollPolicy.otRatePerHour ??
+                        policy.fixedRatePerHour,
+                    }
+                  : policy;
+                const pay = calculateOvertimePay(
+                  request.hours,
+                  effective,
+                  getStaffMonthlySalary(request),
+                );
+                const cellStyle: React.CSSProperties = {
+                  padding: "8px 16px",
+                  verticalAlign: "middle",
+                  borderBottom: highlighted
+                    ? "1px solid #fed7aa"
+                    : `1px solid ${T.slate100}`,
+                };
+                return (
+                  <tr
+                    id={`overtime-row-${request.id}`}
+                    key={request.id}
+                    className="overtime-table-row"
+                    style={{
+                      background: highlighted ? "#fff7ed" : "transparent",
+                      boxShadow: highlighted
+                        ? "inset 3px 0 0 #f97316"
+                        : "none",
+                    }}
+                    onMouseEnter={(event) => {
+                      if (!highlighted) {
+                        event.currentTarget.style.background = "#f8fafc";
+                      }
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = highlighted
+                        ? "#fff7ed"
+                        : "transparent";
+                    }}
+                  >
+                    <td style={cellStyle}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: T.body }}>
+                        {getOvertimeStaffName(request)}
+                      </div>
+                      <div style={{ color: T.muted, fontSize: 11 }}>
+                        {getStaffPersonCode(request)}
+                      </div>
+                    </td>
+                    {isGlobalDashboard && (
+                      <td
+                        style={{
+                          ...cellStyle,
+                          color: T.navy600,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {request.branchName}
+                      </td>
+                    )}
+                    <td style={{ ...cellStyle, color: T.body, fontSize: 12 }}>
+                      {request.department}
+                    </td>
+                    <td style={cellStyle}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: T.body }}>
+                        {formatDate(getOvertimeDate(request))}
+                      </div>
+                      <div style={{ color: T.muted, fontSize: 10 }}>
+                        Applied {formatDate(getOvertimeAppliedOn(request))}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        ...cellStyle,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: T.body,
+                      }}
+                    >
+                      {request.hours.toFixed(1)}h
+                    </td>
+                    <td
+                      style={{
+                        ...cellStyle,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: T.teal600,
+                      }}
+                    >
+                      {policy.currencyLabel} {pay.toLocaleString()}
+                    </td>
+                    <td style={cellStyle}>
+                      <StatusBadge status={request.status} />
+                    </td>
+                    <td style={cellStyle}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <JellyButton
+                          type="button"
+                          variant="ghost"
+                          iconOnly
+                          leftIcon={<Eye size={14} />}
+                          onClick={() => setSelectedRequest(request)}
+                          title="View details"
+                          aria-label="View overtime details"
+                        />
+                        {request.status === "Pending" && (
+                          <>
+                            <JellyButton
+                              type="button"
+                              variant="success"
+                              size="sm"
+                              onClick={async () => {
+                                const confirmed = await confirmDialog({
+                                  title: "Approve overtime?",
+                                  text: `Approve overtime for ${getOvertimeStaffName(request)} on ${formatDate(getOvertimeDate(request))}?`,
+                                  confirmButtonText: "Approve",
+                                });
+                                if (confirmed.isConfirmed) {
+                                  void handleStatusUpdate(request.id, "Approved");
+                                }
+                              }}
+                            >
+                              Approve
+                            </JellyButton>
+                            <JellyButton
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              onClick={() => setRejectTarget(request)}
+                            >
+                              Reject
+                            </JellyButton>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {finalFilteredRequests.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={isGlobalDashboard ? 8 : 7}
+                    style={{
+                      padding: "48px 16px",
+                      textAlign: "center",
+                      color: T.muted,
+                      fontSize: 13,
+                    }}
+                  >
+                    No overtime requests match the selected filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Detail panel */}

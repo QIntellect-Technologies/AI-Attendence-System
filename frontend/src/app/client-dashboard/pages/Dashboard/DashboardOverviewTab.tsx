@@ -4,7 +4,14 @@
  * Super Admin / Global dashboard overview.
  */
 
-import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
+import React, {
+  useMemo,
+  useState,
+  useRef,
+  useEffect,
+  lazy,
+  Suspense,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Users,
@@ -19,6 +26,7 @@ import {
 
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import { useDateFilter, formatDate } from "../../hooks/useDateFilter";
+import { formatDisplayTime } from "../../utils/formatDate";
 
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
 import useBranchAttendanceAnalytics from "../../hooks/useBranchAttendanceAnalytics";
@@ -41,7 +49,10 @@ import {
   isDashboardModuleVisible,
 } from "../../utils/moduleAccess";
 import { resolveApiBranchId } from "../../utils/tenantScope";
-import { getModulePath, getBranchModulePath } from "../../config/moduleRegistry";
+import {
+  getModulePath,
+  getBranchModulePath,
+} from "../../config/moduleRegistry";
 import { getAttendanceLogs } from "../../pages/attendance_temp/api/attendanceApi";
 import { listStaffRecords } from "../../pages/StaffManagement/api/staffApi";
 import { DEPT_COLORS } from "../../components/dashboard/overview/KpiDropdown";
@@ -161,10 +172,7 @@ const DashboardOverviewTab: React.FC = () => {
     if (!selectedPeopleType && defaultPeopleType) {
       setSelectedPeopleType(defaultPeopleType);
     }
-    if (
-      selectedPeopleType &&
-      !activePeopleTypes.includes(selectedPeopleType)
-    ) {
+    if (selectedPeopleType && !activePeopleTypes.includes(selectedPeopleType)) {
       setSelectedPeopleType(defaultPeopleType ?? activePeopleTypes[0]);
     }
   }, [activePeopleTypes, defaultPeopleType, selectedPeopleType]);
@@ -222,9 +230,13 @@ const DashboardOverviewTab: React.FC = () => {
     enabled: showPayrollModule,
   });
 
-  const isInitialLoading = Boolean(data.loading && !data.error && !data.stats?.totalStaff);
-  const statValue = (value: number | string): number | string => isInitialLoading ? value : value;
-  const statSub = (value: string): string => isInitialLoading ? "Loading..." : value;
+  const isInitialLoading = Boolean(
+    data.loading && !data.error && !data.stats?.totalStaff,
+  );
+  const statValue = (value: number | string): number | string =>
+    isInitialLoading ? value : value;
+  const statSub = (value: string): string =>
+    isInitialLoading ? "Loading..." : value;
 
   const isAllBranches = branch.isAllBranches;
   const cctvItems = data.cctvStatus.filter((item) => Boolean(item?.id));
@@ -238,7 +250,6 @@ const DashboardOverviewTab: React.FC = () => {
   const totalPeopleSub = isAllBranches
     ? "Across all branches"
     : "In this branch";
-
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
@@ -267,9 +278,13 @@ const DashboardOverviewTab: React.FC = () => {
         }
         if (user?.org_id || user?.organization_id) {
           promises.push(
-            listStaffRecords({ organizationId: (user?.org_id || user?.organization_id) as string | number })
+            listStaffRecords({
+              organizationId: (user?.org_id || user?.organization_id) as
+                | string
+                | number,
+            })
               .then(setAllStaff)
-              .catch(() => {})
+              .catch(() => {}),
           );
         }
       }
@@ -289,7 +304,9 @@ const DashboardOverviewTab: React.FC = () => {
   };
 
   // ── KPI Department Dropdown ────────────────────────────────────────────────
-  const [kpiDropdown, setKpiDropdown] = useState<"present" | "absent" | null>(null);
+  const [kpiDropdown, setKpiDropdown] = useState<"present" | "absent" | null>(
+    null,
+  );
   const presentCardRef = useRef<HTMLDivElement>(null);
   const absentCardRef = useRef<HTMLDivElement>(null);
   const [fetchedLogs, setFetchedLogs] = useState<any[]>([]);
@@ -320,14 +337,16 @@ const DashboardOverviewTab: React.FC = () => {
         .catch(() => {});
       if (user?.org_id || user?.organization_id) {
         listStaffRecords({
-          organizationId: (user?.org_id || user?.organization_id) as string | number,
+          organizationId: (user?.org_id || user?.organization_id) as
+            | string
+            | number,
           branchId: rosterBranchId,
           peopleType: effectivePeopleType,
         })
           .then((staff) => {
             if (active) setAllStaff(staff);
           })
-          .catch(() => { });
+          .catch(() => {});
       }
     };
     fetchRealData();
@@ -352,18 +371,34 @@ const DashboardOverviewTab: React.FC = () => {
   const cfgDeptNames = useMemo<string[]>(() => {
     const names = new Set<string>();
     Object.values(cfg.departments).forEach((depts) =>
-      depts.forEach((d) => { if (d.name) names.add(d.name); })
+      depts.forEach((d) => {
+        if (d.name) names.add(d.name);
+      }),
     );
     return Array.from(names).sort();
   }, [cfg.departments]);
 
   const filteredLogs = useMemo(() => {
     if (!fetchedLogs || !fetchedLogs.length) return [];
-    if (!dateFilter.range || !dateFilter.range.startDate || !dateFilter.range.endDate) return fetchedLogs;
+    if (
+      !dateFilter.range ||
+      !dateFilter.range.startDate ||
+      !dateFilter.range.endDate
+    )
+      return fetchedLogs;
     const { startDate, endDate } = dateFilter.range;
     return fetchedLogs.filter((log) => {
       let dStr = "";
-      const rawDate = log.work_date || log.workDate || log.log_date || log.logDate || log.date || log.timestamp || log.created_at || log.check_in || log.time;
+      const rawDate =
+        log.work_date ||
+        log.workDate ||
+        log.log_date ||
+        log.logDate ||
+        log.date ||
+        log.timestamp ||
+        log.created_at ||
+        log.check_in ||
+        log.time;
       if (rawDate) {
         const val = String(rawDate);
         if (val.length === 10 && val.includes("-")) {
@@ -384,7 +419,11 @@ const DashboardOverviewTab: React.FC = () => {
 
   const filterPeriodLabel = useMemo(() => {
     const todayStrVal = formatDate(new Date());
-    const yesterdayStrVal = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return formatDate(d); })();
+    const yesterdayStrVal = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return formatDate(d);
+    })();
     if (dateFilter.mode === "monthly") return "This Month";
     if (dateFilter.mode === "custom") return "Selected Period";
     if (dateFilter.selectedDate === yesterdayStrVal) return "Yesterday";
@@ -395,13 +434,25 @@ const DashboardOverviewTab: React.FC = () => {
   const deptPresentRows = useMemo<KpiDeptRow[]>(() => {
     const presentLogs = filteredLogs.filter((log) => {
       const status = (log.status || "").toLowerCase();
-      return status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day" || status === "on_time";
+      return (
+        status === "present" ||
+        status === "late" ||
+        status === "checked_in" ||
+        status === "checked_out" ||
+        status === "half_day" ||
+        status === "on_time"
+      );
     });
     const uniqueStaffPresent = new Map<string, string>();
     for (const log of presentLogs) {
-      const id = String(log.staffId || log.userId || log.staff_id || log.user_id);
+      const id = String(
+        log.staffId || log.userId || log.staff_id || log.user_id,
+      );
       if (id && !uniqueStaffPresent.has(id)) {
-        uniqueStaffPresent.set(id, log.department || log.department_name || "General");
+        uniqueStaffPresent.set(
+          id,
+          log.department || log.department_name || "General",
+        );
       }
     }
     const deptCounts = new Map<string, number>();
@@ -423,9 +474,18 @@ const DashboardOverviewTab: React.FC = () => {
       filteredLogs
         .filter((log) => {
           const status = (log.status || "").toLowerCase();
-          return status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day" || status === "on_time";
+          return (
+            status === "present" ||
+            status === "late" ||
+            status === "checked_in" ||
+            status === "checked_out" ||
+            status === "half_day" ||
+            status === "on_time"
+          );
         })
-        .map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
+        .map((log) =>
+          String(log.staffId || log.userId || log.staff_id || log.user_id),
+        ),
     );
     const absentStaff = allStaff.filter((s) => !presentIds.has(String(s.id)));
     const deptCounts = new Map<string, number>();
@@ -457,8 +517,12 @@ const DashboardOverviewTab: React.FC = () => {
       ].includes(String(log.status || "").toLowerCase()),
     );
     const sorted = [...presentLogs].sort((a: any, b: any) => {
-      const timeA = new Date(a.time || a.timestamp || a.date || a.created_at || 0).getTime();
-      const timeB = new Date(b.time || b.timestamp || b.date || b.created_at || 0).getTime();
+      const timeA = new Date(
+        a.time || a.timestamp || a.date || a.created_at || 0,
+      ).getTime();
+      const timeB = new Date(
+        b.time || b.timestamp || b.date || b.created_at || 0,
+      ).getTime();
       if (timeA && timeB) return timeB - timeA;
       return 0;
     });
@@ -467,8 +531,23 @@ const DashboardOverviewTab: React.FC = () => {
     const seen = new Set<string>();
 
     for (const log of sorted) {
-      const sid = String(log.staffId || log.userId || log.staff_id || log.user_id || log.name || log.userName || "");
-      const timeStr = String(log.time || log.timestamp || log.checkIn || log.check_in || log.created_at || "");
+      const sid = String(
+        log.staffId ||
+          log.userId ||
+          log.staff_id ||
+          log.user_id ||
+          log.name ||
+          log.userName ||
+          "",
+      );
+      const timeStr = String(
+        log.time ||
+          log.timestamp ||
+          log.checkIn ||
+          log.check_in ||
+          log.created_at ||
+          "",
+      );
       const datePart = timeStr.split("T")[0] || timeStr;
       const key = `${sid}_${datePart}`;
       if (!seen.has(key)) {
@@ -478,25 +557,30 @@ const DashboardOverviewTab: React.FC = () => {
     }
 
     return unique.map((log: any, index: number) => {
-      const rawStatus = (log.status || log.arrival_status || "present").toString().toLowerCase();
+      const rawStatus = (log.status || log.arrival_status || "present")
+        .toString()
+        .toLowerCase();
       let status: "Present" | "Late" | "Absent" = "Present";
       if (rawStatus.includes("absent")) status = "Absent";
       else if (rawStatus.includes("late")) status = "Late";
 
-      const timeStr = log.time || log.timestamp || log.checkIn || log.check_in || log.created_at || "09:00 AM";
-      let formattedTime = timeStr;
-      try {
-        if (timeStr.includes("T") || timeStr.includes("-")) {
-          const d = new Date(timeStr);
-          if (!isNaN(d.getTime())) {
-            formattedTime = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          }
-        }
-      } catch {}
+      const timeStr =
+        log.time ||
+        log.timestamp ||
+        log.checkIn ||
+        log.check_in ||
+        log.created_at ||
+        "09:00 AM";
+      const formattedTime = formatDisplayTime(String(timeStr));
 
       return {
         id: String(log.id || log.staffId || index),
-        name: log.userName || log.staffName || log.name || log.user_name || "Staff Member",
+        name:
+          log.userName ||
+          log.staffName ||
+          log.name ||
+          log.user_name ||
+          "Staff Member",
         department: log.department || log.department_name || "General",
         branchName: log.branchName || log.branch_name || "Main Branch",
         status,
@@ -508,16 +592,27 @@ const DashboardOverviewTab: React.FC = () => {
   const realTimeStats = useMemo(() => {
     const presentLogs = filteredLogs.filter((log) => {
       const status = (log.status || "").toLowerCase();
-      return status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day";
+      return (
+        status === "present" ||
+        status === "late" ||
+        status === "checked_in" ||
+        status === "checked_out" ||
+        status === "half_day"
+      );
     });
     const uniquePresentIds = new Set(
-      presentLogs.map((log) => String(log.staffId || log.userId || log.staff_id || log.user_id))
+      presentLogs.map((log) =>
+        String(log.staffId || log.userId || log.staff_id || log.user_id),
+      ),
     );
     const presentToday = uniquePresentIds.size;
     const totalStaff = analytics.staff?.length ?? data.stats.totalStaff;
     const absentToday = Math.max(0, totalStaff - presentToday);
-    const avgAttendance = totalStaff > 0 ? Math.round((presentToday / totalStaff) * 100) : 0;
-    const lateToday = presentLogs.filter((l) => (l.status || "").toLowerCase().includes("late")).length;
+    const avgAttendance =
+      totalStaff > 0 ? Math.round((presentToday / totalStaff) * 100) : 0;
+    const lateToday = presentLogs.filter((l) =>
+      (l.status || "").toLowerCase().includes("late"),
+    ).length;
 
     return {
       presentToday,
@@ -528,11 +623,14 @@ const DashboardOverviewTab: React.FC = () => {
     };
   }, [filteredLogs, analytics.staff, data.stats]);
 
-  const realTimeTodayStatus = useMemo(() => [
-    { name: "Present" as const, value: realTimeStats.presentToday },
-    { name: "Absent" as const, value: realTimeStats.absentToday },
-    { name: "Late" as const, value: realTimeStats.lateToday },
-  ], [realTimeStats]);
+  const realTimeTodayStatus = useMemo(
+    () => [
+      { name: "Present" as const, value: realTimeStats.presentToday },
+      { name: "Absent" as const, value: realTimeStats.absentToday },
+      { name: "Late" as const, value: realTimeStats.lateToday },
+    ],
+    [realTimeStats],
+  );
 
   const formattedToday = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -542,26 +640,78 @@ const DashboardOverviewTab: React.FC = () => {
   });
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f5f6fa", padding: "24px", boxSizing: "border-box", width: "100%", borderRadius: 16, fontFamily: "'DM Sans', sans-serif" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f5f6fa",
+        padding: "24px",
+        boxSizing: "border-box",
+        width: "100%",
+        borderRadius: 16,
+        fontFamily: "'DM Sans', sans-serif",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 12,
+          marginBottom: 18,
+        }}
+      >
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A", letterSpacing: "-0.5px", fontFamily: "'DM Sans', 'Inter', sans-serif", display: "flex", alignItems: "center", gap: 10 }}>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 22,
+              fontWeight: 800,
+              color: "#0F172A",
+              letterSpacing: "-0.5px",
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
             <TrendingUp size={22} color={T.teal600} />
-            Attendance Overview
+            Overview
           </h1>
-          <p style={{ margin: "4px 0 0 0", fontSize: 12, fontWeight: 500, color: "#64748B", fontFamily: "'DM Sans', 'Inter', sans-serif" }}>
+          <p
+            style={{
+              margin: "4px 0 0 0",
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#64748B",
+              fontFamily: "'DM Sans', 'Inter', sans-serif",
+            }}
+          >
             {formattedToday}
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
           <DateFilterBar filter={dateFilter} compact />
           {branch.hasMultipleBranches && (
-            <BranchSelector branches={branch.selectorBranches} selected={branch.selected} onChange={branch.onChange} />
+            <BranchSelector
+              branches={branch.selectorBranches}
+              selected={branch.selected}
+              onChange={branch.onChange}
+            />
           )}
           {activePeopleTypes.length > 1 && (
             <PeopleTypeSelector
               options={peopleTypeOptions}
-              value={effectivePeopleType ?? defaultPeopleType ?? activePeopleTypes[0]}
+              value={
+                effectivePeopleType ?? defaultPeopleType ?? activePeopleTypes[0]
+              }
               onChange={(value) => setSelectedPeopleType(value)}
               ariaLabel="People type"
               minWidth={150}
@@ -577,7 +727,9 @@ const DashboardOverviewTab: React.FC = () => {
         </div>
       </div>
       <Suspense fallback={<WidgetLoader />}>
-        {isInitialLoading ? <WidgetLoader /> : (
+        {isInitialLoading ? (
+          <WidgetLoader />
+        ) : (
           <div style={gridAuto(220)}>
             <StatCard
               title={isAllBranches ? "Total Branches" : "Branch"}
@@ -615,15 +767,22 @@ const DashboardOverviewTab: React.FC = () => {
                   icon={UserCheck}
                   iconBg="#ECFDF5"
                   iconColor="#16A34A"
-                  onClick={() => setKpiDropdown(kpiDropdown === "present" ? null : "present")}
+                  onClick={() =>
+                    setKpiDropdown(kpiDropdown === "present" ? null : "present")
+                  }
                 />
                 <KpiDropdown
                   open={kpiDropdown === "present"}
                   label="Present by Department"
                   rows={deptPresentRows}
-                  triggerRef={presentCardRef as React.RefObject<HTMLElement | null>}
+                  triggerRef={
+                    presentCardRef as React.RefObject<HTMLElement | null>
+                  }
                   onClose={() => setKpiDropdown(null)}
-                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                  onNavigate={() => {
+                    setKpiDropdown(null);
+                    navigateToModule("attendance");
+                  }}
                 />
               </div>
             )}
@@ -637,15 +796,22 @@ const DashboardOverviewTab: React.FC = () => {
                   icon={UserX}
                   iconBg="#FFF1F2"
                   iconColor="#E11D48"
-                  onClick={() => setKpiDropdown(kpiDropdown === "absent" ? null : "absent")}
+                  onClick={() =>
+                    setKpiDropdown(kpiDropdown === "absent" ? null : "absent")
+                  }
                 />
                 <KpiDropdown
                   open={kpiDropdown === "absent"}
                   label="Absent by Department"
                   rows={deptAbsentRows}
-                  triggerRef={absentCardRef as React.RefObject<HTMLElement | null>}
+                  triggerRef={
+                    absentCardRef as React.RefObject<HTMLElement | null>
+                  }
                   onClose={() => setKpiDropdown(null)}
-                  onNavigate={() => { setKpiDropdown(null); navigateToModule("attendance"); }}
+                  onNavigate={() => {
+                    setKpiDropdown(null);
+                    navigateToModule("attendance");
+                  }}
                 />
               </div>
             )}
@@ -653,9 +819,14 @@ const DashboardOverviewTab: React.FC = () => {
         )}
       </Suspense>
 
-      {(showAttendanceModule || showPayrollModule || showLeaveModule || showCctvDashboard) && (
+      {(showAttendanceModule ||
+        showPayrollModule ||
+        showLeaveModule ||
+        showCctvDashboard) && (
         <Suspense fallback={<WidgetLoader />}>
-          {isInitialLoading ? <WidgetLoader /> : (
+          {isInitialLoading ? (
+            <WidgetLoader />
+          ) : (
             <div style={gridAuto(220)}>
               {showAttendanceModule && (
                 <StatCard
@@ -674,7 +845,7 @@ const DashboardOverviewTab: React.FC = () => {
                 <StatCard
                   title="Monthly Payroll"
                   value={statValue(money(data.stats.monthlyPayroll))}
-                  sub={statSub(isAllBranches ? "All branches" : "This branch")}
+                  sub={statSub(isAllBranches ? "Branches" : "This branch")}
                   icon={Wallet}
                   iconBg={T.teal100}
                   iconColor={T.teal600}
@@ -708,25 +879,40 @@ const DashboardOverviewTab: React.FC = () => {
       )}
 
       {(showAttendanceModule || showShiftDistribution) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gridAutoRows: "390px", gap: 14, marginBottom: 20, alignItems: "stretch" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+            gridAutoRows: "390px",
+            gap: 14,
+            marginBottom: 20,
+            alignItems: "stretch",
+          }}
+        >
           {showShiftDistribution && (
             <Suspense fallback={<WidgetLoader />}>
-              {isInitialLoading ? <WidgetLoader /> : (
+              {isInitialLoading ? (
+                <WidgetLoader />
+              ) : (
                 <ShiftDistributionCard
                   shifts={data.shiftDistribution}
                   onViewMore={(shiftKey) => {
-                    const shift = data.shiftDistribution.find(s => s.key === shiftKey);
+                    const shift = data.shiftDistribution.find(
+                      (s) => s.key === shiftKey,
+                    );
                     const label = shift?.label ?? shiftKey;
                     if (selectedBranchId && !isAllBranches) {
                       navigate(
-                        getBranchModulePath("employees", Number(selectedBranchId)),
-                        { state: { shiftFilter: label } }
+                        getBranchModulePath(
+                          "employees",
+                          Number(selectedBranchId),
+                        ),
+                        { state: { shiftFilter: label } },
                       );
                     } else {
-                      navigate(
-                        getModulePath("employees"),
-                        { state: { shiftFilter: label } }
-                      );
+                      navigate(getModulePath("employees"), {
+                        state: { shiftFilter: label },
+                      });
                     }
                   }}
                 />
@@ -735,7 +921,9 @@ const DashboardOverviewTab: React.FC = () => {
           )}
           {showAttendanceModule && (
             <Suspense fallback={<WidgetLoader />}>
-              {isInitialLoading ? <WidgetLoader /> : (
+              {isInitialLoading ? (
+                <WidgetLoader />
+              ) : (
                 <TodayStatusCard
                   data={realTimeTodayStatus}
                   presentToday={realTimeStats.presentToday}
@@ -754,7 +942,9 @@ const DashboardOverviewTab: React.FC = () => {
           )}
           {showAttendanceModule && (
             <Suspense fallback={<WidgetLoader />}>
-              {isInitialLoading ? <WidgetLoader /> : (
+              {isInitialLoading ? (
+                <WidgetLoader />
+              ) : (
                 <LiveLogCard
                   items={effectiveLiveLog}
                   height="100%"
@@ -769,9 +959,14 @@ const DashboardOverviewTab: React.FC = () => {
       )}
 
       {showAttendanceModule && (
-        <div className="dashboard-overview-attendance-grid" style={gridAuto(360)}>
+        <div
+          className="dashboard-overview-attendance-grid"
+          style={gridAuto(360)}
+        >
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading ? <WidgetLoader /> : (
+            {isInitialLoading ? (
+              <WidgetLoader />
+            ) : (
               <WeeklyAttendanceCard
                 height={SUMMARY_WIDGET_CARD_HEIGHT}
                 listHeight={SUMMARY_WIDGET_BODY_HEIGHT}
@@ -786,7 +981,9 @@ const DashboardOverviewTab: React.FC = () => {
             )}
           </Suspense>
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading ? <WidgetLoader /> : (
+            {isInitialLoading ? (
+              <WidgetLoader />
+            ) : (
               <AttendancePerformanceCard
                 data={data.attendancePerformance}
                 branchSeries={
@@ -801,9 +998,13 @@ const DashboardOverviewTab: React.FC = () => {
       {showPayrollModule && (
         <div className="dashboard-overview-payroll-grid" style={gridAuto(360)}>
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading || payrollTrend.pending ? <WidgetLoader /> : (
+            {isInitialLoading || payrollTrend.pending ? (
+              <WidgetLoader />
+            ) : (
               <PayrollTrendsCard
-                data={payrollTrend.ready ? payrollTrend.totals : data.payrollTrends}
+                data={
+                  payrollTrend.ready ? payrollTrend.totals : data.payrollTrends
+                }
                 branchSeries={
                   isAllBranches
                     ? payrollTrend.ready
@@ -815,7 +1016,9 @@ const DashboardOverviewTab: React.FC = () => {
             )}
           </Suspense>
           <Suspense fallback={<WidgetLoader />}>
-            {isInitialLoading ? <WidgetLoader /> : (
+            {isInitialLoading ? (
+              <WidgetLoader />
+            ) : (
               <DepartmentPayrollCard
                 allStaff={allStaff}
                 branchId={selectedBranchId}
@@ -830,7 +1033,9 @@ const DashboardOverviewTab: React.FC = () => {
         <div style={equalSummaryWidgetGrid(300)}>
           {showLeaveModule && (
             <Suspense fallback={<WidgetLoader />}>
-              {isInitialLoading ? <WidgetLoader /> : (
+              {isInitialLoading ? (
+                <WidgetLoader />
+              ) : (
                 <PendingLeavesCard
                   branchId={selectedBranchId as never}
                   showBranchName={isAllBranches}
@@ -845,7 +1050,9 @@ const DashboardOverviewTab: React.FC = () => {
 
           {showCctvDashboard && (
             <Suspense fallback={<WidgetLoader />}>
-              {isInitialLoading ? <WidgetLoader /> : (
+              {isInitialLoading ? (
+                <WidgetLoader />
+              ) : (
                 <CctvStatusCard
                   height={SUMMARY_WIDGET_CARD_HEIGHT}
                   listHeight={SUMMARY_WIDGET_BODY_HEIGHT}

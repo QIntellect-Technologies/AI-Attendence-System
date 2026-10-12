@@ -30,6 +30,7 @@ import ModernSelect from "../../components/ui/ModernSelect";
 import JellyButton from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import { useAuthenticatedImageUrl } from "../../hooks/useAuthenticatedImageUrl";
+import { formatDisplayTime } from "../../utils/formatDate";
 
 // ─── Design tokens (aligned with the light-card system) ──────────────────────
 
@@ -76,10 +77,10 @@ const cardStyle: React.CSSProperties = {
 // ─── Clock hook ───────────────────────────────────────────────────────────────
 
 function useClock(): string {
-  const [time, setTime] = useState(() => new Date().toLocaleTimeString());
+  const [time, setTime] = useState(() => formatDisplayTime(new Date()));
   useEffect(() => {
     const id = window.setInterval(
-      () => setTime(new Date().toLocaleTimeString()),
+      () => setTime(formatDisplayTime(new Date())),
       1_000,
     );
     return () => window.clearInterval(id);
@@ -948,11 +949,7 @@ const DetectionCard = memo(function DetectionCard({
         : "#ef4444";
 
   const time = det.timestamp
-    ? new Date(det.timestamp).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
+    ? formatDisplayTime(det.timestamp, { includeSeconds: true })
     : "—";
 
   const source =

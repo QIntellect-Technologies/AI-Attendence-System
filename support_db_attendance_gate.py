@@ -51,10 +51,10 @@ def _normalize_people_type(value: object) -> str:
 def _parse_time(value: object) -> Optional[dt_time]:
     if not value:
         return None
-    parts = str(value).split(":")
-    if len(parts) < 2:
+    try:
+        return dt_time.fromisoformat(str(value))
+    except ValueError:
         return None
-    return dt_time(hour=int(parts[0]), minute=int(parts[1]))
 
 
 def _resolve_zone(tz_name: Optional[str]) -> ZoneInfo:
@@ -466,23 +466,30 @@ def _classify(event_local_minutes: int, target_time: Optional[dt_time], grace_mi
     return "late" if event_local_minutes > cutoff else "on_time"
 
 
-def _local_minutes(event_time_utc: datetime, branch_zone: ZoneInfo) -> int:
+def _local_seconds(event_time_utc: datetime, branch_zone: ZoneInfo) -> float:
     dt = event_time_utc if event_time_utc.tzinfo else event_time_utc.replace(tzinfo=timezone.utc)
     local = dt.astimezone(branch_zone)
-    return local.hour * 60 + local.minute
+    return local.hour * 3600 + local.minute * 60 + local.second + local.microsecond / 1_000_000
+
+
+def _time_seconds(value: dt_time) -> float:
+    return value.hour * 3600 + value.minute * 60 + value.second + value.microsecond / 1_000_000
 
 
 def resolve_check_in_status(window: Optional[TimingWindow], event_time_utc: datetime, branch_zone: ZoneInfo) -> str:
     if not window:
         return "unscheduled"
-    minutes = _local_minutes(event_time_utc, branch_zone)
-    # allow_early=True: an arrival before (shift_start - grace) is 'early',
-    # not 'on_time'. This was False, which made 'early' structurally
-    # unreachable here even though check_in_write_fields() in
-    # support_db_attendance_exceptions.py already fully implements what
-    # happens when this returns 'early' (note text, check_in_confirmed=True,
-    # no admin hold) — that branch was simply dead code until now.
-    return _classify(minutes, _parse_time(window.get("check_in_time")), int(window.get("check_in_grace_minutes") or 0), allow_early=True)
+    seconds = _local_seconds(event_time_utc, branch_zone)
+    target_time = _parse_time(window.get("check_in_time"))
+    if not target_time:
+        return "unscheduled"
+
+    target_seconds = _time_seconds(target_time)
+    if seconds < target_seconds:
+        return "early"
+    if seconds > target_seconds + int(window.get("check_in_grace_minutes") or 0) * 60:
+        return "late"
+    return "on_time"
 
 
 def resolve_check_out_status(
@@ -502,17 +509,25 @@ def resolve_check_out_status(
     if not window or not window.get("capture_check_out"):
         return "unscheduled"
 
-    minutes = _local_minutes(event_time_utc, branch_zone)
+    seconds = _local_seconds(event_time_utc, branch_zone)
     target_time = _parse_time(window.get("check_out_time"))
     grace = int(window.get("check_out_grace_minutes") or 0)
 
     if overtime_hours > 0 and target_time:
-        normal_cutoff = target_time.hour * 60 + target_time.minute + grace
-        extended_cutoff = normal_cutoff + int(round(overtime_hours * 60))
-        if normal_cutoff < minutes <= extended_cutoff:
+        normal_cutoff = _time_seconds(target_time) + grace * 60
+        extended_cutoff = normal_cutoff + int(round(overtime_hours * 60)) * 60
+        if normal_cutoff < seconds <= extended_cutoff:
             return "overtime"
 
-    return _classify(minutes, target_time, grace, allow_early=True)
+    if not target_time:
+        return "unscheduled"
+
+    target_seconds = _time_seconds(target_time)
+    if seconds < target_seconds:
+        return "early"
+    if seconds > target_seconds + grace * 60:
+        return "late"
+    return "on_time"
 
 
 # ─── Backward-compatible shim so existing call sites keep working during rollout ───

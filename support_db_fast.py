@@ -3468,7 +3468,7 @@ def get_fast_dashboard_overview(scope: FastScope, dashboard_scope: str = "global
         selected_branch_id = scope.branch_id
 
     today_text = time.strftime("%A, %B %d, %Y")
-    title = "Organization Overview" if dashboard_scope != "branch" else "Attendance Overview"
+    title = "Organization Overview" if dashboard_scope != "branch" else "Overview"
     subtitle = (
         f"All Branches · {total_branches} branches · {today_text}"
         if dashboard_scope != "branch"

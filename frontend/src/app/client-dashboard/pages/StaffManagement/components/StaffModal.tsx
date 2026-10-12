@@ -2680,6 +2680,7 @@ import { type NamedConfigOption, type StaffMember } from "../types/staffTypes";
 import { resolveProfileImageUrl } from "../utils/staffMedia";
 import { staffModules } from "../utils/staffMember";
 import { normalizeStaffShiftId } from "../utils/staffShifts";
+import { formatDisplayTime } from "../../../utils/formatDate";
 import {
   NAME_MAX_LENGTH,
   PHONE_MAX_LENGTH,
@@ -4697,8 +4698,8 @@ export const StaffModal: FC<{
                           ...liveShifts.map((shift) => ({
                             value: shift.id,
                             label: shift.name
-                              ? `${shift.name} · ${shift.check_in_time ?? "?"}–${shift.check_out_time ?? "?"}`
-                              : `${shift.check_in_time ?? "?"}–${shift.check_out_time ?? "?"}`,
+                              ? `${shift.name} · ${formatDisplayTime(shift.check_in_time)}–${formatDisplayTime(shift.check_out_time)}`
+                              : `${formatDisplayTime(shift.check_in_time)}–${formatDisplayTime(shift.check_out_time)}`,
                           })),
                         ]}
                         ariaLabel="Select shift"

@@ -3554,12 +3554,20 @@ def _paid_payroll_rows_for_periods(
     expected_periods = set(periods)
     range_start = periods[0][0]
     range_end = (date.fromisoformat(periods[-1][1]) + timedelta(days=1)).isoformat()
+    selected_columns = [column.strip() for column in columns.split(',') if column.strip()]
+    if '*' not in selected_columns:
+        selected_columns.extend(
+            column
+            for column in ('period_start', 'period_end')
+            if column not in selected_columns
+        )
+    select_clause = ', '.join(selected_columns)
 
     def _query():
         query = (
             get_supabase()
             .table('payroll_payments')
-            .select(columns)
+            .select(select_clause)
             .eq('org_id', org_key)
         )
         if staff_key:
@@ -3614,13 +3622,38 @@ def _paid_payroll_page_data(
 ) -> tuple[set[str], dict[str, dict], dict[str, float]]:
     """Return paid IDs, complete breakdowns, and saved base salaries."""
     org_key = str(org_id)
-    rows = _paid_payroll_rows(
-        org_key,
-        period_start,
-        period_end,
-        'staff_id, breakdown',
-        log_label,
-    )
+    try:
+        rows = _paid_payroll_rows(
+            org_key,
+            period_start,
+            period_end,
+            'staff_id, breakdown',
+            log_label,
+            strict=True,
+        )
+    except RuntimeError as exc:
+        if _table_missing(exc, 'payroll_payments'):
+            logger.warning(
+                '%s cannot read payroll status for org=%s because payroll_payments is missing',
+                log_label,
+                org_key,
+            )
+            return set(), {}, {}
+        if not _table_missing(exc, 'breakdown'):
+            raise
+        logger.warning(
+            '%s cannot read payroll snapshots for org=%s; falling back to paid IDs',
+            log_label,
+            org_key,
+        )
+        rows = _paid_payroll_rows(
+            org_key,
+            period_start,
+            period_end,
+            'staff_id',
+            log_label,
+            strict=True,
+        )
     paid_staff_ids = {
         _payroll_text(row.get('staff_id'))
         for row in rows
@@ -3984,6 +4017,23 @@ def mark_payroll_paid(
     # is coarse (whole org, not just this one period) but cheap and simple;
     # the next request for any closed period just recomputes once.
     _invalidate_payroll_breakdown_cache(org_key)
+    paid_rows = _paid_payroll_rows(
+        org_key,
+        period_start,
+        period_end,
+        'staff_id',
+        'verify_mark_payroll_paid',
+        strict=True,
+    )
+    if str(staff_id) not in {
+        _payroll_text(row.get('staff_id'))
+        for row in paid_rows
+        if isinstance(row, dict)
+    }:
+        raise RuntimeError(
+            'Payroll was marked paid, but the saved payment could not be verified '
+            'for the requested staff member and period.'
+        )
 
 def mark_payroll_pending(org_id: str, staff_id: str, period_start: str, period_end: str) -> None:
     org_key = str(org_id)

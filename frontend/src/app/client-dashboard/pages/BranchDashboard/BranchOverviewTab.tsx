@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { TrendingUp, UserCheck, Users, UserX } from "lucide-react";
 import DateFilterBar from "../../components/ui/DateFilterBar";
 import { useDateFilter, formatDate } from "../../hooks/useDateFilter";
+import { formatDisplayTime } from "../../utils/formatDate";
 import useDashboardOverviewData from "../../hooks/useDashboardOverviewData";
 import { useOrg, useOrgMasterData } from "../../contexts/OrgConfigContext";
 import { useAuth } from "../../contexts/useAuth";
@@ -396,15 +397,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
       else if (rawStatus.includes("late")) status = "Late";
 
       const timeStr = log.time || log.timestamp || log.checkIn || log.check_in || log.created_at || "09:00 AM";
-      let formattedTime = timeStr;
-      try {
-        if (timeStr.includes("T") || timeStr.includes("-")) {
-          const d = new Date(timeStr);
-          if (!isNaN(d.getTime())) {
-            formattedTime = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          }
-        }
-      } catch {}
+      const formattedTime = formatDisplayTime(String(timeStr));
 
       return {
         id: String(log.id || log.staffId || index),
@@ -532,7 +525,7 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
             }}
           >
             <TrendingUp size={22} color={T.teal600} />
-            Attendance Overview
+            Overview
           </h1>
           <p style={{ margin: "4px 0 0 0", fontSize: 12, fontWeight: 500, color: "#64748B", fontFamily: "'DM Sans', 'Inter', sans-serif" }}>
             {formattedToday}

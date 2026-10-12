@@ -241,7 +241,7 @@ class NodeService:
         self._thread: threading.Thread | None = None
         self.heartbeat_worker = HeartbeatWorker(15)
         self.attendance_sync_worker = AttendanceSyncWorker()
-        self.manual_instructions_worker = ManualInstructionsWorker(20)
+        self.manual_instructions_worker = ManualInstructionsWorker()
         self.camera_manager = get_camera_stream_manager()
 
     def start(self) -> None:

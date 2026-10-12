@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,9 +32,9 @@ import AllDetectionModal from "./live-attendance/AllDetectionModal";
 import HeldReviewPanel from "./live-attendance/HeldReviewPanel";
 import SplashScreen from "./SplashScreen";
 import WelcomeScreen from "./WelcomeScreen";
-import { useSleepWakeDetector } from "./hooks/useSleepWakeDetector";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:5000";
+let startupSplashShown = false;
 
 // Injected once per render path (activation screen / main shell). Handles
 // the responsive breakpoints that inline style objects can't express
@@ -148,12 +149,14 @@ export default function App() {
   const [allDetectionsOpen, setAllDetectionsOpen] = useState(false);
   const lastCameraChangeAtRef = useRef<string | null>(null);
 
-  // Shown on cold start (initial state: true — plain refresh gets the same
-  // treatment, deliberately; distinguishing "true" cold start from an
-  // operator hitting F5 isn't worth a sessionStorage flag for a ~4s splash)
-  // and re-shown whenever useSleepWakeDetector fires below.
-  const [showSplash, setShowSplash] = useState(true);
-  useSleepWakeDetector(() => setShowSplash(true));
+  // One splash per loaded page: a full reload creates a fresh module and
+  // shows it again, while React remounts and sleep/wake do not replay it.
+  const [showSplash, setShowSplash] = useState(false);
+  useLayoutEffect(() => {
+    if (startupSplashShown) return;
+    startupSplashShown = true;
+    setShowSplash(true);
+  }, []);
 
   // Shown once, right after activation flips false -> true (edge-triggered,
   // not on every activated render — a refresh while already activated

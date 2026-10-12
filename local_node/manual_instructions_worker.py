@@ -39,8 +39,8 @@ def _select_effective_time(instructed_iso: str | None, actual_iso: str | None, g
 
 
 class ManualInstructionsWorker:
-    def __init__(self, interval_seconds: int = 20) -> None:
-        self.interval_seconds = max(5, int(interval_seconds or 20))
+    def __init__(self, interval_seconds: int = 5) -> None:
+        self.interval_seconds = max(5, int(interval_seconds or 5))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -158,12 +158,26 @@ class ManualInstructionsWorker:
                 )
 
                 if is_absent_instruction:
+                    if not person_code:
+                        raise ValueError(
+                            f"Cannot apply absent instruction {inst_id}: no local person code was resolved"
+                        )
                     branch_key = str(cfg.get("branch_id") or "")
-                    local_db.delete_attendance_rows_for_person(branch_key, str(person_code), attendance_date)
+                    deleted_rows = local_db.delete_attendance_rows_for_person(
+                        branch_key, str(person_code), attendance_date,
+                    )
                     from local_node.live_events import remove_events_by_staff_id
+                    for deleted_row in deleted_rows:
+                        event_id = deleted_row.get("local_event_id")
+                        if event_id:
+                            remove_events_by_staff_id(str(event_id))
                     remove_events_by_staff_id(str(person_code))
                     if staff_id:
                         remove_events_by_staff_id(str(staff_id))
+                    from local_node.camera_stream_manager import get_camera_stream_manager
+                    get_camera_stream_manager().clear_person_throttle(
+                        people_type, str(person_code),
+                    )
                     logger.info(
                         "manual-instructions: absent instruction applied, deleted local attendance for person_code=%s date=%s",
                         person_code, attendance_date,

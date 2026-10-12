@@ -433,10 +433,10 @@ function fallbackData(
     peopleType: null,
     branchId: selected?.id,
     branchName: selected?.name,
-    title: scope === "global" ? "Organization Overview" : "Attendance Overview",
+    title: scope === "global" ? "Organization Overview" : "Overview",
     subtitle:
       scope === "global"
-        ? `All Branches · ${branchOptions.length} branches · ${nowText}`
+        ? `Branches · ${branchOptions.length} branches · ${nowText}`
         : `${selected?.name ?? "Branch"} · ${nowText}`,
     globalFilterBranchId: selected?.id,
     selectedBranchId: selected?.id,

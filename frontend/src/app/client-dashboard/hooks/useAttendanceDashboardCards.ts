@@ -6,6 +6,7 @@ import type {
   TodayAttendanceRecord,
 } from "../pages/attendance_temp/api/attendanceApi";
 import { useAttendanceData } from "../pages/attendance_temp/hooks/useAttendanceData";
+import { formatDisplayTime } from "../utils/formatDate";
 
 export interface UseAttendanceDashboardCardsOptions {
   branchId?: number | string | null;
@@ -61,10 +62,7 @@ function formatTime(value: string | null | undefined): string {
   const date = parseDate(value);
   if (!date) return "—";
 
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDisplayTime(date);
 }
 
 function dateKey(date: Date): string {

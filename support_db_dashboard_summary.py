@@ -2219,7 +2219,7 @@ def get_client_dashboard_overview(
         'branchId': selected_ui_id,
         'branchName': selected_branch.get('name') if selected_branch else None,
         'branchCity': selected_branch.get('location') if selected_branch else None,
-        'title': 'Organization Overview' if not backend_branch_id else 'Attendance Overview',
+        'title': 'Organization Overview' if not backend_branch_id else 'Overview',
         'subtitle': (
             f"{selected_branch.get('name')}{(' · ' + selected_branch.get('location')) if selected_branch and selected_branch.get('location') else ''} · {now_label}"
             if selected_branch

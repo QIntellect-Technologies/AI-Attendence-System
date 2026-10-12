@@ -35,7 +35,7 @@ A complete AI-powered attendance system using **InsightFace** for face embedding
 ## 🚀 Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10 (matches the pinned dependency set and Docker runtime)
 - CUDA Toolkit 11.8+ (for GPU acceleration, optional)
 - Git
 

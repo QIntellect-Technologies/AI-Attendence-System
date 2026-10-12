@@ -963,6 +963,7 @@ export default function PayrollModule() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+  const [rulesSaveAttempted, setRulesSaveAttempted] = useState(false);
   const [rulesPeopleType, setRulesPeopleType] = useState<"staff" | "student">(
     "staff",
   );
@@ -1048,11 +1049,14 @@ export default function PayrollModule() {
   ) => {
     if (["-", "+", "e", "E"].includes(event.key)) event.preventDefault();
   };
-  const payrollRulesError = useMemo(() => {
+  const payrollRulesOtRateError = useMemo(() => {
     if (hasOvertime && draftPolicy.otRatePerHour < PAYROLL_VALUE_MIN)
       return "OT rate must be at least PKR 1.";
     if (hasOvertime && draftPolicy.otRatePerHour > PAYROLL_VALUE_MAX)
       return "OT rate cannot exceed PKR 100,000,000.";
+    return null;
+  }, [draftPolicy.otRatePerHour, hasOvertime]);
+  const payrollRulesError = useMemo(() => {
     for (const type of Object.values(draftPolicy.allowanceTypes)) {
       const maximum =
         type.mode === "percent" ? PAYROLL_PERCENT_MAX : PAYROLL_VALUE_MAX;
@@ -2068,6 +2072,10 @@ export default function PayrollModule() {
     itemsPerPage: payrollPageSize,
   });
   const paginatedPayrollRows = payrollPager.paginatedItems;
+  const payrollRecordCellStyle: React.CSSProperties = {
+    ...tableCellStyle,
+    padding: "8px 16px",
+  };
 
   const [togglingStaffId, setTogglingStaffId] = useState<string | null>(null);
   const [selectedPayrollStaffIds, setSelectedPayrollStaffIds] = useState<
@@ -2317,6 +2325,7 @@ export default function PayrollModule() {
 
   const openRulesModal = useCallback(() => {
     setDraftPolicy(policy);
+    setRulesSaveAttempted(false);
     setRulesPeopleType("staff");
     setIsRulesModalOpen(true);
   }, [policy]);
@@ -2366,7 +2375,8 @@ export default function PayrollModule() {
 
   const handleSaveRules = useCallback(async () => {
     try {
-      if (payrollRulesError) return;
+      setRulesSaveAttempted(true);
+      if (payrollRulesError || payrollRulesOtRateError) return;
       const policyToSave = hasOvertime
         ? draftPolicy
         : withoutOvertimeRate(draftPolicy);
@@ -2401,6 +2411,7 @@ export default function PayrollModule() {
   }, [
     draftPolicy,
     payrollRulesError,
+    payrollRulesOtRateError,
     savePolicy,
     isGlobal,
     updateCfg,
@@ -2448,6 +2459,7 @@ export default function PayrollModule() {
 
   return (
     <div
+      className="payroll-page"
       style={{
         minHeight: "100%",
         background: T.bgPage,
@@ -2456,6 +2468,7 @@ export default function PayrollModule() {
       }}
     >
       <div
+        className="payroll-page-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -2501,6 +2514,7 @@ export default function PayrollModule() {
         </div>
 
         <div
+          className="payroll-page-actions"
           style={{
             display: "flex",
             gap: 10,
@@ -2508,78 +2522,83 @@ export default function PayrollModule() {
             flexWrap: "wrap",
           }}
         >
-          <DateFilterBar filter={payrollDateFilter} compact />
-          <RefreshButton
-            size="md"
-            loading={refreshing}
-            onClick={refresh}
-            ariaLabel="Refresh payroll data"
-          />
-          <ExportButton
-            filename={`Payroll_${contextLabel}_${selectedMonth}_${selectedYear}`}
-            data={visibleRows}
-            organization={exportOrganization}
-            excel={{
-              columns: payrollExcelColumns,
-            }}
-            pdf={{
-              title: "Payroll Report",
-              titleTag: `${selectedMonth} ${selectedYear}`,
-              reportPeriod: reportPeriodLabel,
-              ...(hasOvertime ? { otRatePerHour } : {}),
-              columns: payrollPdfColumns,
-            }}
-            style={{
-              background: T.bgCard,
-              border: `1px solid ${T.border}`,
-              color: T.textBody,
-              boxShadow: T.shadowCard,
-              fontWeight: 600,
-            }}
-          />
-          <button
-            onClick={openRulesModal}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              background: T.navy700,
-              border: "none",
-              borderRadius: 10,
-              padding: "9px 16px",
-              fontSize: 12,
-              fontWeight: 700,
-              color: "#fff",
-              cursor: "pointer",
-              boxShadow: T.shadowMd,
-            }}
-          >
-            <Settings size={14} color="#fff" /> Payroll Rules
-          </button>
-          {hasIncomeTax && (
+          <div className="payroll-date-filter">
+            <DateFilterBar filter={payrollDateFilter} compact />
+          </div>
+          <div className="payroll-header-utility-actions">
+            <RefreshButton
+              size="md"
+              loading={refreshing}
+              onClick={refresh}
+              ariaLabel="Refresh payroll data"
+            />
+            <ExportButton
+              filename={`Payroll_${contextLabel}_${selectedMonth}_${selectedYear}`}
+              data={visibleRows}
+              organization={exportOrganization}
+              excel={{
+                columns: payrollExcelColumns,
+              }}
+              pdf={{
+                title: "Payroll Report",
+                titleTag: `${selectedMonth} ${selectedYear}`,
+                reportPeriod: reportPeriodLabel,
+                ...(hasOvertime ? { otRatePerHour } : {}),
+                columns: payrollPdfColumns,
+              }}
+              style={{
+                background: T.bgCard,
+                border: `1px solid ${T.border}`,
+                color: T.textBody,
+                boxShadow: T.shadowCard,
+                fontWeight: 600,
+              }}
+            />
             <button
               type="button"
-              onClick={openIncomeTaxModal}
-              disabled={policyLoading}
+              onClick={openRulesModal}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 7,
-                background: T.teal600,
+                background: T.navy700,
                 border: "none",
                 borderRadius: 10,
                 padding: "9px 16px",
                 fontSize: 12,
                 fontWeight: 700,
                 color: "#fff",
-                cursor: policyLoading ? "wait" : "pointer",
-                opacity: policyLoading ? 0.7 : 1,
+                cursor: "pointer",
                 boxShadow: T.shadowMd,
               }}
             >
-              <DollarSign size={14} color="#fff" /> Income Tax Slabs
+              <Settings size={14} color="#fff" /> Payroll Rules
             </button>
-          )}
+            {hasIncomeTax && (
+              <button
+                type="button"
+                onClick={openIncomeTaxModal}
+                disabled={policyLoading}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  background: T.teal600,
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "9px 16px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#fff",
+                  cursor: policyLoading ? "wait" : "pointer",
+                  opacity: policyLoading ? 0.7 : 1,
+                  boxShadow: T.shadowMd,
+                }}
+              >
+                <DollarSign size={14} color="#fff" /> Income Tax Slabs
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2638,6 +2657,7 @@ export default function PayrollModule() {
       )}
 
       <div
+        className="payroll-tab-list"
         style={{
           display: "flex",
           gap: 4,
@@ -2650,15 +2670,21 @@ export default function PayrollModule() {
         }}
       >
         <button
+          className="payroll-tab-button"
           style={tabStyle("records")}
           onClick={() => setActiveTab("records")}
         >
           <BarChart2 size={13} /> Records
         </button>
-        <button style={tabStyle("trend")} onClick={() => setActiveTab("trend")}>
+        <button
+          className="payroll-tab-button"
+          style={tabStyle("trend")}
+          onClick={() => setActiveTab("trend")}
+        >
           <TrendingUp size={13} /> Trend
         </button>
         <button
+          className="payroll-tab-button"
           style={tabStyle("salary")}
           onClick={() => setActiveTab("salary")}
         >
@@ -2851,18 +2877,13 @@ export default function PayrollModule() {
           <div
             style={{
               overflowX: "auto",
-              background: "#ffffff",
-              border: "1px solid #d2dce4",
-              borderRadius: 12,
-              boxShadow:
-                "0 1px 3px rgba(15,45,74,0.06), 0 1px 2px rgba(15,45,74,0.04)",
             }}
           >
             <table
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                fontSize: 13,
+                fontSize: 12,
               }}
             >
               <thead>
@@ -2874,9 +2895,14 @@ export default function PayrollModule() {
                 >
                   <th
                     style={{
-                      padding: "12px 14px",
+                      padding: "12px 16px",
                       textAlign: "center",
                       borderBottom: "1px solid #e2e8f0",
+                      fontSize: 10,
+                      fontWeight: 900,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      color: "#94a3b8",
                     }}
                   >
                     <input
@@ -2907,7 +2933,7 @@ export default function PayrollModule() {
                     <th
                       key={column.key}
                       style={{
-                        padding: "12px 18px",
+                        padding: "12px 16px",
                         textAlign: [
                           "present",
                           "absent",
@@ -2918,10 +2944,10 @@ export default function PayrollModule() {
                           ? "center"
                           : "left",
                         fontSize: 10,
-                        fontWeight: 800,
+                        fontWeight: 900,
                         letterSpacing: "0.08em",
                         textTransform: "uppercase",
-                        color: "#64748b",
+                        color: "#94a3b8",
                         borderBottom: "1px solid #e2e8f0",
                         whiteSpace: "nowrap",
                         userSelect: "none",
@@ -2949,7 +2975,7 @@ export default function PayrollModule() {
                         "transparent";
                     }}
                   >
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                    <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
                       <input
                         type="checkbox"
                         aria-label={`Select ${row.name} for payroll processing`}
@@ -2971,7 +2997,7 @@ export default function PayrollModule() {
                         className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
                       />
                     </td>
-                    <td style={tableCellStyle}>
+                    <td style={payrollRecordCellStyle}>
                       <span
                         style={{
                           display: "inline-block",
@@ -2988,7 +3014,7 @@ export default function PayrollModule() {
                         {row.empId || "—"}
                       </span>
                     </td>
-                    <td style={tableCellStyle}>
+                    <td style={payrollRecordCellStyle}>
                       <div
                         style={{
                           display: "flex",
@@ -3026,45 +3052,45 @@ export default function PayrollModule() {
                         </div>
                       </div>
                     </td>
-                    <td style={tableCellStyle}>{row.cnic || "—"}</td>
+                    <td style={payrollRecordCellStyle}>{row.cnic || "—"}</td>
                     {isGlobal && cfg.branches.length > 1 && (
-                      <td style={tableCellStyle}>
+                      <td style={payrollRecordCellStyle}>
                         <Badge>{row.branchName}</Badge>
                       </td>
                     )}
-                    <td style={tableCellStyle}>{row.department}</td>
-                    <td style={tableCellStyle}>{fmtPKR(row.baseSalary)}</td>
-                    <td style={tableCellStyle}>{fmtPKR(row.allowances)}</td>
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                    <td style={payrollRecordCellStyle}>{row.department}</td>
+                    <td style={payrollRecordCellStyle}>{fmtPKR(row.baseSalary)}</td>
+                    <td style={payrollRecordCellStyle}>{fmtPKR(row.allowances)}</td>
+                    <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
                       {row.presentDays}
                     </td>
                     {showCol("workingDays") && (
                       <td
-                        style={{ ...tableCellStyle, textAlign: "center" }}
+                        style={{ ...payrollRecordCellStyle, textAlign: "center" }}
                         title="Scheduled workdays this month, excluding weekly days off and holidays"
                       >
                         {row.totalWorkingDays}
                       </td>
                     )}
                     {showCol("absent") && (
-                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
                         {row.absentDays}
                       </td>
                     )}
                     {showCol("otHrs") && (
-                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
                         {row.otHours}h
                       </td>
                     )}
                     {showCol("otRate") && (
-                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
                         {fmtPKR(row.otRate)}
                       </td>
                     )}
                     {showCol("otPay") && (
                       <td
                         style={{
-                          ...tableCellStyle,
+                          ...payrollRecordCellStyle,
                           color: T.navy600,
                           fontWeight: 800,
                         }}
@@ -3085,7 +3111,7 @@ export default function PayrollModule() {
                     )}
                     <td
                       style={{
-                        ...tableCellStyle,
+                        ...payrollRecordCellStyle,
                         textAlign: "center",
                         color: T.amber600,
                         fontWeight: 800,
@@ -3126,7 +3152,7 @@ export default function PayrollModule() {
                     {showCol("unpaidLeaves") && (
                       <td
                         style={{
-                          ...tableCellStyle,
+                          ...payrollRecordCellStyle,
                           textAlign: "center",
                           color: T.amber600,
                           fontWeight: 800,
@@ -3137,7 +3163,7 @@ export default function PayrollModule() {
                     )}
                     <td
                       style={{
-                        ...tableCellStyle,
+                        ...payrollRecordCellStyle,
                         color: T.red600,
                         fontWeight: 800,
                       }}
@@ -3177,7 +3203,7 @@ export default function PayrollModule() {
                     {showCol("incomeTax") && (
                       <td
                         style={{
-                          ...tableCellStyle,
+                          ...payrollRecordCellStyle,
                           color: T.red600,
                           fontWeight: 800,
                         }}
@@ -3187,14 +3213,14 @@ export default function PayrollModule() {
                     )}
                     <td
                       style={{
-                        ...tableCellStyle,
+                        ...payrollRecordCellStyle,
                         color: T.teal600,
                         fontWeight: 900,
                       }}
                     >
                       {fmtPKR(row.netPay)}
                     </td>
-                    <td style={tableCellStyle}>
+                    <td style={payrollRecordCellStyle}>
                       <button
                         onClick={() => handleToggleStatus(row)}
                         disabled={
@@ -3232,7 +3258,7 @@ export default function PayrollModule() {
                         </Badge>
                       </button>
                     </td>
-                    <td style={tableCellStyle}>
+                    <td style={payrollRecordCellStyle}>
                       <div
                         style={{
                           display: "flex",
@@ -3536,9 +3562,10 @@ export default function PayrollModule() {
                 marginBottom: 20,
               }}
             >
-              <Field label="OT Rate / Hour">
+              <Field label="OT Rate / Hour" required>
                 <input
                   type="number"
+                  required
                   min={0}
                   max={PAYROLL_VALUE_MAX}
                   step="any"
@@ -3556,11 +3583,15 @@ export default function PayrollModule() {
                   style={{
                     ...inputStyle,
                     background: T.teal50,
-                    borderColor: otRateConfigError ? T.red600 : T.teal200,
+                    borderColor: rulesSaveAttempted && payrollRulesOtRateError
+                      ? T.red600
+                      : T.teal200,
                   }}
-                  aria-invalid={Boolean(otRateConfigError)}
+                  aria-invalid={Boolean(
+                    rulesSaveAttempted && payrollRulesOtRateError,
+                  )}
                 />
-                {otRateConfigError && (
+                {rulesSaveAttempted && payrollRulesOtRateError && (
                   <p
                     role="alert"
                     style={{
@@ -3570,7 +3601,7 @@ export default function PayrollModule() {
                       fontWeight: 600,
                     }}
                   >
-                    {otRateConfigError}
+                    {payrollRulesOtRateError}
                   </p>
                 )}
               </Field>
@@ -5067,10 +5098,11 @@ const Badge: React.FC<{
   </span>
 );
 
-const Field: React.FC<{ label: string; children: React.ReactNode }> = ({
-  label,
-  children,
-}) => (
+const Field: React.FC<{
+  label: string;
+  children: React.ReactNode;
+  required?: boolean;
+}> = ({ label, children, required = false }) => (
   <label style={{ display: "block" }}>
     <span
       style={{
@@ -5084,6 +5116,12 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({
       }}
     >
       {label}
+      {required && (
+        <span aria-hidden="true" style={{ color: T.red600 }}>
+          {" "}
+          *
+        </span>
+      )}
     </span>
     {children}
   </label>

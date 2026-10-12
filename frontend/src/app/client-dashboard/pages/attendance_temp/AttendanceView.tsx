@@ -29,6 +29,7 @@ import React, {
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 import { toastSuccess, toastError, toastInfo } from "../../utils/notifications";
+import { formatDisplayTime } from "../../utils/formatDate";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { listStaffPage } from "../StaffManagement/api/staffApi";
 import {
@@ -741,23 +742,11 @@ function formatTimeForDisplay(
   value: string | null | undefined,
   timeZone: string,
 ): string {
-  if (!value) return "—";
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-
   try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone,
-    }).format(parsed);
-  } catch {
-    // Defends only against a genuinely invalid IANA name reaching here
-    // (e.g. stale frontend build); a missing/blank value is already
-    // handled by getBranchTimezone() below, never by this catch.
-    return String(value);
+    return formatDisplayTime(value, { timeZone });
+  } catch (error) {
+    if (error instanceof RangeError) return String(value ?? "—");
+    throw error;
   }
 }
 
@@ -2016,13 +2005,19 @@ export default function AttendanceView() {
     if (!userId) {
       throw new Error(`Could not find a matching user for ${staffName}.`);
     }
+    const targetUiBranchId =
+      scopedBranchId ?? activeBranchId ?? staffMember.branchId ?? null;
+    const targetBranchId = backendBranchIdForUi(
+      branches,
+      targetUiBranchId,
+    );
+    if (!targetBranchId) {
+      throw new Error(`Could not determine a branch for ${staffName}.`);
+    }
+
     await markAttendanceAbsent(userId, {
       organizationId: organizationIdForApi ?? undefined,
-      branchId:
-        backendBranchIdForUi(
-          branches,
-          scopedBranchId ?? activeBranchId ?? null,
-        ) ?? undefined,
+      branchId: targetBranchId,
       peopleType,
       date: targetDate,
     });
@@ -2966,7 +2961,7 @@ export default function AttendanceView() {
     const confirm = await Swal.fire({
       icon: "question",
       title: `Mark ${selectedAbsentStaff.length} selected people present?`,
-      text: `Their attendance for ${formattedDate} will be recorded as present with a standard check-in time (09:00 AM).`,
+      text: `Their attendance for ${formattedDate} will be recorded as present with a standard check-in time (${formatDisplayTime("09:00")}).`,
       showCancelButton: true,
       confirmButtonText: "Mark Present",
       cancelButtonText: "Cancel",
@@ -3169,7 +3164,7 @@ export default function AttendanceView() {
     return [
       {
         value: "all",
-        label: "All Branches",
+        label: "Branches",
         description: `${totalCount.toLocaleString()} ${entityLabel.toLowerCase()}`,
       },
       ...visibleBranches.map((branch) => {
@@ -3304,7 +3299,7 @@ export default function AttendanceView() {
           setActiveSubgroup(null);
         },
         hidden: !isGlobal,
-        minWidth: 190,
+        minWidth: 150,
       },
       ...(attendanceFilterByKey.has("peopleType")
         ? ([
@@ -3324,7 +3319,7 @@ export default function AttendanceView() {
                     attendanceFilterByKey.get("peopleType")?.label ??
                     "Attendance Scope"
                   }
-                  minWidth={210}
+                  minWidth={170}
                 />
               ),
             },
@@ -3352,7 +3347,7 @@ export default function AttendanceView() {
           setActiveDept(value === "all" ? null : value);
           setActiveSubgroup(null);
         },
-        minWidth: 220,
+        minWidth: 165,
       },
       {
         id: "subgroup",
@@ -3363,7 +3358,7 @@ export default function AttendanceView() {
         options: subgroupFilterOptions,
         onChange: (value: string) =>
           setActiveSubgroup(value === "all" ? null : value),
-        minWidth: 190,
+        minWidth: 150,
       },
       {
         id: "status",
@@ -3373,7 +3368,7 @@ export default function AttendanceView() {
         options: statusFilterOptions,
         onChange: (value: string) =>
           setActiveStatus(value as AttendanceStatusFilter),
-        minWidth: 170,
+        minWidth: 135,
       },
       {
         id: "search",
@@ -3384,7 +3379,7 @@ export default function AttendanceView() {
           attendanceFilterByKey.get("search")?.placeholder ??
           peopleModel.searchPlaceholder,
         grow: true,
-        minWidth: 260,
+        minWidth: 180,
       },
       {
         id: "reset",
@@ -3613,8 +3608,8 @@ export default function AttendanceView() {
 
       <DynamicFilterToolbar
         sections={attendanceFilterSections}
-        desktopOnly
         bordered
+        className="attendance-view-filter-toolbar"
         style={{ marginBottom: 24 }}
       />
 
@@ -3689,11 +3684,11 @@ export default function AttendanceView() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#d2dce4] bg-white shadow-sm">
+            <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-[#f8fafc] border-b border-[#e2e8f0]">
-                    <th className="w-12 px-4 py-3.5 text-center">
+                    <th className="w-12 px-4 py-3 text-center text-[10px] font-black text-[#94a3b8] uppercase tracking-[0.08em]">
                       <input
                         type="checkbox"
                         aria-label="Select all attendance rows"
@@ -3725,7 +3720,7 @@ export default function AttendanceView() {
                     {visibleDailyAttendanceColumns.map((column) => (
                       <th
                         key={column.key}
-                        className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none"
+                        className="px-4 py-3 text-left text-[10px] font-black text-[#94a3b8] uppercase tracking-[0.08em] select-none"
                       >
                         {column.label}
                       </th>
@@ -3766,19 +3761,19 @@ export default function AttendanceView() {
                      * capture_channel isn't part of peopleModel.attendanceColumns
                      * either. Shows which surface (local node / cloud / mobile
                      * app) actually captured this row. */}
-                    <th className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                    <th className="px-4 py-3 text-left text-[10px] font-black text-[#94a3b8] uppercase tracking-[0.08em] select-none">
                       Attendance Method
                     </th>
                     {/* Same "fixed column" reasoning as Notes above --
                      * camera_id isn't part of peopleModel.attendanceColumns
                      * either. Shows the specific camera that recognized
                      * this person, resolved to a name via camerasById. */}
-                    <th className="px-6 py-3.5 text-left text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                    <th className="px-4 py-3 text-left text-[10px] font-black text-[#94a3b8] uppercase tracking-[0.08em] select-none">
                       Camera
                     </th>
                     {/* Action (Edit/Save/Mark Absent) is intentionally last —
                      * see visibleDailyAttendanceColumns above. */}
-                    <th className="px-6 py-3.5 text-center text-[11px] font-bold text-[#64748b] uppercase tracking-wider select-none">
+                    <th className="px-4 py-3 text-center text-[10px] font-black text-[#94a3b8] uppercase tracking-[0.08em] select-none">
                       Action
                     </th>
                   </tr>
@@ -3821,7 +3816,7 @@ export default function AttendanceView() {
                         key={String(member.id)}
                         className="hover:bg-[#f8fafc] transition-colors"
                       >
-                        <td className="px-4 py-3.5 text-center">
+                        <td className="px-4 py-2 text-center">
                           <input
                             type="checkbox"
                             aria-label={`Select ${member.name}`}
@@ -3847,12 +3842,12 @@ export default function AttendanceView() {
                           if (column.key === "name") {
                             const initial = member.name.charAt(0).toUpperCase();
                             return (
-                              <td key={column.key} className="px-6 py-3.5">
+                              <td key={column.key} className="px-4 py-2">
                                 <div className="flex items-center gap-2.5">
-                                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+                                  <div className="w-7 h-7 rounded-full bg-linear-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
                                     {initial}
                                   </div>
-                                  <p className="text-[13px] font-bold text-[#102a3f] whitespace-nowrap">
+                                  <p className="text-xs font-extrabold text-[#334155] whitespace-nowrap">
                                     {member.name}
                                   </p>
                                 </div>
@@ -3865,7 +3860,7 @@ export default function AttendanceView() {
                               return (
                                 <td
                                   key={column.key}
-                                  className="px-6 py-4 text-center"
+                                  className="px-4 py-2 text-center"
                                 >
                                   <ModernSelect
                                     value={rowDraft.arrivalStatus}
@@ -3889,7 +3884,7 @@ export default function AttendanceView() {
                             return (
                               <td
                                 key={column.key}
-                                className="px-6 py-3.5 text-center"
+                                className="px-4 py-2 text-center"
                               >
                                 {arrivalStatus ? (
                                   <span
@@ -3913,7 +3908,7 @@ export default function AttendanceView() {
                                     {arrivalStatus}
                                   </span>
                                 ) : (
-                                  <span className="text-gray-300 text-sm">
+                                  <span className="text-gray-300 text-xs">
                                     —
                                   </span>
                                 )}
@@ -3929,7 +3924,7 @@ export default function AttendanceView() {
 
                             if (isEditingRow && rowDraft) {
                               return (
-                                <td key={column.key} className="px-6 py-4">
+                                <td key={column.key} className="px-4 py-2">
                                   <input
                                     type="datetime-local"
                                     disabled={isSavingRow}
@@ -3950,14 +3945,14 @@ export default function AttendanceView() {
                             }
 
                             return (
-                              <td key={column.key} className="px-6 py-4">
+                              <td key={column.key} className="px-4 py-2">
                                 {field === "checkIn" && isPresent ? (
-                                  <div className="flex items-center gap-2 text-sm font-semibold text-teal-700">
+                                  <div className="flex items-center gap-2 text-xs font-semibold text-teal-700">
                                     <Clock className="w-3.5 h-3.5" />
                                     {attendanceColumnText(column, cellContext)}
                                   </div>
                                 ) : (
-                                  <span className="text-sm text-gray-600">
+                                  <span className="text-xs text-[#334155]">
                                     {attendanceColumnText(column, cellContext)}
                                   </span>
                                 )}
@@ -3968,7 +3963,7 @@ export default function AttendanceView() {
                           return (
                             <td
                               key={column.key}
-                              className="px-6 py-4 text-sm text-gray-600"
+                              className="px-4 py-2 text-xs text-[#334155]"
                             >
                               {attendanceColumnText(column, cellContext)}
                             </td>
@@ -4009,7 +4004,7 @@ export default function AttendanceView() {
                         })()}
                         */}
                         {/* Temporarily hidden Day Status cell:
-                        <td className="px-6 py-4 text-center">
+                        <td className="px-4 py-2 text-center">
                           {(() => {
                             const badge = deriveDayStatusBadge({
                               isPresent,
@@ -4023,14 +4018,14 @@ export default function AttendanceView() {
                                 {badge.label}
                               </span>
                             ) : (
-                              <span className="text-gray-300 text-sm">—</span>
+                              <span className="text-gray-300 text-xs">—</span>
                             );
                           })()}
                         </td>
                         */}
                         {/* Temporarily hidden Decision cell:
                         {showPayrollDecisionColumn && (
-                          <td className="px-6 py-4 text-center">
+                          <td className="px-4 py-2 text-center">
                             {(() => {
                               const badge = isPayrollApplicable(member)
                                 ? derivePayrollDecisionBadge({
@@ -4052,7 +4047,7 @@ export default function AttendanceView() {
                           </td>
                         )}
                           */}
-                        <td className="px-6 py-4 text-center">
+                        <td className="px-4 py-2 text-center">
                           {(() => {
                             const badge = captureChannelBadge(
                               todayRecord?.captureChannel,
@@ -4064,28 +4059,28 @@ export default function AttendanceView() {
                                 {badge.label}
                               </span>
                             ) : (
-                              <span className="text-gray-300 text-sm">—</span>
+                              <span className="text-gray-300 text-xs">—</span>
                             );
                           })()}
                         </td>
-                        <td className="px-6 py-4 text-center">
+                        <td className="px-4 py-2 text-center">
                           {(() => {
                             const cameraLabel = resolveCameraLabel(
                               todayRecord?.cameraId,
                               camerasById,
                             );
                             return cameraLabel ? (
-                              <span className="text-sm text-gray-700">
+                              <span className="text-xs text-[#334155]">
                                 {cameraLabel}
                               </span>
                             ) : (
-                              <span className="text-gray-300 text-sm">—</span>
+                              <span className="text-gray-300 text-xs">—</span>
                             );
                           })()}
                         </td>
                         {/* Action (Edit/Save/Mark Absent) is the fixed last
                          * column — see visibleDailyAttendanceColumns above. */}
-                        <td className="px-6 py-4 text-center">
+                        <td className="px-4 py-2 text-center">
                           <div className="inline-flex items-center gap-2">
                             {isEditingRow ? (
                               <>
@@ -4184,7 +4179,7 @@ export default function AttendanceView() {
                     <tr>
                       <td
                         colSpan={visibleDailyAttendanceColumns.length + 4}
-                        className="px-6 py-16 text-center"
+                        className="px-4 py-12 text-center"
                       >
                         <div className="flex flex-col items-center gap-3 text-gray-400">
                           <Users className="w-10 h-10 opacity-30" />
@@ -4341,7 +4336,7 @@ export default function AttendanceView() {
                               return (
                                 <td key={column.key} className="px-5 py-3.5">
                                   <div className="flex items-center gap-2.5">
-                                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+                                    <div className="w-7 h-7 rounded-full bg-linear-to-br from-[#118d97] to-[#173f67] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
                                       {initial}
                                     </div>
                                     <p className="text-[13px] font-bold text-[#102a3f] whitespace-nowrap">
@@ -4381,30 +4376,30 @@ export default function AttendanceView() {
                               : summary.totalDays}
                           </td>
                           <td className="px-5 py-3.5 text-center">
-                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <span className="inline-flex items-center justify-center min-w-7 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                               {summary.presentDays}
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-center">
-                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                            <span className="inline-flex items-center justify-center min-w-7 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
                               {summary.lateDays}
                             </span>
                           </td>
                           {leaveModuleEnabled && (
                             <td className="px-5 py-3.5 text-center">
-                              <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                              <span className="inline-flex items-center justify-center min-w-7 px-2 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
                                 {leaveDays}
                               </span>
                             </td>
                           )}
                           <td className="px-5 py-3.5 text-center">
-                            <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            <span className="inline-flex items-center justify-center min-w-7 px-2 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
                               {summary.absentDays}
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-center">
                             <span
-                              className={`inline-flex items-center justify-center min-w-[48px] px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                              className={`inline-flex items-center justify-center min-w-12 px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                                 summary.attendanceRate >= 75
                                   ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                   : summary.attendanceRate >= 50

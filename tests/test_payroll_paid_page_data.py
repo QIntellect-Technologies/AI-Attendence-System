@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 
 import supabase_client
+import pytest
 
 if not hasattr(supabase_client, "reset_supabase_client"):
     supabase_client.reset_supabase_client = lambda: None
@@ -10,32 +11,106 @@ import support_db_payroll as payroll_db
 
 
 class PaymentQuery:
-    def __init__(self, rows, query_record):
+    def __init__(self, rows, query_record, client=None):
         self.rows = rows
         self.query_record = query_record
+        self.client = client
+        self.selected_columns = None
+        self.predicates = []
+        self.upsert_payload = None
 
     def select(self, columns):
         self.query_record["columns"] = columns
+        self.selected_columns = [
+            column.strip() for column in columns.split(",")
+        ]
         return self
 
     def eq(self, field, value):
         self.query_record.setdefault("filters", []).append((field, value))
+        self.predicates.append(("eq", field, value))
+        return self
+
+    def gte(self, field, value):
+        self.query_record.setdefault("range_filters", []).append(
+            ("gte", field, value)
+        )
+        self.predicates.append(("gte", field, value))
+        return self
+
+    def lt(self, field, value):
+        self.query_record.setdefault("range_filters", []).append(
+            ("lt", field, value)
+        )
+        self.predicates.append(("lt", field, value))
+        return self
+
+    def upsert(self, payload, on_conflict):
+        self.query_record["upsert"] = payload
+        self.query_record["on_conflict"] = on_conflict
+        self.upsert_payload = payload
         return self
 
     def execute(self):
-        return SimpleNamespace(data=self.rows)
+        if (
+            self.upsert_payload is not None
+            and self.client is not None
+            and self.client.persist_upserts
+        ):
+            conflict_fields = self.query_record["on_conflict"].split(",")
+            existing = next(
+                (
+                    row
+                    for row in self.rows
+                    if all(
+                        row.get(field) == self.upsert_payload.get(field)
+                        for field in conflict_fields
+                    )
+                ),
+                None,
+            )
+            if existing is None:
+                self.rows.append(dict(self.upsert_payload))
+            else:
+                existing.update(self.upsert_payload)
+
+        matching_rows = [
+            row
+            for row in self.rows
+            if all(
+                (row.get(field) == value)
+                if operation == "eq"
+                else (
+                    row.get(field) >= value
+                    if operation == "gte"
+                    else row.get(field) < value
+                )
+                for operation, field, value in self.predicates
+            )
+        ]
+        if self.selected_columns is not None:
+            matching_rows = [
+                {
+                    column: row[column]
+                    for column in self.selected_columns
+                    if column in row
+                }
+                for row in matching_rows
+            ]
+        return SimpleNamespace(data=matching_rows)
 
 
 class PaymentClient:
-    def __init__(self, rows):
+    def __init__(self, rows, persist_upserts=True):
         self.rows = rows
         self.queries = []
+        self.persist_upserts = persist_upserts
 
     def table(self, table_name):
         assert table_name == "payroll_payments"
         query_record = {}
         self.queries.append(query_record)
-        return PaymentQuery(self.rows, query_record)
+        return PaymentQuery(self.rows, query_record, self)
 
 
 def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
@@ -45,13 +120,25 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
         [
             {
                 "staff_id": "paid-with-snapshot",
+                "org_id": "org-1",
+                "period_start": "2026-10-01",
+                "period_end": "2026-10-31",
                 "breakdown": {"complete": True, "base_salary": 52000},
             },
             {
                 "staff_id": "paid-old-snapshot",
+                "org_id": "org-1",
+                "period_start": "2026-10-01",
+                "period_end": "2026-10-31",
                 "breakdown": {"partial": True, "base_salary": 48000},
             },
-            {"staff_id": "paid-without-snapshot", "breakdown": None},
+            {
+                "staff_id": "paid-without-snapshot",
+                "org_id": "org-1",
+                "period_start": "2026-10-01",
+                "period_end": "2026-10-31",
+                "breakdown": None,
+            },
         ]
     )
     monkeypatch.setattr(payroll_db, "get_supabase", lambda: client)
@@ -71,11 +158,15 @@ def test_paid_payroll_page_data_uses_one_query_and_keeps_incomplete_paid_rows(
     )
 
     assert len(client.queries) == 1
-    assert client.queries[0]["columns"] == "staff_id, breakdown"
+    assert client.queries[0]["columns"] == (
+        "staff_id, breakdown, period_start, period_end"
+    )
     assert client.queries[0]["filters"] == [
         ("org_id", "org-1"),
-        ("period_start", "2026-10-01"),
-        ("period_end", "2026-10-31"),
+    ]
+    assert client.queries[0]["range_filters"] == [
+        ("gte", "period_start", "2026-10-01"),
+        ("lt", "period_start", "2026-11-01"),
     ]
     assert paid_staff_ids == {
         "paid-with-snapshot",
@@ -119,3 +210,84 @@ def test_breakdown_cache_is_limited_to_closed_paid_rows_with_snapshots():
         paid_staff_ids,
         {"staff-1": {"late_count": 2}},
     )
+
+
+def test_mark_payroll_paid_verifies_the_saved_staff_and_period(monkeypatch):
+    client = PaymentClient([])
+    monkeypatch.setattr(payroll_db, "get_supabase", lambda: client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_execute_supabase",
+        lambda _label, query_builder: query_builder().execute(),
+    )
+
+    payroll_db.mark_payroll_paid(
+        "org-1",
+        "staff-1",
+        "2026-10-01",
+        "2026-10-31",
+    )
+
+    assert len(client.rows) == 1
+    assert {
+        field: client.rows[0][field]
+        for field in ("org_id", "staff_id", "period_start", "period_end")
+    } == {
+        "org_id": "org-1",
+        "staff_id": "staff-1",
+        "period_start": "2026-10-01",
+        "period_end": "2026-10-31",
+    }
+    verification_query = client.queries[-1]
+    assert verification_query["columns"] == (
+        "staff_id, period_start, period_end"
+    )
+    assert verification_query["filters"] == [("org_id", "org-1")]
+    assert verification_query["range_filters"] == [
+        ("gte", "period_start", "2026-10-01"),
+        ("lt", "period_start", "2026-11-01"),
+    ]
+    paid_staff_ids, _, _ = payroll_db.get_paid_payroll_page_data(
+        "org-1",
+        "2026-10-01",
+        "2026-10-31",
+    )
+    assert paid_staff_ids == {"staff-1"}
+
+
+def test_mark_payroll_paid_does_not_report_success_without_saved_payment(
+    monkeypatch,
+):
+    client = PaymentClient([], persist_upserts=False)
+    monkeypatch.setattr(payroll_db, "get_supabase", lambda: client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_execute_supabase",
+        lambda _label, query_builder: query_builder().execute(),
+    )
+
+    with pytest.raises(RuntimeError, match="could not be verified"):
+        payroll_db.mark_payroll_paid(
+            "org-1",
+            "staff-1",
+            "2026-10-01",
+            "2026-10-31",
+        )
+
+
+def test_paid_status_read_does_not_convert_database_error_to_pending(
+    monkeypatch,
+):
+    monkeypatch.setattr(payroll_db, "get_supabase", lambda: PaymentClient([]))
+    monkeypatch.setattr(
+        payroll_db,
+        "_execute_supabase",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        payroll_db.get_paid_payroll_page_data(
+            "org-1",
+            "2026-10-01",
+            "2026-10-31",
+        )

@@ -22,6 +22,7 @@ import { AlertTriangle, Clock, LogIn, LogOut } from "lucide-react";
 import { useAuth } from "../../contexts/useAuth";
 import { useOrgReady } from "../../hooks/useOrgReady";
 import { T } from "../../components/ui/theme";
+import { formatDisplayTime } from "../../utils/formatDate";
 import { JellyButton } from "../../components/ui/JellyButton";
 import RefreshButton from "../../components/ui/RefreshButton";
 import {
@@ -37,11 +38,10 @@ import {
 function formatTime(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(11, 16) || "—";
-  return date.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  if (Number.isNaN(date.getTime())) {
+    return formatDisplayTime(String(value).slice(11, 16));
+  }
+  return formatDisplayTime(date);
 }
 
 function staffLabel(row: AttendanceException): string {

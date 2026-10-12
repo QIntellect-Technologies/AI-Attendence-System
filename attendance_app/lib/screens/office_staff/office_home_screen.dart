@@ -1806,6 +1806,7 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
   late Timer _clockTimer;
   Timer? _wifiCheckTimer;
   Timer? _syncTimer;
+  Timer? _shiftRefreshTimer;
   DateTime _now = DateTime.now();
 
   int _presentDays = 0;
@@ -1964,6 +1965,10 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
       const Duration(minutes: 2),
       (_) => _syncPending(),
     );
+    _shiftRefreshTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _fetchTodayStatus(clearMarkMessage: false),
+    );
   }
 
   @override
@@ -1971,11 +1976,13 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
     _clockTimer.cancel();
     _wifiCheckTimer?.cancel();
     _syncTimer?.cancel();
+    _shiftRefreshTimer?.cancel();
     super.dispose();
   }
 
   bool _refreshing = false;
   int _refreshToken = 0;
+  int _attendanceRefreshToken = 0;
 
   // Single toast entry point -- every transient (fire-and-forget) message
   // in this screen goes through here, so styling/duration/icon choices
@@ -2147,11 +2154,11 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
     }
   }
 
-  // Checkout-eligibility + checked-out state -- separate from _fetchStats
-  // because capture_check_out is a shift-level setting /history's rows
-  // don't carry, not an attendance fact. See getTodayAttendanceStatus's
-  // doc comment for why this needs its own call.
-  Future<void> _fetchTodayStatus() async {
+  // Checkout eligibility, current attendance, and the resolved shift
+  // schedule are refreshed from the same endpoint on launch, explicit
+  // refresh, and the background poll. History does not carry shift-level
+  // schedule settings.
+  Future<void> _fetchTodayStatus({bool clearMarkMessage = true}) async {
     try {
       final status =
           await ApiService.getTodayAttendanceStatus(widget.user.token);
@@ -2181,20 +2188,12 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
         if (status['duration_label'] != null) {
           _todayDuration = status['duration_label'] as String;
         }
-        // Clear the transient "you just performed this action" banner (see
-        // _applyMarkResult) on every authoritative refresh. It's never
-        // touched anywhere else in this function, so without this a stale
-        // "pending admin review" (or a stale success message) from an
-        // earlier mark keeps rendering forever -- including after an admin
-        // has since resolved it, directly contradicting the
-        // freshly-refreshed _todayNotes/_checkInHoldReason/
-        // _checkOutHoldReason pill it sits right next to. Safe to always
-        // clear here: _fetchTodayStatus is only ever called from
-        // _fetchAll (app launch + the manual refresh button), never
-        // synchronously right after a mark, so this can't wipe out a
-        // message the user just triggered in this same session.
-        _markSuccess = false;
-        _markMsg = '';
+        if (clearMarkMessage) {
+          // Clear transient feedback on explicit refreshes, but preserve a
+          // just-marked message during the background status poll.
+          _markSuccess = false;
+          _markMsg = '';
+        }
       });
     } catch (_) {}
   }
@@ -2638,7 +2637,10 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
                     index: _currentTab,
                     children: [
                       _buildDashboard(),
-                      AttendanceHistoryScreen(user: widget.user),
+                      AttendanceHistoryScreen(
+                        user: widget.user,
+                        refreshToken: _attendanceRefreshToken,
+                      ),
                       LeaveScreen(
                         user: widget.user,
                         refreshToken: _refreshToken,
@@ -2655,6 +2657,9 @@ class _OfficeHomeScreenState extends State<OfficeHomeScreen> {
             NotificationPoller(
               user: widget.user,
               onAttendanceDetected: () async {
+                if (mounted) {
+                  setState(() => _attendanceRefreshToken++);
+                }
                 await Future.wait([_fetchStats(), _fetchTodayStatus()]);
               },
             ),

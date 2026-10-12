@@ -48,7 +48,6 @@ export const StaffRow: FC<{
   domId?: string;
   peopleModel: PeopleRenderingModel;
   columns: StaffTemplateColumn[];
-  gridTemplateColumns: string;
   editLoading?: boolean;
   generatingCredentials?: boolean;
 }> = ({
@@ -63,7 +62,6 @@ export const StaffRow: FC<{
   domId,
   peopleModel,
   columns,
-  gridTemplateColumns,
   editLoading = false,
   generatingCredentials = false,
 }) => {
@@ -137,7 +135,7 @@ export const StaffRow: FC<{
               style={{
                 fontSize: 13,
                 fontWeight: 700,
-                color: TABLE_THEME.textHeading,
+                color: "#334155",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -300,10 +298,9 @@ export const StaffRow: FC<{
       <div
         style={{
           fontSize: 12,
-          color: column.key === "branch" ? TABLE_THEME.navy600 : TABLE_THEME.textHeading,
+          color: column.key === "branch" ? TABLE_THEME.navy600 : "#334155",
           fontWeight: column.key === "branch" ? 700 : 500,
           textAlign: align,
-          justifySelf: isCentered ? "center" : "start",
           width: "100%",
           paddingLeft: isCentered ? 8 : 4,
           paddingRight: isCentered ? 8 : 0,
@@ -319,20 +316,12 @@ export const StaffRow: FC<{
   };
 
   return (
-    <div
-      className="staff-directory-table-grid"
+    <tr
+      className="staff-directory-table-row"
       id={domId}
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
-        display: "grid",
-        gridTemplateColumns,
-        minWidth: 1120,
-        width: "100%",
-        boxSizing: "border-box",
-        gap: 12,
-        padding: "11px 16px",
-        alignItems: "center",
         background: highlighted ? "#fff7ed" : hov ? "#f8fafc" : "#ffffff",
         borderBottom: highlighted ? "1px solid #fed7aa" : "1px solid #f1f5f9",
         boxShadow: highlighted ? "inset 3px 0 0 #f97316" : hov ? "inset 2px 0 0 #0f766e" : "none",
@@ -342,73 +331,85 @@ export const StaffRow: FC<{
       onClick={onView}
     >
       {columns.map((column) => (
-        <React.Fragment key={column.key}>{renderCell(column)}</React.Fragment>
+        <td
+          key={column.key}
+          style={{
+            padding: "13px 16px",
+            textAlign: getColumnAlign(column),
+            verticalAlign: "middle",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {renderCell(column)}
+        </td>
       ))}
 
-      <div
-        style={{ display: "flex", gap: 6, alignItems: "center" }}
+      <td
+        style={{ padding: "13px 16px", verticalAlign: "middle" }}
         onClick={(e) => e.stopPropagation()}
         aria-label={`${peopleModel.personSingular} row actions`}
       >
-        <button
-          type="button"
-          onClick={onView}
-          style={iconBtn}
-          title="View profile"
-        >
-          <Eye size={13} color={TABLE_THEME.teal600} />
-        </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          disabled={editLoading}
-          title={editLoading ? "Loading details…" : "Edit"}
-          style={{
-            ...iconBtn,
-            opacity: editLoading ? 0.5 : 1,
-            cursor: editLoading ? "not-allowed" : "pointer",
-          }}
-        >
-          <Edit2 size={13} color={TABLE_THEME.navy600} />
-        </button>
-        {peopleModel.shouldGenerateCredentials && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button
             type="button"
-            onClick={onGenerateCredentials}
-            disabled={generatingCredentials}
-            title={
-              generatingCredentials
-                ? "Generating credentials…"
-                : "Generate Credentials"
-            }
-            style={{
-              ...iconBtn,
-              opacity: generatingCredentials ? 0.5 : 1,
-              cursor: generatingCredentials ? "not-allowed" : "pointer",
-            }}
+            onClick={onView}
+            style={iconBtn}
+            title="View profile"
           >
-            {generatingCredentials ? (
-              <Spinner size={13} color={TABLE_THEME.teal600} />
-            ) : (
-              <KeyRound size={13} color={TABLE_THEME.teal600} />
-            )}
+            <Eye size={13} color={TABLE_THEME.teal600} />
           </button>
-        )}
-        {canDelete && (
           <button
             type="button"
-            onClick={onDelete}
-            title="Delete member"
+            onClick={onEdit}
+            disabled={editLoading}
+            title={editLoading ? "Loading details…" : "Edit"}
             style={{
               ...iconBtn,
-              background: "#fff1f2",
-              borderColor: "#fecdd3",
+              opacity: editLoading ? 0.5 : 1,
+              cursor: editLoading ? "not-allowed" : "pointer",
             }}
           >
-            <Trash2 size={13} color="#e11d48" />
+            <Edit2 size={13} color={TABLE_THEME.navy600} />
           </button>
-        )}
-      </div>
-    </div>
+          {peopleModel.shouldGenerateCredentials && (
+            <button
+              type="button"
+              onClick={onGenerateCredentials}
+              disabled={generatingCredentials}
+              title={
+                generatingCredentials
+                  ? "Generating credentials…"
+                  : "Generate Credentials"
+              }
+              style={{
+                ...iconBtn,
+                opacity: generatingCredentials ? 0.5 : 1,
+                cursor: generatingCredentials ? "not-allowed" : "pointer",
+              }}
+            >
+              {generatingCredentials ? (
+                <Spinner size={13} color={TABLE_THEME.teal600} />
+              ) : (
+                <KeyRound size={13} color={TABLE_THEME.teal600} />
+              )}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              title="Delete member"
+              style={{
+                ...iconBtn,
+                background: "#fff1f2",
+                borderColor: "#fecdd3",
+              }}
+            >
+              <Trash2 size={13} color="#e11d48" />
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 };
