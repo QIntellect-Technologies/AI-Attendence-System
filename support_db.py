@@ -178,6 +178,7 @@ from support_db_payroll import (
     delete_client_leave_request,
     get_approved_leaves_for_payroll_period,
     get_approved_overtime_hours_for_payroll_period,
+    are_all_payroll_staff_pending,
     get_client_branch_summary,
     get_client_leave_owned_by_org,
     get_client_overtime_owned_by_org,
@@ -188,6 +189,7 @@ from support_db_payroll import (
     get_paid_payroll_periods,
     get_payroll_policy,
     get_payroll_policy_for_period,
+    payroll_department_belongs_to_org,
     get_staff_attendance_for_payroll_period,
     list_client_overtime_requests,
     mark_payroll_paid,
@@ -1606,6 +1608,8 @@ def _map_client_leave(row: dict, staff_by_id: dict[str, dict] | None = None) -> 
         'branch_name': branch_name,
         'branchName': branch_name,
         'department': department,
+        'department_id': row.get('department_id') or staff.get('department_id'),
+        'departmentId': row.get('department_id') or staff.get('department_id'),
         'dept': department,
         'people_type': people_type,
         'peopleType': people_type,
@@ -1684,7 +1688,7 @@ def list_client_leave_requests(
     mapped_rows = [_map_client_leave(row, staff_by_id) for row in rows]
 
     # Attaches leave_compensation/leavePayrollDecision using each row's OWN
-    # branch's leaveTypeRules (org default, overridden per-branch) -- see
+    # branch and department payroll rules -- see
     # annotate_leave_payroll_treatment's docstring. Single shared
     # implementation with support_db_attendance_dashboard.list_client_leave_
     # requests so the two never drift on "is this leave type paid" again.

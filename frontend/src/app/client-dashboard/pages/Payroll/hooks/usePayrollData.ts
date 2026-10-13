@@ -82,6 +82,7 @@ export interface PayrollRow {
   name: string;
   peopleType: string;
   department: string;
+  departmentId: string | null;
   branchId: number;
   backendBranchId: string | null;
   branchName: string;
@@ -452,6 +453,8 @@ function normalizePayrollRow(
     department: String(
       merged.department ?? merged.department_name ?? merged.dept ?? "General",
     ),
+    departmentId:
+      cleanId(merged.departmentId ?? merged.department_id) || null,
     branchId: uiBranchId,
     backendBranchId,
     branchName: branchNameFromRow(merged, branch),
@@ -510,6 +513,7 @@ function buildStaffFallbackPayrollRows(staffRows: AnyRecord[]): AnyRecord[] {
       staff.personType ??
       staff.person_type,
     department: staff.department ?? staff.department_name ?? staff.dept,
+    department_id: staff.departmentId ?? staff.department_id,
     branch_id:
       staff.backendBranchId ??
       staff.backend_branch_id ??

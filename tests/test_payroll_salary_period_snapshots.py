@@ -82,6 +82,8 @@ def _run_snapshot_save(monkeypatch, action):
                 "period_start": "2026-03-01",
                 "period_end": "2026-03-31",
                 "basic_salary": 45000,
+                "allowances": 1250,
+                "applied_allowances": {"transport": {"value": 1250}},
             }
         ],
     )
@@ -105,6 +107,10 @@ def _run_snapshot_save(monkeypatch, action):
         50000,
         60000,
         action,
+        old_allowances=1000,
+        new_allowances=2500,
+        old_applied_allowances={"transport": {"value": 1000}},
+        new_applied_allowances={"transport": {"value": 2500}},
     )
     return client.upserts[0][1], client.query_executions
 
@@ -113,6 +119,12 @@ def test_preserve_action_keeps_paid_and_pending_period_salaries(monkeypatch):
     snapshots, query_executions = _run_snapshot_save(monkeypatch, "preserve")
 
     assert [row["basic_salary"] for row in snapshots] == [48000, 50000, 45000]
+    assert [row["allowances"] for row in snapshots] == [1000, 1000, 1250]
+    assert [row["applied_allowances"] for row in snapshots] == [
+        {"transport": {"value": 1000}},
+        {"transport": {"value": 1000}},
+        {"transport": {"value": 1250}},
+    ]
     assert [row["period_start"] for row in snapshots] == [
         "2026-01-01",
         "2026-02-01",
@@ -125,6 +137,12 @@ def test_update_action_changes_only_pending_months(monkeypatch):
     snapshots, query_executions = _run_snapshot_save(monkeypatch, "update")
 
     assert [row["basic_salary"] for row in snapshots] == [48000, 60000, 60000]
+    assert [row["allowances"] for row in snapshots] == [1000, 2500, 2500]
+    assert [row["applied_allowances"] for row in snapshots] == [
+        {"transport": {"value": 1000}},
+        {"transport": {"value": 2500}},
+        {"transport": {"value": 2500}},
+    ]
     assert [row["period_start"] for row in snapshots] == [
         "2026-01-01",
         "2026-02-01",
@@ -185,6 +203,8 @@ def test_period_snapshot_lookup_is_scoped_to_staff_and_period(monkeypatch):
                 "period_start": "2026-03-01",
                 "period_end": "2026-03-31",
                 "basic_salary": 45000,
+                "allowances": 1250,
+                "applied_allowances": {"transport": {"value": 1250}},
             },
             {
                 "org_id": "org-1",
@@ -207,7 +227,13 @@ def test_period_snapshot_lookup_is_scoped_to_staff_and_period(monkeypatch):
         ["staff-1"],
         "2026-03-01",
         "2026-03-31",
-    ) == {"staff-1": 45000}
+    ) == {
+        "staff-1": {
+            "basic_salary": 45000,
+            "allowances": 1250,
+            "applied_allowances": {"transport": {"value": 1250}},
+        }
+    }
 
 
 def test_pending_period_lookup_includes_partial_month_but_omits_paid_and_current(monkeypatch):
@@ -278,3 +304,16 @@ def test_snapshot_migration_missing_blocks_salary_history_save(monkeypatch):
             60000,
             "preserve",
         )
+
+
+def test_missing_allowance_snapshot_columns_are_detected_through_normalized_error():
+    original = RuntimeError(
+        "Could not find the 'applied_allowances' column of "
+        "'payroll_salary_period_snapshots' in the schema cache"
+    )
+    normalized = ValueError(
+        "Your request could not be processed. Please adjust it and try again."
+    )
+    normalized.__cause__ = original
+
+    assert payroll_db._payroll_salary_snapshot_allowance_columns_missing(normalized)

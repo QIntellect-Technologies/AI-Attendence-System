@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
 import supabase_client
+import payroll_engine
 
 if not hasattr(supabase_client, "reset_supabase_client"):
     supabase_client.reset_supabase_client = lambda: None
@@ -79,6 +80,7 @@ def test_policy_for_past_period_uses_rules_effective_for_that_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "0001-01-01",
                 "policy": {"otRatePerHour": 100},
@@ -86,6 +88,7 @@ def test_policy_for_past_period_uses_rules_effective_for_that_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "2026-09-01",
                 "policy": {"otRatePerHour": 200},
@@ -156,12 +159,43 @@ def test_current_and_future_periods_use_live_policy(monkeypatch):
     ]
 
 
+def test_branch_department_policy_precedes_global_department_override(monkeypatch):
+    monkeypatch.setattr(
+        payroll_db,
+        "_org_default_payroll_policy",
+        lambda _org_id: {"otRatePerHour": 100},
+    )
+
+    def policy_override(_org_id, *, branch_id=None, department_id=None, staff_id=None):
+        if staff_id:
+            return None
+        if branch_id and department_id:
+            return {"otRatePerHour": 300}
+        if department_id:
+            return {"otRatePerHour": 200}
+        if branch_id:
+            return {"incomeTaxEnabled": True}
+        return None
+
+    monkeypatch.setattr(payroll_db, "_payroll_policy_override", policy_override)
+
+    resolved = payroll_db.get_payroll_policy(
+        "org-1",
+        branch_id="branch-1",
+        department_id="department-1",
+    )
+
+    assert resolved["otRatePerHour"] == 300
+    assert resolved["incomeTaxEnabled"] is True
+
+
 def test_policy_for_period_applies_org_then_branch_then_staff_rules(monkeypatch):
     client = PolicyHistoryClient(
         [
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "0001-01-01",
                 "policy": {"otRatePerHour": 100, "incomeTaxEnabled": False},
@@ -169,6 +203,7 @@ def test_policy_for_period_applies_org_then_branch_then_staff_rules(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "branch-1",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "0001-01-01",
                 "policy": {"otRatePerHour": 150},
@@ -176,6 +211,15 @@ def test_policy_for_period_applies_org_then_branch_then_staff_rules(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "department-1",
+                "staff_id": "",
+                "effective_from": "0001-01-01",
+                "policy": {"otRatePerHour": 175},
+            },
+            {
+                "org_id": "org-1",
+                "branch_id": "",
+                "department_id": "",
                 "staff_id": "staff-1",
                 "effective_from": "0001-01-01",
                 "policy": {"incomeTaxEnabled": True},
@@ -189,9 +233,10 @@ def test_policy_for_period_applies_org_then_branch_then_staff_rules(monkeypatch)
         "2026-09-01",
         branch_id="branch-1",
         staff_id="staff-1",
+        department_id="department-1",
     )
 
-    assert policy["otRatePerHour"] == 150
+    assert policy["otRatePerHour"] == 175
     assert policy["incomeTaxEnabled"] is True
 
 
@@ -201,6 +246,7 @@ def test_page_overrides_use_latest_rule_effective_for_payroll_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "branch-1",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "0001-01-01",
                 "policy": {"otRatePerHour": 100},
@@ -208,6 +254,7 @@ def test_page_overrides_use_latest_rule_effective_for_payroll_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "branch-1",
+                "department_id": "",
                 "staff_id": "",
                 "effective_from": "2026-10-01",
                 "policy": {"otRatePerHour": 200},
@@ -215,6 +262,7 @@ def test_page_overrides_use_latest_rule_effective_for_payroll_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "",
                 "staff_id": "staff-1",
                 "effective_from": "0001-01-01",
                 "policy": {"incomeTaxEnabled": False},
@@ -222,6 +270,7 @@ def test_page_overrides_use_latest_rule_effective_for_payroll_month(monkeypatch)
             {
                 "org_id": "org-1",
                 "branch_id": "",
+                "department_id": "",
                 "staff_id": "staff-1",
                 "effective_from": "2026-10-01",
                 "policy": {"incomeTaxEnabled": True},
@@ -230,17 +279,21 @@ def test_page_overrides_use_latest_rule_effective_for_payroll_month(monkeypatch)
     )
     _mock_supabase(monkeypatch, client)
 
-    prior_branch, prior_staff = payroll_db._payroll_policy_overrides_for_page(
-        "org-1",
-        ["branch-1"],
-        ["staff-1"],
-        effective_on="2026-09-01",
+    prior_branch, _prior_departments, _prior_branch_departments, prior_staff = (
+        payroll_db._payroll_policy_overrides_for_page(
+            "org-1",
+            ["branch-1"],
+            ["staff-1"],
+            effective_on="2026-09-01",
+        )
     )
-    current_branch, current_staff = payroll_db._payroll_policy_overrides_for_page(
-        "org-1",
-        ["branch-1"],
-        ["staff-1"],
-        effective_on="2026-10-01",
+    current_branch, _current_departments, _current_branch_departments, current_staff = (
+        payroll_db._payroll_policy_overrides_for_page(
+            "org-1",
+            ["branch-1"],
+            ["staff-1"],
+            effective_on="2026-10-01",
+        )
     )
 
     assert prior_branch["branch-1"]["otRatePerHour"] == 100
@@ -271,4 +324,203 @@ def test_saving_policy_adds_a_version_effective_from_current_month(monkeypatch):
     saved, conflict = history_upserts[0]
     assert saved["effective_from"] == date.today().replace(day=1).isoformat()
     assert saved["policy"] == policy
-    assert conflict == "org_id,branch_id,staff_id,effective_from"
+    assert conflict == "org_id,branch_id,department_id,staff_id,effective_from"
+
+
+def test_saving_policy_can_override_previous_month_history(monkeypatch):
+    client = PolicyHistoryClient()
+    _mock_supabase(monkeypatch, client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_invalidate_payroll_breakdown_cache",
+        lambda _org: None,
+    )
+
+    policy = {"otRatePerHour": 175}
+    payroll_db.save_payroll_policy(
+        "org-1",
+        policy,
+        override_previous_month=True,
+    )
+
+    history_upserts = [
+        rows
+        for table, rows, _conflict in client.upserts
+        if table == "payroll_policy_history"
+    ]
+    previous_month_end = date.today().replace(day=1) - timedelta(days=1)
+    assert [row["effective_from"] for row in history_upserts] == [
+        date.today().replace(day=1).isoformat(),
+        previous_month_end.replace(day=1).isoformat(),
+    ]
+    assert all(row["policy"] == policy for row in history_upserts)
+
+
+def test_saving_department_policy_uses_department_scope(monkeypatch):
+    client = PolicyHistoryClient()
+    _mock_supabase(monkeypatch, client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_invalidate_payroll_breakdown_cache",
+        lambda _org: None,
+    )
+
+    current_month = date.today().replace(day=1)
+    previous_month_end = current_month - timedelta(days=1)
+    previous_month = previous_month_end.replace(day=1)
+    policy = {
+        "otRatePerHour": 225,
+        "payrollWeeklyOffDays": ["friday", "saturday", "sunday"],
+        "payrollWeeklyOffDaysEffectiveFrom": current_month.strftime("%Y-%m"),
+        "payrollCalendarsByMonth": {},
+        "workingDayCalendarsByPeopleType": {
+            "student": {
+                "weeklyOffDays": ["saturday", "sunday"],
+                "weeklyOffDaysEffectiveFrom": current_month.strftime("%Y-%m"),
+                "calendarsByMonth": {},
+            },
+        },
+    }
+    payroll_db.save_payroll_policy(
+        "org-1",
+        policy,
+        branch_id="branch-1",
+        department_id="department-1",
+        override_previous_month=True,
+    )
+
+    saved_history = [
+        rows
+        for table, rows, _conflict in client.upserts
+        if table == "payroll_policy_history"
+    ]
+    saved_override, override_conflict = next(
+        (rows, conflict)
+        for table, rows, conflict in client.upserts
+        if table == "payroll_policy_overrides"
+    )
+    assert [row["effective_from"] for row in saved_history] == [
+        current_month.isoformat(),
+        previous_month.isoformat(),
+    ]
+    assert all(row["branch_id"] == "" for row in saved_history)
+    assert all(row["department_id"] == "department-1" for row in saved_history)
+    assert all(row["staff_id"] == "" for row in saved_history)
+    current_policy, previous_policy = (
+        row["policy"] for row in saved_history
+    )
+    assert current_policy == policy
+    assert previous_policy["payrollWeeklyOffDaysEffectiveFrom"] == (
+        previous_month.strftime("%Y-%m")
+    )
+    assert (
+        previous_policy["workingDayCalendarsByPeopleType"]["student"][
+            "weeklyOffDaysEffectiveFrom"
+        ]
+        == previous_month.strftime("%Y-%m")
+    )
+    for month_start, month_end, month_policy in (
+        (previous_month, previous_month_end, previous_policy),
+        (
+            current_month,
+            date(
+                current_month.year + (current_month.month == 12),
+                current_month.month % 12 + 1,
+                1,
+            ) - timedelta(days=1),
+            current_policy,
+        ),
+    ):
+        expected_work_days = sum(
+            (month_start + timedelta(days=offset)).weekday() not in {4, 5, 6}
+            for offset in range(month_end.day)
+        )
+        assert len(
+            payroll_engine.scheduled_work_dates_for_month(
+                month_start.strftime("%Y-%m"),
+                month_policy,
+            )
+        ) == expected_work_days
+    assert saved_override["branch_id"] == ""
+    assert saved_override["department_id"] == "department-1"
+    assert saved_override["staff_id"] == ""
+    assert saved_override["policy"] == policy
+    assert override_conflict == "org_id,branch_id,department_id,staff_id"
+
+
+def test_organization_override_replaces_all_existing_policy_scopes(monkeypatch):
+    client = PolicyHistoryClient()
+    client.rows["payroll_policy_overrides"] = [
+        {"org_id": "org-1", "branch_id": "branch-1", "department_id": "", "staff_id": ""},
+        {"org_id": "org-1", "branch_id": "", "department_id": "department-1", "staff_id": ""},
+        {"org_id": "org-1", "branch_id": "", "department_id": "", "staff_id": "staff-1"},
+    ]
+    _mock_supabase(monkeypatch, client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_invalidate_payroll_breakdown_cache",
+        lambda _org: None,
+    )
+
+    policy = {"otRatePerHour": 325}
+    payroll_db.save_payroll_policy(
+        "org-1",
+        policy,
+        override_existing_scopes=True,
+    )
+
+    replaced = next(
+        rows
+        for table, rows, _conflict in client.upserts
+        if table == "payroll_policy_overrides" and isinstance(rows, list)
+    )
+    assert {
+        (row["branch_id"], row["department_id"], row["staff_id"])
+        for row in replaced
+    } == {
+        ("branch-1", "", ""),
+        ("", "department-1", ""),
+        ("", "", "staff-1"),
+    }
+    assert all(row["policy"] == policy for row in replaced)
+
+
+def test_branch_override_applies_to_all_branch_departments_and_staff(monkeypatch):
+    client = PolicyHistoryClient()
+    client.rows["payroll_policy_overrides"] = [
+        {"org_id": "org-1", "branch_id": "", "department_id": "department-1", "staff_id": ""},
+    ]
+    client.rows["client_staff"] = [
+        {"org_id": "org-1", "branch_id": "branch-1", "id": "staff-1", "department_id": "department-1"},
+        {"org_id": "org-1", "branch_id": "branch-1", "id": "staff-2", "department_id": "department-2"},
+    ]
+    _mock_supabase(monkeypatch, client)
+    monkeypatch.setattr(
+        payroll_db,
+        "_invalidate_payroll_breakdown_cache",
+        lambda _org: None,
+    )
+
+    policy = {"otRatePerHour": 425}
+    payroll_db.save_payroll_policy(
+        "org-1",
+        policy,
+        branch_id="branch-1",
+        override_existing_scopes=True,
+    )
+
+    replaced = next(
+        rows
+        for table, rows, _conflict in client.upserts
+        if table == "payroll_policy_overrides" and isinstance(rows, list)
+    )
+    assert {
+        (row["branch_id"], row["department_id"], row["staff_id"])
+        for row in replaced
+    } == {
+        ("", "", "staff-1"),
+        ("", "", "staff-2"),
+        ("branch-1", "department-1", ""),
+        ("branch-1", "department-2", ""),
+    }
+    assert all(row["policy"] == policy for row in replaced)

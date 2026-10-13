@@ -72,7 +72,10 @@ import {
   type PayrollGatedModule,
 } from "./hooks/usePayrollModuleGates";
 import {
+  confirmPreviousMonthPayrollPolicyDialog,
   confirmDialog,
+  pendingPayrollPolicyDialog,
+  payrollPolicyScopeDialog,
   pendingPayrollSalaryDialog,
   toastSuccess,
   toastError,
@@ -87,6 +90,7 @@ import {
   getSalaryConfigs,
   getPaidPayrollMonthlyTrends,
   getPayrollPolicy,
+  getPreviousMonthPayrollStatus,
   type PayrollPolicy,
   type PayrollPolicyWrite,
   type PaidPayrollMonthlyTrends,
@@ -105,7 +109,10 @@ import {
   SALARY_MIN,
   SALARY_MAX,
 } from "../StaffManagement/utils/staffValidation";
-import { listBranchDepartments } from "../StaffManagement/api/attendanceSettingsApi";
+import {
+  listBranchDepartments,
+  type DepartmentRecord,
+} from "../StaffManagement/api/attendanceSettingsApi";
 import GroupedBarChartCard from "../../components/ui/charts/GroupedBarChartCard";
 import LineChartCard from "../../components/ui/charts/LineChartCard";
 import PayrollPayslipDialog from "./components/PayrollPayslipDialog";
@@ -562,9 +569,7 @@ const SalaryConfigTab: React.FC<{
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {/* ── SUMMARY STAT CARDS ── */}
-      <div
-        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
-      >
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Total Staff Configured"
           value={filteredRows.length}
@@ -945,8 +950,7 @@ export default function PayrollModule() {
   const isGlobal = scopedBranchId === undefined;
   const branchSelector = useBranchSelector("filter");
   const payrollDateFilter = useDateFilter("monthly");
-  const showSalaryBranchFilter =
-    isGlobal && branchSelector.hasMultipleBranches;
+  const showSalaryBranchFilter = isGlobal && branchSelector.hasMultipleBranches;
 
   const otRatePerHour = cfg.payrollPolicy.otRatePerHour;
 
@@ -967,6 +971,8 @@ export default function PayrollModule() {
   const [rulesPeopleType, setRulesPeopleType] = useState<"staff" | "student">(
     "staff",
   );
+  const [selectedRulesDepartmentId, setSelectedRulesDepartmentId] =
+    useState("");
   const [isIncomeTaxModalOpen, setIsIncomeTaxModalOpen] = useState(false);
   const [draftIncomeTaxEnabled, setDraftIncomeTaxEnabled] = useState(false);
   const [draftIncomeTaxSlabs, setDraftIncomeTaxSlabs] = useState<
@@ -1211,9 +1217,9 @@ export default function PayrollModule() {
         .filter(Boolean),
     [cfg.branches, effectiveBranchId],
   );
-  const [configuredDepartments, setConfiguredDepartments] = useState<string[]>(
-    [],
-  );
+  const [configuredDepartments, setConfiguredDepartments] = useState<
+    DepartmentRecord[]
+  >([]);
   useEffect(() => {
     if (!organizationId || departmentBranchIds.length === 0) {
       setConfiguredDepartments([]);
@@ -1230,13 +1236,22 @@ export default function PayrollModule() {
         if (cancelled) return;
         setConfiguredDepartments(
           Array.from(
-            new Set(
+            new Map(
               results
                 .flat()
-                .map((department) => department.name?.trim())
-                .filter((name): name is string => Boolean(name)),
-            ),
-          ).sort((a, b) => a.localeCompare(b)),
+                .filter(
+                  (department) => department.id && department.name?.trim(),
+                )
+                .map((department) => [
+                  String(department.id),
+                  {
+                    ...department,
+                    id: String(department.id),
+                    name: department.name!.trim(),
+                  },
+                ]),
+            ).values(),
+          ).sort((a, b) => a.name.localeCompare(b.name)),
         );
       })
       .catch((error: unknown) => {
@@ -1713,10 +1728,10 @@ export default function PayrollModule() {
 
   const departmentFilterOptions = useMemo(
     () => [
-      { value: "all", label: "All Departments" },
+      { value: "all", label: "Departments" },
       ...Array.from(
         new Set([
-          ...configuredDepartments,
+          ...configuredDepartments.map((department) => department.name),
           ...rows.map((row) =>
             row.department?.trim() ? row.department : "Unassigned",
           ),
@@ -1731,79 +1746,25 @@ export default function PayrollModule() {
     [configuredDepartments, rows],
   );
 
-  const payrollFilterSections = useMemo<DynamicFilterSection[]>(
-    () => {
-      const branchFilterSection: DynamicFilterSection = {
-        id: "branch",
-        type: "custom",
-        hidden:
-          activeTab === "salary"
-            ? !showSalaryBranchFilter
-            : !isGlobal || !branchSelector.hasMultipleBranches,
-        render: (
-          <BranchSelector
-            branches={branchSelector.selectorBranches}
-            selected={branchSelector.selected}
-            onChange={branchSelector.onChange}
-          />
-        ),
-      };
-      if (activeTab === "salary") {
-        return [
-          branchFilterSection,
-          {
-            id: "peopleType",
-            type: "select",
-            label: "People",
-            hidden: modulePeopleTypes.length <= 1,
-            value: peopleType,
-            options: peopleOptions,
-            minWidth: 160,
-            onChange: (value: string) => setSelectedPeopleType(value),
-          },
-          {
-            id: "department",
-            type: "select",
-            label: "Department",
-            value: departmentFilter,
-            options: departmentFilterOptions,
-            minWidth: 160,
-            onChange: setDepartmentFilter,
-          },
-          {
-            id: "search",
-            type: "search",
-            value: searchQuery,
-            onChange: setSearchQuery,
-            placeholder: "Search staff, ID, CNIC...",
-            grow: true,
-            minWidth: 240,
-          },
-          {
-            id: "reset",
-            type: "reset",
-            label: "Clear",
-            onClick: resetSalaryFilters,
-          },
-        ];
-      }
+  const payrollFilterSections = useMemo<DynamicFilterSection[]>(() => {
+    const branchFilterSection: DynamicFilterSection = {
+      id: "branch",
+      type: "custom",
+      hidden:
+        activeTab === "salary"
+          ? !showSalaryBranchFilter
+          : !isGlobal || !branchSelector.hasMultipleBranches,
+      render: (
+        <BranchSelector
+          branches={branchSelector.selectorBranches}
+          selected={branchSelector.selected}
+          onChange={branchSelector.onChange}
+        />
+      ),
+    };
+    if (activeTab === "salary") {
       return [
         branchFilterSection,
-        {
-          id: "date",
-          type: "custom",
-          // Payroll only ever pays out on a monthly cycle — no daily/weekly/
-          // custom filtering makes sense here. Restricting `modes` hides
-          // those buttons for this instance only; every other page's
-          // DateFilterBar/useDateFilter is untouched.
-          render: (
-            <DateFilterBar
-              filter={payrollDateFilter}
-              modes={["monthly"]}
-              compact
-            />
-          ),
-        },
         {
           id: "peopleType",
           type: "select",
@@ -1819,144 +1780,193 @@ export default function PayrollModule() {
           type: "select",
           label: "Department",
           value: departmentFilter,
-          options: [
-            { value: "all", label: "Departments" },
-            ...departmentFilterOptions.slice(1),
-          ],
+          options: departmentFilterOptions,
           minWidth: 160,
           onChange: setDepartmentFilter,
-        },
-        {
-          id: "amountOperator",
-          type: "select",
-          label: "Net Salary Filter",
-          value: amountOperator,
-          minWidth: 156,
-          options: [
-            { value: "all", label: "All", description: "No salary filter" },
-            { value: "lt", label: "Less than", description: "Below amount" },
-            {
-              value: "lte",
-              label: "Less or equal",
-              description: "At most amount",
-            },
-            { value: "eq", label: "Equal to", description: "Exact amount" },
-            {
-              value: "gte",
-              label: "Greater or equal",
-              description: "At least amount",
-            },
-            { value: "gt", label: "Greater than", description: "Above amount" },
-          ],
-          onChange: (value: string) =>
-            setAmountOperator(value as AmountOperator),
-        },
-        {
-          id: "amountValue",
-          type: "custom",
-          render: (
-            <input
-              type="number"
-              min={0}
-              value={amountValue}
-              onChange={(event) => setAmountValue(event.target.value)}
-              placeholder="Net Salary"
-              disabled={amountOperator === "all"}
-              style={{
-                height: 38,
-                width: 132,
-                border: `1px solid ${T.border}`,
-                borderRadius: 12,
-                background: amountOperator === "all" ? T.slate50 : T.bgCard,
-                color: T.textBody,
-                fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
-                fontSize: 12,
-                fontWeight: 700,
-                outline: "none",
-                padding: "0 12px",
-                opacity: amountOperator === "all" ? 0.55 : 1,
-                boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
-              }}
-            />
-          ),
-        },
-        {
-          id: "sortKey",
-          type: "select",
-          label: "Sort By",
-          value: sortKey,
-          minWidth: 150,
-          options: gates
-            .filterByGate(PAYROLL_SORT_OPTIONS)
-            .map(({ value, label }) => ({ value, label })),
-          onChange: (value: string) => setSortKey(value as PayrollSortKey),
-        },
-        {
-          id: "sortDirection",
-          type: "select",
-          label: "Sort Direction",
-          value: sortDirection,
-          minWidth: 176,
-          options: [
-            {
-              value: "none",
-              label: "No sort",
-              description: "Keep original order",
-            },
-            {
-              value: "asc",
-              label: "Ascending",
-              description: "A → Z / Low → High",
-            },
-            {
-              value: "desc",
-              label: "Descending",
-              description: "Z → A / High → Low",
-            },
-          ],
-          onChange: (value: string) =>
-            setSortDirection(value as SortDirection),
         },
         {
           id: "search",
           type: "search",
           value: searchQuery,
           onChange: setSearchQuery,
-          placeholder: "Search name, ID, department, branch, status...",
+          placeholder: "Search staff, ID, CNIC...",
           grow: true,
-          minWidth: 300,
+          minWidth: 240,
         },
         {
           id: "reset",
           type: "reset",
           label: "Clear",
-          onClick: resetListFilters,
+          onClick: resetSalaryFilters,
         },
       ];
-    },
-    [
-      activeTab,
-      amountOperator,
-      amountValue,
-      branchSelector,
-      departmentFilter,
-      departmentFilterOptions,
-      isGlobal,
-      modulePeopleTypes,
-      payrollDateFilter,
-      peopleOptions,
-      peopleType,
-      showSalaryBranchFilter,
-      rows,
-      resetListFilters,
-      resetSalaryFilters,
-      searchQuery,
-      sortDirection,
-      sortKey,
-      statusFilter,
-      gates,
-    ],
-  );
+    }
+    return [
+      branchFilterSection,
+      {
+        id: "date",
+        type: "custom",
+        // Payroll only ever pays out on a monthly cycle — no daily/weekly/
+        // custom filtering makes sense here. Restricting `modes` hides
+        // those buttons for this instance only; every other page's
+        // DateFilterBar/useDateFilter is untouched.
+        render: (
+          <DateFilterBar
+            filter={payrollDateFilter}
+            modes={["monthly"]}
+            compact
+          />
+        ),
+      },
+      {
+        id: "peopleType",
+        type: "select",
+        label: "People",
+        hidden: modulePeopleTypes.length <= 1,
+        value: peopleType,
+        options: peopleOptions,
+        minWidth: 160,
+        onChange: (value: string) => setSelectedPeopleType(value),
+      },
+      {
+        id: "department",
+        type: "select",
+        label: "Department",
+        value: departmentFilter,
+        options: [
+          { value: "all", label: "Departments" },
+          ...departmentFilterOptions.slice(1),
+        ],
+        minWidth: 160,
+        onChange: setDepartmentFilter,
+      },
+      {
+        id: "amountOperator",
+        type: "select",
+        label: "Net Salary Filter",
+        value: amountOperator,
+        minWidth: 156,
+        options: [
+          { value: "all", label: "All", description: "No salary filter" },
+          { value: "lt", label: "Less than", description: "Below amount" },
+          {
+            value: "lte",
+            label: "Less or equal",
+            description: "At most amount",
+          },
+          { value: "eq", label: "Equal to", description: "Exact amount" },
+          {
+            value: "gte",
+            label: "Greater or equal",
+            description: "At least amount",
+          },
+          { value: "gt", label: "Greater than", description: "Above amount" },
+        ],
+        onChange: (value: string) => setAmountOperator(value as AmountOperator),
+      },
+      {
+        id: "amountValue",
+        type: "custom",
+        render: (
+          <input
+            type="number"
+            min={0}
+            value={amountValue}
+            onChange={(event) => setAmountValue(event.target.value)}
+            placeholder="Net Salary"
+            disabled={amountOperator === "all"}
+            style={{
+              height: 38,
+              width: 132,
+              border: `1px solid ${T.border}`,
+              borderRadius: 12,
+              background: amountOperator === "all" ? T.slate50 : T.bgCard,
+              color: T.textBody,
+              fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
+              fontSize: 12,
+              fontWeight: 700,
+              outline: "none",
+              padding: "0 12px",
+              opacity: amountOperator === "all" ? 0.55 : 1,
+              boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
+            }}
+          />
+        ),
+      },
+      {
+        id: "sortKey",
+        type: "select",
+        label: "Sort By",
+        value: sortKey,
+        minWidth: 150,
+        options: gates
+          .filterByGate(PAYROLL_SORT_OPTIONS)
+          .map(({ value, label }) => ({ value, label })),
+        onChange: (value: string) => setSortKey(value as PayrollSortKey),
+      },
+      {
+        id: "sortDirection",
+        type: "select",
+        label: "Sort Direction",
+        value: sortDirection,
+        minWidth: 176,
+        options: [
+          {
+            value: "none",
+            label: "No sort",
+            description: "Keep original order",
+          },
+          {
+            value: "asc",
+            label: "Ascending",
+            description: "A → Z / Low → High",
+          },
+          {
+            value: "desc",
+            label: "Descending",
+            description: "Z → A / High → Low",
+          },
+        ],
+        onChange: (value: string) => setSortDirection(value as SortDirection),
+      },
+      {
+        id: "search",
+        type: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Search name, ID, department, branch, status...",
+        grow: true,
+        minWidth: 300,
+      },
+      {
+        id: "reset",
+        type: "reset",
+        label: "Clear",
+        onClick: resetListFilters,
+      },
+    ];
+  }, [
+    activeTab,
+    amountOperator,
+    amountValue,
+    branchSelector,
+    departmentFilter,
+    departmentFilterOptions,
+    isGlobal,
+    modulePeopleTypes,
+    payrollDateFilter,
+    peopleOptions,
+    peopleType,
+    showSalaryBranchFilter,
+    rows,
+    resetListFilters,
+    resetSalaryFilters,
+    searchQuery,
+    sortDirection,
+    sortKey,
+    statusFilter,
+    gates,
+  ]);
 
   // After
   const tableColumns = useMemo(
@@ -2042,6 +2052,7 @@ export default function PayrollModule() {
     }
     getPayrollPolicy(organizationId, {
       branchId: editingRow.backendBranchId,
+      departmentId: editingRow.departmentId,
       staffId: editingRow.staffId,
     })
       .then((effectivePolicy) => {
@@ -2064,6 +2075,7 @@ export default function PayrollModule() {
     isEditModalOpen,
     editingRow?.staffId,
     editingRow?.backendBranchId,
+    editingRow?.departmentId,
     organizationId,
   ]);
   const [payrollPageSize, setPayrollPageSize] = useState(25);
@@ -2292,6 +2304,11 @@ export default function PayrollModule() {
   // the modal rather than silently falling back to an org-wide save.
   const rulesBranchId: string | null = rulesBranch?.backendBranchId ?? null;
   const rulesBranchUnavailable = !isGlobal && !rulesBranchId;
+  const rulesDepartmentId =
+    rulesPeopleType === "student" ? null : selectedRulesDepartmentId || null;
+  const rulesDepartment = configuredDepartments.find(
+    (department) => department.id === rulesDepartmentId,
+  );
 
   const {
     policy,
@@ -2299,7 +2316,10 @@ export default function PayrollModule() {
     saving: policySaving,
     error: policyError,
     save: savePolicy,
-  } = usePayrollPolicy({ branchId: rulesBranchId });
+  } = usePayrollPolicy({
+    branchId: rulesBranchId,
+    departmentId: rulesDepartmentId,
+  });
   const showNextMonthCalendarReminder =
     currentMonthLastDate - currentDate.getDate() <= 7 &&
     policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidaysConfirmed !==
@@ -2327,15 +2347,55 @@ export default function PayrollModule() {
     setDraftPolicy(policy);
     setRulesSaveAttempted(false);
     setRulesPeopleType("staff");
+    setSelectedRulesDepartmentId("");
     setIsRulesModalOpen(true);
   }, [policy]);
 
   const openIncomeTaxModal = useCallback(() => {
+    setSelectedRulesDepartmentId("");
     setDraftIncomeTaxEnabled(policy.incomeTaxEnabled);
     setDraftIncomeTaxSlabs(policy.incomeTaxSlabs);
     setIncomeTaxSaveError(null);
     setIsIncomeTaxModalOpen(true);
   }, [policy]);
+
+  const savePolicyWithPreviousMonthChoice = useCallback(
+    async (nextPolicy: PayrollPolicyWrite): Promise<boolean> => {
+      let overrideExistingScopes = false;
+      if (!rulesDepartmentId) {
+        const choice = await payrollPolicyScopeDialog(
+          isGlobal ? "organization" : "branch",
+        );
+        if (!choice) return false;
+        overrideExistingScopes = choice === "override";
+      }
+      const status = await getPreviousMonthPayrollStatus({
+        branchId: rulesDepartmentId ? null : rulesBranchId,
+        departmentId: rulesDepartmentId,
+      });
+      let overridePreviousMonth = false;
+      if (status.allPending && status.staffCount > 0) {
+        const choice = await pendingPayrollPolicyDialog(status.month);
+        if (!choice) return false;
+        overridePreviousMonth = choice === "override";
+        if (
+          overridePreviousMonth &&
+          !(await confirmPreviousMonthPayrollPolicyDialog(
+            status.month,
+            status.staffCount,
+          ))
+        ) {
+          return false;
+        }
+      }
+      await savePolicy(nextPolicy, {
+        overridePreviousMonth,
+        overrideExistingScopes,
+      });
+      return true;
+    },
+    [isGlobal, rulesBranchId, rulesDepartmentId, savePolicy],
+  );
 
   const saveIncomeTaxPolicy = useCallback(async () => {
     try {
@@ -2345,10 +2405,11 @@ export default function PayrollModule() {
         incomeTaxEnabled: draftIncomeTaxEnabled,
         incomeTaxSlabs: draftIncomeTaxSlabs,
       };
-      await savePolicy(
+      const saved = await savePolicyWithPreviousMonthChoice(
         hasOvertime ? nextPolicy : withoutOvertimeRate(nextPolicy),
       );
-      if (isGlobal) {
+      if (!saved) return;
+      if (isGlobal && !rulesDepartmentId) {
         updateCfg({ payrollPolicy: nextPolicy });
       } else {
         void refresh({ force: true });
@@ -2369,8 +2430,9 @@ export default function PayrollModule() {
     isGlobal,
     policy,
     refresh,
-    savePolicy,
+    savePolicyWithPreviousMonthChoice,
     updateCfg,
+    rulesDepartmentId,
   ]);
 
   const handleSaveRules = useCallback(async () => {
@@ -2380,8 +2442,9 @@ export default function PayrollModule() {
       const policyToSave = hasOvertime
         ? draftPolicy
         : withoutOvertimeRate(draftPolicy);
-      await savePolicy(policyToSave);
-      if (isGlobal) {
+      const saved = await savePolicyWithPreviousMonthChoice(policyToSave);
+      if (!saved) return;
+      if (isGlobal && !rulesDepartmentId) {
         // usePayrollPolicy's own `policy` state is now fresh, but that
         // hook instance is local to this modal — it's not what the
         // payroll table reads. usePayrollData derives each row's
@@ -2398,9 +2461,11 @@ export default function PayrollModule() {
       void refresh({ force: true });
       setIsRulesModalOpen(false);
       toastSuccess(
-        isGlobal
-          ? "Payroll rules saved for the organization"
-          : `Payroll rules saved for ${rulesBranch?.name ?? "this branch"}`,
+        rulesDepartment
+          ? `Payroll rules saved for ${rulesDepartment.name}`
+          : isGlobal
+            ? "Payroll rules saved for the organization"
+            : `Payroll rules saved for ${rulesBranch?.name ?? "this branch"}`,
       );
     } catch {
       toastError("Failed to save payroll rules");
@@ -2412,15 +2477,20 @@ export default function PayrollModule() {
     draftPolicy,
     payrollRulesError,
     payrollRulesOtRateError,
-    savePolicy,
+    savePolicyWithPreviousMonthChoice,
     isGlobal,
     updateCfg,
     refresh,
     rulesBranch,
     hasOvertime,
+    rulesDepartmentId,
+    rulesDepartment,
   ]);
 
   const rulesScopeSummary = useMemo(() => {
+    if (rulesDepartment) {
+      return `Overrides the rules for ${rulesDepartment.name} only. Staff in this department use these rules before branch or organization defaults.`;
+    }
     if (isGlobal) {
       return "Saved org-wide — the default every branch and staff member falls back to unless they have their own override.";
     }
@@ -2428,7 +2498,7 @@ export default function PayrollModule() {
       return "This branch hasn't finished syncing yet, so it can't hold its own payroll rules. Try again once setup completes, or edit rules from the organization-wide Payroll page.";
     }
     return `Overrides the org default for ${rulesBranch?.name ?? "this branch"} only — other branches and the org default are unaffected.`;
-  }, [isGlobal, rulesBranchUnavailable, rulesBranch]);
+  }, [isGlobal, rulesBranchUnavailable, rulesBranch, rulesDepartment]);
 
   const tabStyle = (tab: ActiveTab): React.CSSProperties => ({
     display: "flex",
@@ -2693,9 +2763,7 @@ export default function PayrollModule() {
       </div>
 
       {activeTab !== "salary" && (
-        <div
-          className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
-        >
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Total Pay-out"
             value={fmtPKR(payrollKpiStats.totalPayout)}
@@ -2975,7 +3043,9 @@ export default function PayrollModule() {
                         "transparent";
                     }}
                   >
-                    <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
+                    <td
+                      style={{ ...payrollRecordCellStyle, textAlign: "center" }}
+                    >
                       <input
                         type="checkbox"
                         aria-label={`Select ${row.name} for payroll processing`}
@@ -3059,31 +3129,55 @@ export default function PayrollModule() {
                       </td>
                     )}
                     <td style={payrollRecordCellStyle}>{row.department}</td>
-                    <td style={payrollRecordCellStyle}>{fmtPKR(row.baseSalary)}</td>
-                    <td style={payrollRecordCellStyle}>{fmtPKR(row.allowances)}</td>
-                    <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
+                    <td style={payrollRecordCellStyle}>
+                      {fmtPKR(row.baseSalary)}
+                    </td>
+                    <td style={payrollRecordCellStyle}>
+                      {fmtPKR(row.allowances)}
+                    </td>
+                    <td
+                      style={{ ...payrollRecordCellStyle, textAlign: "center" }}
+                    >
                       {row.presentDays}
                     </td>
                     {showCol("workingDays") && (
                       <td
-                        style={{ ...payrollRecordCellStyle, textAlign: "center" }}
+                        style={{
+                          ...payrollRecordCellStyle,
+                          textAlign: "center",
+                        }}
                         title="Scheduled workdays this month, excluding weekly days off and holidays"
                       >
                         {row.totalWorkingDays}
                       </td>
                     )}
                     {showCol("absent") && (
-                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
+                      <td
+                        style={{
+                          ...payrollRecordCellStyle,
+                          textAlign: "center",
+                        }}
+                      >
                         {row.absentDays}
                       </td>
                     )}
                     {showCol("otHrs") && (
-                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
+                      <td
+                        style={{
+                          ...payrollRecordCellStyle,
+                          textAlign: "center",
+                        }}
+                      >
                         {row.otHours}h
                       </td>
                     )}
                     {showCol("otRate") && (
-                      <td style={{ ...payrollRecordCellStyle, textAlign: "center" }}>
+                      <td
+                        style={{
+                          ...payrollRecordCellStyle,
+                          textAlign: "center",
+                        }}
+                      >
                         {fmtPKR(row.otRate)}
                       </td>
                     )}
@@ -3539,14 +3633,36 @@ export default function PayrollModule() {
               <Field label="People type">
                 <ModernSelect
                   value={rulesPeopleType}
-                  onChange={(value) =>
-                    setRulesPeopleType(value as "staff" | "student")
-                  }
+                  onChange={(value) => {
+                    const next = value as "staff" | "student";
+                    setRulesPeopleType(next);
+                    if (next === "student") setSelectedRulesDepartmentId("");
+                  }}
                   ariaLabel="Payroll rules people type"
                   width="100%"
                   options={[
                     { value: "staff", label: "Staff" },
                     { value: "student", label: "Students" },
+                  ]}
+                />
+              </Field>
+            </div>
+          )}
+
+          {!isStudentCalendar && (
+            <div style={{ marginBottom: 20 }}>
+              <Field label="Department">
+                <ModernSelect
+                  value={selectedRulesDepartmentId}
+                  onChange={setSelectedRulesDepartmentId}
+                  ariaLabel="Payroll rules department"
+                  width="100%"
+                  options={[
+                    { value: "", label: "Departments" },
+                    ...configuredDepartments.map((department) => ({
+                      value: department.id,
+                      label: department.name,
+                    })),
                   ]}
                 />
               </Field>
@@ -3583,9 +3699,10 @@ export default function PayrollModule() {
                   style={{
                     ...inputStyle,
                     background: T.teal50,
-                    borderColor: rulesSaveAttempted && payrollRulesOtRateError
-                      ? T.red600
-                      : T.teal200,
+                    borderColor:
+                      rulesSaveAttempted && payrollRulesOtRateError
+                        ? T.red600
+                        : T.teal200,
                   }}
                   aria-invalid={Boolean(
                     rulesSaveAttempted && payrollRulesOtRateError,
@@ -4411,7 +4528,7 @@ export default function PayrollModule() {
             disabled={
               policySaving ||
               policyLoading ||
-              rulesBranchUnavailable ||
+              (rulesBranchUnavailable && !rulesDepartmentId) ||
               Boolean(payrollRulesError)
             }
             style={{
@@ -4423,14 +4540,14 @@ export default function PayrollModule() {
               cursor:
                 policySaving ||
                 policyLoading ||
-                rulesBranchUnavailable ||
+                (rulesBranchUnavailable && !rulesDepartmentId) ||
                 Boolean(payrollRulesError)
                   ? "not-allowed"
                   : "pointer",
               opacity:
                 policySaving ||
                 policyLoading ||
-                rulesBranchUnavailable ||
+                (rulesBranchUnavailable && !rulesDepartmentId) ||
                 Boolean(payrollRulesError)
                   ? 0.7
                   : 1,
@@ -4456,8 +4573,31 @@ export default function PayrollModule() {
           <h2 style={modalTitleStyle}>Income Tax Slabs</h2>
           <p style={modalSubStyle}>
             Configure annual taxable salary thresholds and the monthly tax
-            deduction. Changes apply to this organization or branch policy.
+            deduction
+            {rulesDepartment
+              ? ` for ${rulesDepartment.name}.`
+              : ` for the ${isGlobal ? "organization" : "branch"} policy.`}
           </p>
+
+          {configuredDepartments.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <Field label="Department">
+                <ModernSelect
+                  value={selectedRulesDepartmentId}
+                  onChange={setSelectedRulesDepartmentId}
+                  ariaLabel="Income tax department"
+                  width="100%"
+                  options={[
+                    { value: "", label: "Departments" },
+                    ...configuredDepartments.map((department) => ({
+                      value: department.id,
+                      label: department.name,
+                    })),
+                  ]}
+                />
+              </Field>
+            </div>
+          )}
 
           <label
             style={{
@@ -4686,7 +4826,7 @@ export default function PayrollModule() {
             </table>
           </div>
 
-          {rulesBranchUnavailable && (
+          {rulesBranchUnavailable && !rulesDepartmentId && (
             <div role="alert" style={{ color: T.red600, marginBottom: 12 }}>
               This branch is not ready for payroll policy changes yet.
             </div>

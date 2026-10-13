@@ -27,7 +27,7 @@ import os
 import json
 import numpy as np
 import payroll_engine
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import mimetypes
 import database as db
@@ -3708,10 +3708,11 @@ def _tenant_salary_change_context(org_id, staff_id, staff, existing=None):
 
 def _require_pending_payroll_salary_decision(
     org_id, staff_id, context, new_salary, action,
+    change_requires_decision=False,
 ):
     if action not in (None, 'preserve', 'update'):
         raise ValueError("pending_salary_action must be 'preserve' or 'update'")
-    if new_salary == context['old_salary']:
+    if new_salary == context['old_salary'] and not change_requires_decision:
         return action or 'preserve'
     if action is not None:
         return action
@@ -4550,8 +4551,19 @@ def api_get_leave_types():
         return jsonify({'success': False, 'error': 'organization_id is required'}), 400
     raw_branch_id = request.args.get('branch_id') or request.args.get('branchId') or dashboard_user.get('branch_id')
     branch_id = _clean_id_text(raw_branch_id) or None
+    department_id = _clean_id_text(
+        request.args.get('department_id') or request.args.get('departmentId')
+    ) or None
     try:
-        allocations = support_cp_db.get_leave_type_allocations(org_id, branch_id=branch_id)
+        if department_id and not support_cp_db.payroll_department_belongs_to_org(
+            org_id, department_id,
+        ):
+            return jsonify({'success': False, 'error': 'Department not found.'}), 404
+        allocations = support_cp_db.get_leave_type_allocations(
+            org_id,
+            branch_id=branch_id,
+            department_id=department_id,
+        )
         return jsonify({'success': True, **allocations}), 200
     except Exception as exc:
         logger.exception('Leave type rules lookup failed for org=%s', org_id)
@@ -5093,6 +5105,9 @@ def _tenant_salary_map_row(row, staff_lookup=None, breakdown=None, paid_staff_id
         'staff_name': row.get('staff_name') or row.get('name') or staff.get('name') or 'Unknown',
         'department': department,
         'department_name': department,
+        'department_id': _clean_id_text(
+            row.get('department_id') or staff.get('department_id')
+        ) or None,
         'branch_id': branch_id,
         'backend_branch_id': branch_id,
         'branch_uuid': branch_id,
@@ -5265,7 +5280,8 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
             ) = support_db_payroll.get_paid_payroll_page_data(
                 org_id, period_start, period_end,
             )
-            salary_period_snapshots.update(paid_salary_snapshots)
+            for staff_id, salary in paid_salary_snapshots.items():
+                salary_period_snapshots.setdefault(staff_id, {})['basic_salary'] = salary
             period_resolvable = True
         except Exception:
             logger.exception('Payroll breakdown computation failed for org=%s branch=%s', org_id, branch_text)
@@ -5279,10 +5295,10 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
     # cheap-ish but not free (queries payroll_policy_overrides), so it's
     # memoized per distinct branch/staff for this one request rather than
     # called once per staff row.
-    policy_cache: dict[tuple[str | None, str | None], dict] = {}
+    policy_cache: dict[tuple[str | None, str | None, str | None], dict] = {}
 
-    def _resolve_policy_for(staff_branch_id, staff_id_for_policy):
-        cache_key = (staff_branch_id, staff_id_for_policy)
+    def _resolve_policy_for(staff_branch_id, staff_department_id, staff_id_for_policy):
+        cache_key = (staff_branch_id, staff_department_id, staff_id_for_policy)
         cached = policy_cache.get(cache_key)
         if cached is None:
             if period_start and period_end:
@@ -5291,10 +5307,14 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
                     period_start,
                     branch_id=staff_branch_id,
                     staff_id=staff_id_for_policy,
+                    department_id=staff_department_id,
                 )
             else:
                 cached = support_cp_db.get_payroll_policy(
-                    org_id, branch_id=staff_branch_id, staff_id=staff_id_for_policy
+                    org_id,
+                    branch_id=staff_branch_id,
+                    staff_id=staff_id_for_policy,
+                    department_id=staff_department_id,
                 )
             policy_cache[cache_key] = cached
         return cached
@@ -5314,12 +5334,16 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
         overlay['department'] = overlay.get('department') or staff.get('department_name') or 'General'
         if 'basic_salary' not in overlay or overlay.get('basic_salary') is None:
             overlay['basic_salary'] = staff.get('salary') or 0
-        if staff_id in salary_period_snapshots:
-            overlay['basic_salary'] = salary_period_snapshots[staff_id]
+        period_compensation = salary_period_snapshots.get(staff_id, {})
+        overlay.update(period_compensation)
 
         # Resolved unconditionally (not just when a period breakdown runs)
         # so "OT RATE/HR" is always correct, even before a period is picked.
-        policy = _resolve_policy_for(_clean_id_text(overlay.get('branch_id')) or None, staff_id)
+        policy = _resolve_policy_for(
+            _clean_id_text(overlay.get('branch_id')) or None,
+            _clean_id_text(staff.get('department_id')) or None,
+            staff_id,
+        )
         effective_ot_rate = support_cp_db.resolve_effective_ot_rate(overlay, policy)
 
         breakdown = None
@@ -5433,15 +5457,37 @@ def _upsert_tenant_salary_config(data, salary_context=None):
     deductions = _patched_float('deductions')
     ot_rate = _patched_float('ot_rate')
 
+    # applied_allowances is a whole-object replace when supplied; resolve it
+    # before checking retroactivity so allowance-only edits receive the same
+    # pending-payroll decision as base-salary edits.
+    if 'applied_allowances' in data:
+        applied_allowances = data.get('applied_allowances')
+        applied_allowances = applied_allowances if isinstance(applied_allowances, dict) else {}
+    else:
+        existing_applied = existing.get('applied_allowances')
+        applied_allowances = existing_applied if isinstance(existing_applied, dict) else {}
+
     old_salary = salary_context['old_salary']
-    if basic_salary != old_salary:
-        current_month_start = date.today().replace(day=1)
+    old_allowances = float(existing.get('allowances') or 0)
+    old_applied_allowances = existing.get('applied_allowances')
+    old_applied_allowances = (
+        old_applied_allowances if isinstance(old_applied_allowances, dict) else {}
+    )
+    compensation_changed = (
+        basic_salary != old_salary
+        or allowances != old_allowances
+        or applied_allowances != old_applied_allowances
+    )
+    salary_action = 'preserve'
+    current_month_start = date.today().replace(day=1)
+    if compensation_changed:
         salary_action = _require_pending_payroll_salary_decision(
             org_id,
             staff_id,
             salary_context,
             basic_salary,
             data.get('pending_salary_action'),
+            change_requires_decision=True,
         )
         if date.fromisoformat(salary_context['history_start']) < current_month_start:
             support_db_payroll.save_pending_payroll_salary_snapshots(
@@ -5452,20 +5498,11 @@ def _upsert_tenant_salary_config(data, salary_context=None):
                 old_salary,
                 basic_salary,
                 salary_action,
+                old_allowances=old_allowances,
+                new_allowances=allowances,
+                old_applied_allowances=old_applied_allowances,
+                new_applied_allowances=applied_allowances,
             )
-
-    # applied_allowances is jsonb, not a float -- same sparse-patch rule as
-    # the numeric fields above: a key present in `data` replaces it wholesale
-    # (the Edit modal always sends its complete current selection, same
-    # contract as save_payroll_policy), a key absent from `data` keeps
-    # whatever is already stored (e.g. an unrelated basic_salary-only save
-    # from an older client build must not silently clear allowances).
-    if 'applied_allowances' in data:
-        applied_allowances = data.get('applied_allowances')
-        applied_allowances = applied_allowances if isinstance(applied_allowances, dict) else {}
-    else:
-        existing_applied = existing.get('applied_allowances')
-        applied_allowances = existing_applied if isinstance(existing_applied, dict) else {}
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -5511,7 +5548,12 @@ def _upsert_tenant_salary_config(data, salary_context=None):
     # Needed so a just-saved applied_allowances actually resolves to a real
     # amount in this response (the allowance catalog — labels/mode/value —
     # lives on the policy, not on the salary_configs row itself).
-    save_policy = support_cp_db.get_payroll_policy(org_id, branch_id=branch_id, staff_id=staff_id)
+    save_policy = support_cp_db.get_payroll_policy(
+        org_id,
+        branch_id=branch_id,
+        staff_id=staff_id,
+        department_id=_clean_id_text(staff.get('department_id')) or None,
+    )
     # No effective_ot_rate passed here: _tenant_salary_map_row falls back to
     # the raw ot_rate just written, which is correct immediately after a
     # staff-level save (an explicit override is, by definition, the new
@@ -5600,8 +5642,70 @@ def api_get_payroll_policy():
     # fallback chain (individual > branch > org default).
     branch_id = _clean_id_text(request.args.get('branch_id') or request.args.get('branchId')) or None
     staff_id = _clean_id_text(request.args.get('staff_id') or request.args.get('staffId')) or None
-    policy = support_cp_db.get_payroll_policy(org_id, branch_id=branch_id, staff_id=staff_id)
+    department_id = _clean_id_text(
+        request.args.get('department_id') or request.args.get('departmentId')
+    ) or None
+    if department_id and not support_cp_db.payroll_department_belongs_to_org(
+        org_id, department_id,
+    ):
+        return jsonify({'success': False, 'error': 'Department not found.'}), 404
+    policy = support_cp_db.get_payroll_policy(
+        org_id,
+        branch_id=branch_id,
+        staff_id=staff_id,
+        department_id=department_id,
+    )
     return jsonify({'success': True, 'policy': policy}), 200
+
+
+@app.route('/api/payroll/policy/previous-month-status', methods=['GET'])
+@require_client_dashboard_auth
+def api_get_previous_month_payroll_policy_status():
+    dashboard_user = g.dashboard_user
+    org_id = str(dashboard_user.get('org_id') or '').strip()
+    if not org_id:
+        return jsonify({'success': False, 'error': 'organization_id is required'}), 400
+
+    branch_id = _clean_id_text(
+        request.args.get('branch_id') or request.args.get('branchId')
+    ) or None
+    department_id = _clean_id_text(
+        request.args.get('department_id') or request.args.get('departmentId')
+    ) or None
+    if department_id and not support_cp_db.payroll_department_belongs_to_org(
+        org_id, department_id,
+    ):
+        return jsonify({'success': False, 'error': 'Department not found.'}), 404
+
+    current_month_start = date.today().replace(day=1)
+    previous_month_end = current_month_start - timedelta(days=1)
+    previous_month_start = previous_month_end.replace(day=1)
+    try:
+        all_pending, staff_count = support_cp_db.are_all_payroll_staff_pending(
+            org_id,
+            previous_month_start.isoformat(),
+            previous_month_end.isoformat(),
+            branch_id=branch_id,
+            department_id=department_id,
+        )
+    except Exception:
+        logger.exception(
+            'Unable to determine previous-month payroll status for org=%s',
+            org_id,
+        )
+        return jsonify({
+            'success': False,
+            'error': 'Unable to determine previous-month payroll status.',
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'month': previous_month_start.strftime('%B %Y'),
+        'period_start': previous_month_start.isoformat(),
+        'period_end': previous_month_end.isoformat(),
+        'all_pending': all_pending,
+        'staff_count': staff_count,
+    }), 200
 
 
 @app.route('/api/payroll/working-days', methods=['GET'])
@@ -5616,12 +5720,20 @@ def api_get_payroll_working_days():
         return jsonify({'success': False, 'error': 'month must be YYYY-MM'}), 400
 
     branch_id = _clean_id_text(request.args.get('branch_id') or request.args.get('branchId')) or None
+    department_id = _clean_id_text(
+        request.args.get('department_id') or request.args.get('departmentId')
+    ) or None
     people_type = str(request.args.get('people_type') or 'staff').strip().lower()
     try:
+        if department_id and not support_cp_db.payroll_department_belongs_to_org(
+            org_id, department_id,
+        ):
+            return jsonify({'success': False, 'error': 'Department not found'}), 404
         policy = support_cp_db.get_payroll_policy_for_period(
             org_id,
             f'{month_key}-01',
             branch_id=branch_id,
+            department_id=department_id,
         )
         working_dates = payroll_engine.scheduled_work_dates_for_month(
             month_key,
@@ -5654,12 +5766,60 @@ def api_save_payroll_policy():
     # branch_id to set a branch override, or staff_id for an individual
     # override — see save_payroll_policy for precedence.
     branch_id = _clean_id_text(data.get('branch_id') or data.get('branchId')) or None
+    department_id = _clean_id_text(
+        data.get('department_id') or data.get('departmentId')
+    ) or None
     staff_id = _clean_id_text(data.get('staff_id') or data.get('staffId')) or None
+    override_previous_month = data.get('override_previous_month') is True
+    override_existing_scopes = data.get('override_existing_scopes') is True
     try:
-        saved = support_cp_db.save_payroll_policy(org_id, policy, branch_id=branch_id, staff_id=staff_id)
+        if department_id and not support_cp_db.payroll_department_belongs_to_org(
+            org_id, department_id,
+        ):
+            return jsonify({'success': False, 'error': 'Department not found.'}), 404
+        if override_previous_month:
+            current_month_start = date.today().replace(day=1)
+            previous_month_end = current_month_start - timedelta(days=1)
+            previous_month_start = previous_month_end.replace(day=1)
+            all_pending, _staff_count = support_cp_db.are_all_payroll_staff_pending(
+                org_id,
+                previous_month_start.isoformat(),
+                previous_month_end.isoformat(),
+                branch_id=branch_id if not department_id else None,
+                department_id=department_id,
+            )
+            if not all_pending:
+                return jsonify({
+                    'success': False,
+                    'error': 'Previous-month payroll can only be overridden while all scoped staff are pending.',
+                }), 409
+        saved = support_cp_db.save_payroll_policy(
+            org_id,
+            policy,
+            branch_id=branch_id,
+            staff_id=staff_id,
+            department_id=department_id,
+            override_previous_month=override_previous_month,
+            override_existing_scopes=override_existing_scopes,
+        )
         return jsonify({'success': True, 'policy': saved}), 200
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
+    except RuntimeError as exc:
+        logger.exception(
+            'Payroll policy save failed due to an unavailable dependency for org=%s',
+            org_id,
+        )
+        return jsonify({'success': False, 'error': str(exc)}), 500
+    except Exception:
+        logger.exception('Failed to save payroll policy for org=%s', org_id)
+        return jsonify({
+            'success': False,
+            'error': (
+                'Unable to save payroll rules. The server logged the underlying '
+                'error; verify the payroll policy database migrations and retry.'
+            ),
+        }), 500
 
 
 # After
@@ -5700,7 +5860,12 @@ def _compute_staff_payroll_breakdown(org_id: str, staff_id: str, period_start: s
     if not branch_id:
         return None
     try:
-        policy = support_cp_db.get_payroll_policy(org_id, branch_id=branch_id, staff_id=staff_id)
+        policy = support_cp_db.get_payroll_policy(
+            org_id,
+            branch_id=branch_id,
+            staff_id=staff_id,
+            department_id=_clean_id_text(staff.get('department_id')) or None,
+        )
         attendance = support_cp_db.get_staff_attendance_for_payroll_period(org_id, branch_id, period_start, period_end)
         leaves = support_cp_db.get_approved_leaves_for_payroll_period(org_id, branch_id, period_start, period_end)
         overtime = support_cp_db.get_approved_overtime_hours_for_payroll_period(org_id, branch_id, period_start, period_end)

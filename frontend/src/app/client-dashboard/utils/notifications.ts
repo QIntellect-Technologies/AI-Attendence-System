@@ -96,13 +96,13 @@ export async function pendingPayrollSalaryDialog(
     title: "Previous payroll is pending",
     text:
       `The following previous payroll period(s) are still pending: ${months}. ` +
-      "Choose whether to recalculate them using the new salary or keep their previous salary.",
+      "Choose whether to recalculate them using the new compensation or keep their previous compensation.",
     icon: "warning",
     showDenyButton: true,
     showCancelButton: true,
     confirmButtonText: "Update pending payroll",
-    denyButtonText: "Keep previous salary",
-    cancelButtonText: "Cancel salary change",
+    denyButtonText: "Keep previous payroll",
+    cancelButtonText: "Cancel changes",
     focusCancel: true,
     confirmButtonColor: T.teal600,
     denyButtonColor: T.muted,
@@ -111,6 +111,82 @@ export async function pendingPayrollSalaryDialog(
   if (result.isConfirmed) return "update";
   if (result.isDenied) return "preserve";
   return null;
+}
+
+export async function pendingPayrollPolicyDialog(
+  month: string,
+): Promise<"override" | "keep" | null> {
+  const result = await Swal.fire({
+    ...swalDefaults,
+    title: "Previous month's payroll is pending",
+    text:
+      `All payroll staff are still pending for ${month}. ` +
+      "Choose whether these new rules should also recalculate that month.",
+    icon: "warning",
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "Apply to previous month",
+    denyButtonText: "Keep previous month as is",
+    cancelButtonText: "Cancel",
+    focusCancel: true,
+    confirmButtonColor: T.teal600,
+    denyButtonColor: T.muted,
+  });
+
+  if (result.isConfirmed) return "override";
+  if (result.isDenied) return "keep";
+  return null;
+}
+
+export async function payrollPolicyScopeDialog(
+  scope: "organization" | "branch",
+): Promise<"default" | "override" | null> {
+  const target =
+    scope === "organization"
+      ? "all branches, departments, and staff"
+      : "all departments and staff in this branch";
+  const result = await Swal.fire({
+    ...swalDefaults,
+    title: "Apply rules to existing overrides?",
+    text:
+      `No department is selected. Save these rules as the ${scope} default, ` +
+      `or override existing rules for ${target}.`,
+    icon: "question",
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "Override existing rules",
+    denyButtonText: "Save as default",
+    cancelButtonText: "Cancel",
+    focusDeny: true,
+    confirmButtonColor: T.teal600,
+    denyButtonColor: T.muted,
+  });
+
+  if (result.isConfirmed) return "override";
+  if (result.isDenied) return "default";
+  return null;
+}
+
+export async function confirmPreviousMonthPayrollPolicyDialog(
+  month: string,
+  staffCount: number,
+): Promise<boolean> {
+  const result = await Swal.fire({
+    ...swalDefaults,
+    title: `Confirm rules for ${month}`,
+    text:
+      `These rules will be used to recalculate the previous month's payroll ` +
+      `for all ${staffCount} pending staff members in this scope. ` +
+      "Already-paid payroll entries will not be changed.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonText: "Confirm and apply",
+    cancelButtonText: "Go back",
+    focusCancel: true,
+    confirmButtonColor: T.teal600,
+  });
+
+  return result.isConfirmed;
 }
 
 /**

@@ -3276,6 +3276,8 @@ def _map_client_leave(row: dict, staff_by_id: dict[str, dict] | None = None) -> 
         'branch_name': branch_name,
         'branchName': branch_name,
         'department': department,
+        'department_id': row.get('department_id') or staff.get('department_id'),
+        'departmentId': row.get('department_id') or staff.get('department_id'),
         'dept': department,
         'people_type': people_type,
         'peopleType': people_type,
@@ -3354,7 +3356,7 @@ def list_client_leave_requests(
     mapped_rows = [_map_client_leave(row, staff_by_id) for row in rows]
 
     # Attaches leave_compensation/leavePayrollDecision using each row's OWN
-    # branch's leaveTypeRules (org default, overridden per-branch) -- see
+    # branch and department payroll rules -- see
     # annotate_leave_payroll_treatment's docstring. Single shared
     # implementation with support_db.list_client_leave_requests so the two
     # never drift on "is this leave type paid" again.

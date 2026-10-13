@@ -280,6 +280,7 @@ export interface PayrollSalaryConfig {
   name: string;
   peopleType: string;
   department: string;
+  departmentId: string | null;
   branchId: PayrollId | null;
   backendBranchId?: string | null;
   branchName: string;
@@ -357,6 +358,8 @@ interface RawPayrollSalaryConfig {
   person_type?: string;
   department?: string;
   department_name?: string;
+  department_id?: string | null;
+  departmentId?: string | null;
   branch_id?: PayrollId | null;
   backend_branch_id?: string | null;
   branchId?: PayrollId | null;
@@ -610,6 +613,7 @@ function mapSalaryConfig(raw: RawPayrollSalaryConfig): PayrollSalaryConfig {
       "staff",
     ).toLowerCase(),
     department: raw.department ?? raw.department_name ?? "General",
+    departmentId: cleanId(raw.departmentId ?? raw.department_id) || null,
     branchId,
     backendBranchId,
     branchName: raw.branchName ?? raw.branch_name ?? "",
@@ -693,11 +697,48 @@ export async function getSalaryConfigForStaff(
 }
 
 export interface PayrollPolicyScope {
-  // Neither set -> org-wide default. branchId -> branch override. staffId
-  // -> individual override. Pass both branchId and staffId to resolve the
-  // full effective policy for a staff member (individual > branch > org).
+  // Overrides resolve as individual > branch-department > department > branch > org.
   branchId?: PayrollId | null;
+  departmentId?: PayrollId | null;
   staffId?: PayrollId | null;
+}
+
+export interface PreviousMonthPayrollStatus {
+  month: string;
+  periodStart: string;
+  periodEnd: string;
+  allPending: boolean;
+  staffCount: number;
+}
+
+export interface PayrollPolicySaveOptions {
+  overridePreviousMonth?: boolean;
+  overrideExistingScopes?: boolean;
+}
+
+export async function getPreviousMonthPayrollStatus(
+  scope?: Pick<PayrollPolicyScope, "branchId" | "departmentId">,
+): Promise<PreviousMonthPayrollStatus> {
+  const query = new URLSearchParams();
+  const branchId = cleanPayrollId(scope?.branchId);
+  if (branchId !== null) query.set("branch_id", String(branchId));
+  const departmentId = cleanPayrollId(scope?.departmentId);
+  if (departmentId !== null)
+    query.set("department_id", String(departmentId));
+  const data = await requestJson<{
+    month: string;
+    period_start: string;
+    period_end: string;
+    all_pending: boolean;
+    staff_count: number;
+  }>(`/payroll/policy/previous-month-status?${query.toString()}`);
+  return {
+    month: data.month,
+    periodStart: data.period_start,
+    periodEnd: data.period_end,
+    allPending: data.all_pending,
+    staffCount: data.staff_count,
+  };
 }
 
 export async function getPayrollPolicy(
@@ -709,6 +750,9 @@ export async function getPayrollPolicy(
   });
   const branchId = cleanPayrollId(scope?.branchId);
   if (branchId !== null) query.set("branch_id", String(branchId));
+  const departmentId = cleanPayrollId(scope?.departmentId);
+  if (departmentId !== null)
+    query.set("department_id", String(departmentId));
   const staffId = cleanPayrollId(scope?.staffId);
   if (staffId !== null) query.set("staff_id", String(staffId));
 
@@ -723,6 +767,7 @@ export async function getPayrollWorkingDates(
   month: string,
   branchId?: PayrollId | null,
   peopleType = "staff",
+  departmentId?: PayrollId | null,
 ): Promise<string[]> {
   const query = new URLSearchParams({
     organization_id: String(organizationId),
@@ -731,6 +776,9 @@ export async function getPayrollWorkingDates(
   });
   const cleanBranchId = cleanPayrollId(branchId);
   if (cleanBranchId !== null) query.set("branch_id", String(cleanBranchId));
+  const cleanDepartmentId = cleanPayrollId(departmentId);
+  if (cleanDepartmentId !== null)
+    query.set("department_id", String(cleanDepartmentId));
   const data = await requestJson<{ working_dates: string[] }>(
     `/payroll/working-days?${query.toString()}`,
   );
@@ -771,6 +819,9 @@ export async function hasPayrollRulesConfigured(
   });
   const branchId = cleanPayrollId(scope?.branchId);
   if (branchId !== null) query.set("branch_id", String(branchId));
+  const departmentId = cleanPayrollId(scope?.departmentId);
+  if (departmentId !== null)
+    query.set("department_id", String(departmentId));
   const data = await requestJson<{ policy?: Partial<PayrollPolicy> | null }>(
     `/payroll/policy?${query.toString()}`,
   );
@@ -781,8 +832,10 @@ export async function savePayrollPolicy(
   organizationId: PayrollId,
   policy: PayrollPolicyWrite,
   scope?: PayrollPolicyScope,
+  options?: PayrollPolicySaveOptions,
 ): Promise<PayrollPolicy> {
   const branchId = cleanPayrollId(scope?.branchId);
+  const departmentId = cleanPayrollId(scope?.departmentId);
   const staffId = cleanPayrollId(scope?.staffId);
   const data = await requestJson<{ policy: PayrollPolicy }>("/payroll/policy", {
     method: "PUT",
@@ -790,7 +843,11 @@ export async function savePayrollPolicy(
       organization_id: String(organizationId),
       policy,
       branch_id: branchId !== null ? String(branchId) : undefined,
+      department_id:
+        departmentId !== null ? String(departmentId) : undefined,
       staff_id: staffId !== null ? String(staffId) : undefined,
+      override_previous_month: options?.overridePreviousMonth === true,
+      override_existing_scopes: options?.overrideExistingScopes === true,
     }),
   });
   return normalizePayrollPolicy(data.policy);
