@@ -4332,7 +4332,6 @@ import {
   AlertCircle,
   Building2,
   Camera,
-  CheckCircle2,
   GraduationCap,
   Loader2,
   Plus,
@@ -4346,7 +4345,7 @@ import { useOrg } from "../../contexts/OrgConfigContext";
 import { peopleFamilyForType } from "../../utils/templateRendering";
 import { readShiftEnabledPeopleTypes } from "../../utils/shiftSupport";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
-import { confirmDialog } from "../../utils/notifications";
+import { confirmDialog, toastSuccess } from "../../utils/notifications";
 import ModernSelect from "../../components/ui/ModernSelect";
 import DepartmentDesignationEditor from "./DepartmentDesignationEditor";
 import ClassSectionEditor from "./ClassSectionEditor";
@@ -4491,7 +4490,6 @@ type AuthUser = {
 
 type AuthContext = {
   user?: AuthUser | null;
-  refreshUser?: (userId: string | number) => Promise<unknown> | unknown;
 };
 
 type PersonFamily = "student" | "workforce";
@@ -5839,7 +5837,7 @@ function ProfileSettingsEditor({
 
 export default function Settings() {
   const auth = useAuth() as unknown as AuthContext;
-  const { user, refreshUser } = auth;
+  const { user } = auth;
   const { refreshOrgConfig } = useOrg();
   const organizationId = user?.organization_id || user?.organizationId;
 
@@ -5888,7 +5886,6 @@ export default function Settings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const routeParams = useParams<{ branchId?: string }>();
   const routeBranchId = routeParams.branchId ? String(routeParams.branchId) : null;
   const isBranchDashboard = Boolean(routeBranchId);
@@ -6024,7 +6021,6 @@ export default function Settings() {
     try {
       setIsSaving(true);
       setError(null);
-      setSavedMessage(null);
       const data = await saveOperationalConfig({
         user_id: user.id,
         organization_id: organizationId,
@@ -6034,13 +6030,10 @@ export default function Settings() {
       setBootstrap(data);
       setBranches(nextBranches);
       setConfig(configFromBootstrap(data, nextBranches));
-      if (refreshUser && user.id) await refreshUser(user.id);
       // The rest of the dashboard (tabs, columns, filters) reads OrgConfigContext,
       // which otherwise stays stale until the next tab-focus refresh or reload.
-      await refreshOrgConfig();
-      setSavedMessage(
-        "Configurations saved successfully!",
-      );
+      await refreshOrgConfig({ silent: true, bootstrap: data });
+      toastSuccess("Configurations saved successfully!");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to save dashboard setup.",
@@ -6152,26 +6145,6 @@ export default function Settings() {
               style={{ verticalAlign: "middle", marginRight: 6 }}
             />{" "}
             {error}
-          </div>
-        ) : null}
-
-        {savedMessage ? (
-          <div
-            style={cardStyle({
-              borderColor: "#bbf7d0",
-              background: "#f0fdf4",
-              padding: 14,
-              marginBottom: 18,
-              color: C.success,
-              fontSize: 13,
-              fontWeight: 800,
-            })}
-          >
-            <CheckCircle2
-              size={16}
-              style={{ verticalAlign: "middle", marginRight: 6 }}
-            />{" "}
-            {savedMessage}
           </div>
         ) : null}
 

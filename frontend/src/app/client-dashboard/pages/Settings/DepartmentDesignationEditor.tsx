@@ -20,6 +20,7 @@ import {
   type DepartmentRecord,
   type DesignationRecord,
 } from "../StaffManagement/api/attendanceSettingsApi";
+import { confirmDialog } from "../../utils/notifications";
 
 type Branch = { id: string; name: string };
 
@@ -69,15 +70,14 @@ export default function DepartmentDesignationEditor({
     }
   }, [branches, branchId, defaultBranchId]);
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
-  // Designation index for the CURRENTLY SELECTED BRANCH only — designations
-  // are branch-scoped, not org-wide, so this is refetched by the effect
-  // below whenever branchId changes. Kept for name lookup only (so "type an
-  // existing name" can resolve to an id without a round trip) and is never
-  // rendered directly: each department only ever displays its own
-  // assignments, per the "departments contain their own designations"
-  // model below.
-  const [designations, setDesignations] = useState<DesignationRecord[]>([]);
+  // Designations are branch-scoped and owned by a department. Load each
+  // department's rows together so switching departments never waits on a
+  // request round trip.
+  const [designationsByDepartment, setDesignationsByDepartment] = useState<
+    Record<string, DesignationRecord[]>
+  >({});
   const [departmentId, setDepartmentId] = useState("");
+  const designations = designationsByDepartment[departmentId] ?? [];
   const [newDepartmentName, setNewDepartmentName] = useState("");
   const [newDesignationName, setNewDesignationName] = useState("");
   const [loading, setLoading] = useState(false);
@@ -89,9 +89,7 @@ export default function DepartmentDesignationEditor({
     [departments, departmentId],
   );
 
-  // designations are fetched per-department (list_designations now takes
-  // department_id, see support_db_attendance_settings.py) so this is just
-  // the currently loaded department's own rows — no join table anymore.
+  // Show only the selected department's designation rows.
   const departmentDesignationChips = useMemo(
     () =>
       designations
@@ -101,19 +99,8 @@ export default function DepartmentDesignationEditor({
     [designations],
   );
 
-  const changeDepartment = async (nextId: string) => {
+  const changeDepartment = (nextId: string) => {
     setDepartmentId(nextId);
-    if (!nextId) {
-      setDesignations([]);
-      return;
-    }
-    try {
-      setDesignations(await listDesignations(nextId, organizationId));
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Failed to load designations.",
-      );
-    }
   };
 
   useEffect(() => {
@@ -128,6 +115,14 @@ export default function DepartmentDesignationEditor({
           organizationId,
         );
         if (cancelled) return;
+        const designationEntries = await Promise.all(
+          nextDepartments.map(async (department) => [
+            department.id,
+            await listDesignations(department.id, organizationId),
+          ] as const),
+        );
+        if (cancelled) return;
+        setDesignationsByDepartment(Object.fromEntries(designationEntries));
         setDepartments(nextDepartments);
         const nextDepartmentId = nextDepartments.some(
           (item) => item.id === departmentId,
@@ -135,11 +130,6 @@ export default function DepartmentDesignationEditor({
           ? departmentId
           : (nextDepartments[0]?.id ?? "");
         setDepartmentId(nextDepartmentId);
-        setDesignations(
-          nextDepartmentId
-            ? await listDesignations(nextDepartmentId, organizationId)
-            : [],
-        );
       } catch (cause) {
         if (!cancelled) {
           setError(
@@ -166,18 +156,32 @@ export default function DepartmentDesignationEditor({
   const addDepartment = async () => {
     const name = newDepartmentName.trim();
     if (!name || !branchId || saving) return;
+    const previousDepartmentId = departmentId;
+    const pendingId = `pending-department-${Date.now()}`;
+    const pendingDepartment: DepartmentRecord = {
+      id: pendingId,
+      name,
+      branch_id: branchId,
+      status: "active",
+    };
+    setDepartments((items) => upsertByIdSorted(items, pendingDepartment));
+    setDepartmentId(pendingId);
+    setNewDepartmentName("");
     setSaving(true);
     setError(null);
     try {
       const created = await createDepartment(branchId, organizationId, {
         name,
       });
-      setDepartments((items) => [...items, created].sort(byName));
-      setNewDepartmentName("");
-      // Select it immediately — creating a department is only useful once
-      // you can also say which designations apply to it.
-      await changeDepartment(created.id);
+      setDepartments((items) =>
+        upsertByIdSorted(items.filter((item) => item.id !== pendingId), created),
+      );
+      setDepartmentId(created.id);
+      setDesignationsByDepartment((items) => ({ ...items, [created.id]: [] }));
     } catch (cause) {
+      setDepartments((items) => items.filter((item) => item.id !== pendingId));
+      setDepartmentId(previousDepartmentId);
+      setNewDepartmentName(name);
       setError(
         cause instanceof Error ? cause.message : "Failed to add department.",
       );
@@ -189,10 +193,13 @@ export default function DepartmentDesignationEditor({
   const removeDepartment = async (id: string) => {
     if (saving) return;
     const target = departments.find((item) => item.id === id);
-    const confirmed = window.confirm(
-      `Delete "${target?.name ?? "this department"}"?\n\nIt will also delete its designations.`,
-    );
-    if (!confirmed) return;
+    const confirmation = await confirmDialog({
+      title: `Delete "${target?.name ?? "this department"}"?`,
+      text: "It will also delete its designations.",
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+    });
+    if (!confirmation.isConfirmed) return;
     setSaving(true);
     setError(null);
     try {
@@ -200,8 +207,11 @@ export default function DepartmentDesignationEditor({
       setDepartments((items) => items.filter((item) => item.id !== id));
       if (departmentId === id) {
         setDepartmentId("");
-        setDesignations([]);
       }
+      setDesignationsByDepartment((items) => {
+        const { [id]: _removed, ...remaining } = items;
+        return remaining;
+      });
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -214,35 +224,46 @@ export default function DepartmentDesignationEditor({
   };
 
   /**
-   * Resolves a typed name to a designation id, creating it only if no
-   * designation by that name exists in the CURRENT BRANCH yet — designations
-   * are branch-scoped (see 002_branch_scope_designations.sql /
-   * support_db_attendance_settings.py), so "multiple departments can
-   * declare the same designation" means shared within one branch, never
-   * across branches. Binding two departments in the same branch to
-   * "Manager" reuses that branch's one "Manager" row; the same name in a
-   * different branch is a separate, independent row.
+   * Creates a designation owned by the selected department.
    *
-   * create_designation's own duplicate guard matches by (branch_id, name)
-   * regardless of active/inactive status, while our in-memory
-   * `designations` cache only holds active ones for this branch. So a name
-   * that collides with a *deactivated* designation in this same branch
-   * would 400 here even though it's not in the cache — handled by
-   * re-fetching with inactive included, then reactivating that row, instead
-   * of surfacing the 400.
+   * The backend remains the source of truth for duplicate validation.
    */
   const addDesignationToDepartment = async () => {
     const name = newDesignationName.trim();
     if (!name || !departmentId || saving) return;
+    const pendingId = `pending-designation-${Date.now()}`;
+    const pendingDesignation: DesignationRecord = {
+      id: pendingId,
+      name,
+      department_id: departmentId,
+      status: "active",
+    };
+    setDesignationsByDepartment((items) => ({
+      ...items,
+      [departmentId]: upsertByIdSorted(items[departmentId] ?? [], pendingDesignation),
+    }));
+    setNewDesignationName("");
     setSaving(true);
     setError(null);
     try {
       const created = await createDesignation(departmentId, organizationId, {
         name,
       });
-      setDesignations((items) => [...items, created].sort(byName));
-      setNewDesignationName("");
+      setDesignationsByDepartment((items) => ({
+        ...items,
+        [departmentId]: upsertByIdSorted(
+          (items[departmentId] ?? []).filter((item) => item.id !== pendingId),
+          created,
+        ),
+      }));
     } catch (cause) {
+      setDesignationsByDepartment((items) => ({
+        ...items,
+        [departmentId]: (items[departmentId] ?? []).filter(
+          (item) => item.id !== pendingId,
+        ),
+      }));
+      setNewDesignationName(name);
       setError(
         cause instanceof Error ? cause.message : "Failed to add designation.",
       );
@@ -257,9 +278,12 @@ export default function DepartmentDesignationEditor({
     setError(null);
     try {
       await deleteDesignation(designationId, organizationId);
-      setDesignations((items) =>
-        items.filter((item) => item.id !== designationId),
-      );
+      setDesignationsByDepartment((items) => ({
+        ...items,
+        [departmentId]: (items[departmentId] ?? []).filter(
+          (item) => item.id !== designationId,
+        ),
+      }));
     } catch (cause) {
       setError(
         cause instanceof Error

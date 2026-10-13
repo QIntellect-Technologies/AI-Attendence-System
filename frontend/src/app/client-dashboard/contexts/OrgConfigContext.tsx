@@ -2003,7 +2003,7 @@ export interface OrgContextValue {
 
   masterData: OrgMasterData;
   updateCfg: (patch: Partial<OrgConfig>) => void;
-  refreshOrgConfig: (opts?: { silent?: boolean }) => Promise<void>;
+  refreshOrgConfig: (opts?: { silent?: boolean; bootstrap?: unknown }) => Promise<void>;
   isRefreshingOrgConfig: boolean;
 
   activeBranchId: number | null;
@@ -3020,7 +3020,7 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
   const [orgLoadError, setOrgLoadError] = useState<string | null>(null);
 
   const refreshOrgConfig = useCallback(
-    async (opts?: { silent?: boolean }) => {
+    async (opts?: { silent?: boolean; bootstrap?: unknown }) => {
       // A session-expiry redirect is already in flight (handleSessionExpired
       // already fired — see sessionExpired.ts's own doc comment, which names
       // this provider specifically as the thing that must stop here). Both
@@ -3059,9 +3059,11 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
       setIsRefreshingOrgConfig(true);
 
       try {
-        const result = userOrgId
-          ? await getClientBootstrap(userOrgId)
-          : await getCurrentOrganization(user.id);
+        const result =
+          opts?.bootstrap ??
+          (userOrgId
+            ? await getClientBootstrap(userOrgId)
+            : await getCurrentOrganization(user.id));
 
         if (isStale()) return;
 

@@ -3776,6 +3776,7 @@ def api_client_staff_detail(staff_id):
                 str(staff_id),
                 profile_data,
                 granted_by_is_admin=bool(g.dashboard_user.get('is_admin')),
+                _prefetched=current,
             )
             if 'salary' in data:
                 _upsert_tenant_salary_config({
@@ -3871,7 +3872,10 @@ def api_delete_archived_client_staff_member(staff_id):
         if not _dashboard_target_org_matches(g.dashboard_user, current.get('organization_id')):
             return jsonify({'success': False, 'error': 'Archived employee not found.'}), 404
 
-        deleted = support_cp_db.delete_client_staff(str(staff_id))
+        deleted = support_cp_db.delete_client_staff(
+            str(staff_id),
+            _prefetched=current,
+        )
         return jsonify({
             'success': True,
             'message': 'Archived employee permanently deleted from Supabase.',

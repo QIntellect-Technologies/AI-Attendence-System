@@ -1637,11 +1637,26 @@ def restore_client_staff(
         ),
     }
 
-def delete_client_staff(staff_id: str) -> dict:
-    sb = get_supabase()
-    current = get_client_staff_member(str(staff_id))
-    result = sb.table('client_staff').delete().eq('id', str(staff_id)).execute()
+def delete_client_staff(staff_id: str, *, _prefetched: dict | None = None) -> dict:
+    current = _prefetched or get_client_staff_member(str(staff_id))
+    result = _execute_supabase(
+        'delete_client_staff',
+        lambda: get_supabase().table('client_staff').delete().eq(
+            'id', str(staff_id)
+        ),
+    )
     if not result.data:
+        # The delete may have committed before a connection dropped and the
+        # shared retry then returned no rows. Confirm the row is actually gone
+        # before treating an empty representation as a successful delete.
+        remaining = _execute_supabase(
+            'verify_deleted_client_staff',
+            lambda: get_supabase().table('client_staff').select('id').eq(
+                'id', str(staff_id)
+            ).limit(1),
+        )
+        if not remaining.data:
+            return {'deleted_user_id': str(staff_id), 'name': current.get('name')}
         raise ValueError('Archived staff member not found or cannot be permanently deleted')
     return {'deleted_user_id': str(staff_id), 'name': current.get('name')}
 

@@ -139,7 +139,10 @@ import {
   type StaffLoginCredentials,
 } from "./utils/staffCredentials";
 import { backendUserId, toStaffMember } from "./utils/staffMapping";
-import { buildStaffApiPayload } from "./utils/staffPayload";
+import {
+  buildChangedStaffApiPayload,
+  buildStaffApiPayload,
+} from "./utils/staffPayload";
 import {
   getShiftDefinition,
   resolveEffectiveShift,
@@ -1161,7 +1164,11 @@ const StaffDirectory: FC = () => {
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleSave = useCallback(
-    async (data: StaffFormData, files?: StaffMediaFiles) => {
+    async (
+      data: StaffFormData,
+      files?: StaffMediaFiles,
+      changedFields?: ReadonlySet<keyof StaffFormData>,
+    ) => {
       const shift = resolveEffectiveShift(shiftDefinitions, data);
       const selectedBranch = cfg.branches.find(
         (branch) => branch.id === data.branchId,
@@ -1177,6 +1184,7 @@ const StaffDirectory: FC = () => {
         data.branchId;
       const now = new Date().toISOString();
       const hasProfileImage = Boolean(files?.profileImageFile);
+      let createdToastShown = false;
 
       try {
         if (!organizationId) {
@@ -1205,18 +1213,25 @@ const StaffDirectory: FC = () => {
             peopleModel.peopleType,
             data.designationName,
           );
-          const saveResult = await saveWithPendingPayrollSalaryDecision(
-            (pendingSalaryAction) =>
-              updateStaff(userId, {
-                ...staffPayload,
-                ...(pendingSalaryAction
-                  ? { pending_salary_action: pendingSalaryAction }
-                  : {}),
-              }),
-            pendingPayrollSalaryDialog,
+          const changedPayload = buildChangedStaffApiPayload(
+            staffPayload,
+            changedFields ?? new Set<keyof StaffFormData>(),
           );
-          if (saveResult.cancelled) return;
-          const updatedStaff = saveResult.value as unknown as StaffMember;
+          let updatedStaff: StaffMember = editMember;
+          if (Object.keys(changedPayload).length > 0) {
+            const saveResult = await saveWithPendingPayrollSalaryDecision(
+              (pendingSalaryAction) =>
+                updateStaff(userId, {
+                  ...changedPayload,
+                  ...(pendingSalaryAction
+                    ? { pending_salary_action: pendingSalaryAction }
+                    : {}),
+                }),
+              pendingPayrollSalaryDialog,
+            );
+            if (saveResult.cancelled) return;
+            updatedStaff = saveResult.value as unknown as StaffMember;
+          }
 
           if (files?.profileImageFile) {
             setTrainingOverlay({
@@ -1303,7 +1318,6 @@ const StaffDirectory: FC = () => {
             setCredentialPreview(credentials);
           }
 
-          await refreshStaff?.();
           window.dispatchEvent(new CustomEvent("payroll-data-invalidated"));
         } else {
           const overlayTitle = "Creating profile";
@@ -1342,6 +1356,10 @@ const StaffDirectory: FC = () => {
             },
           );
 
+          setEditMember(null);
+          toastSuccess("Record added successfully.");
+          createdToastShown = true;
+
           if (result.mediaErrors.length > 0) {
             const mediaIssueText = result.mediaErrors
               .map((item) => `• ${item.phase}: ${item.message}`)
@@ -1373,15 +1391,19 @@ const StaffDirectory: FC = () => {
             try {
               await assignShift(result.user.id, data.liveShiftId);
             } catch (shiftAssignError) {
-              alert(
-                `Staff created, but assigning the selected shift failed: ` +
-                  `${
-                    shiftAssignError instanceof Error
-                      ? shiftAssignError.message
-                      : "Unknown error"
-                  }\n\nYou can assign it again by editing this staff member ` +
-                  `or from the Shift Allocation tab.`,
-              );
+              const errorMessage =
+                shiftAssignError instanceof Error
+                  ? shiftAssignError.message
+                  : "Unknown error";
+              void alertDialog({
+                title: "Staff created, but shift assignment failed",
+                text:
+                  `The staff member was created, but the selected shift ` +
+                  `could not be assigned: ${errorMessage}. You can assign ` +
+                  `it again by editing this staff member or from the Shift ` +
+                  `Allocation tab.`,
+                icon: "error",
+              });
             }
           }
 
@@ -1565,11 +1587,13 @@ const StaffDirectory: FC = () => {
           // ignore environments where window is not present
         }
 
-        toastSuccess(
-          editMember && editMember !== "new"
-            ? "Record updated successfully."
-            : "Record added successfully.",
-        );
+        if (!createdToastShown) {
+          toastSuccess(
+            editMember && editMember !== "new"
+              ? "Record updated successfully."
+              : "Record added successfully.",
+          );
+        }
       } catch (error) {
         const message =
           error instanceof Error
@@ -1611,7 +1635,6 @@ const StaffDirectory: FC = () => {
       assignShift,
       assignManager,
       setLinkedAccount,
-      refreshStaff,
     ],
   );
 
@@ -1620,33 +1643,33 @@ const StaffDirectory: FC = () => {
   // optimized for table display and doesn't select every column — WiFi
   // SSID/BSSIDs, reporting-hierarchy fields, geofence, and CNIC/guardian
   // details can be configured and saved correctly yet still come back
-  // blank here simply because the fast list never fetched them. Re-fetch
-  // the single full record (GET /api/staff/<id>, which does return every
-  // field) before opening the modal so it always shows what's actually
-  // saved. Falls back to the row's cached data if the re-fetch fails, so
-  // Edit still opens rather than being blocked entirely.
+  // blank here simply because the fast list never fetched them. Open with
+  // the available row immediately, then refresh full details in the
+  // background so the modal does not wait for the request.
   const openEditModal = useCallback(async (member: StaffMember) => {
     setViewMember(null);
+    setEditMember(member);
 
     const userId = backendUserId(member);
-    if (!userId) {
-      setEditMember(member);
-      return;
-    }
+    if (!userId) return;
 
     setPendingEditId(member.id);
     try {
       const fresh = await getStaffRecord(userId);
-      setEditMember(toStaffMember(fresh as unknown as ModuleStaffMember));
+      const freshMember = toStaffMember(fresh as unknown as ModuleStaffMember);
+      setEditMember((current) =>
+        current && current !== "new" && current.id === member.id
+          ? freshMember
+          : current,
+      );
     } catch (error) {
-      setEditMember(member);
       toastError(
         error instanceof Error
-          ? `Couldn't refresh the latest details (${error.message}) — showing cached data.`
-          : "Couldn't refresh the latest details; showing cached data.",
+          ? `Couldn't refresh the latest details (${error.message}) — showing available data.`
+          : "Couldn't refresh the latest details; showing available data.",
       );
     } finally {
-      setPendingEditId(null);
+      setPendingEditId((current) => (current === member.id ? null : current));
     }
   }, []);
 

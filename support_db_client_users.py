@@ -3118,7 +3118,7 @@ def _merge_operational_config(
     merged['onboardingCompletedAt'] = saved.get('completed_at')
     return merged
 
-def get_client_bootstrap(org_id: str) -> dict:
+def get_client_bootstrap(org_id: str, *, preloaded: Optional[dict] = None) -> dict:
     """    Lookups run through concurrency.gather_or_raise(), which parallelises when
     the host has threads to spare and runs sequentially when it does not.
     `get_organization` is essential and re-raises; every other lookup degrades
@@ -3131,16 +3131,20 @@ def get_client_bootstrap(org_id: str) -> dict:
     degraded: list[str] = []
 
     
+    preloaded = preloaded or {}
+    jobs = {
+        'org': lambda: get_organization(org_key),
+        'branches': lambda: list_branches(org_key),
+        'modules': lambda: list_org_modules(org_key),
+        'onboarding_config': lambda: get_client_onboarding_config(org_key),
+        'module_people_types': lambda: list_org_branch_module_people_types(org_key),
+        'latest_invoice': lambda: _latest_invoice(org_key),
+    }
     results, errors = gather_or_raise(
-        {
-            'org': lambda: get_organization(org_key),
-            'branches': lambda: list_branches(org_key),
-            'modules': lambda: list_org_modules(org_key),
-            'onboarding_config': lambda: get_client_onboarding_config(org_key),
-            'module_people_types': lambda: list_org_branch_module_people_types(org_key),
-        },
-        essential=('org',),
+        {key: job for key, job in jobs.items() if key not in preloaded},
+        essential=('org',) if 'org' not in preloaded else (),
     )
+    results = {**preloaded, **results}
 
     def _safe(key: str, default):
         if key in errors:
@@ -3164,11 +3168,13 @@ def get_client_bootstrap(org_id: str) -> dict:
         if m.get('status') == 'active'
     ]
 
-    latest_invoice = None
-    try:
-        latest_invoice = _latest_invoice(org_key)
-    except Exception as exc:
-        logger.warning('Could not load latest invoice for org=%s during bootstrap: %s', org_key, exc)
+    latest_invoice = results.get('latest_invoice')
+    if 'latest_invoice' in errors:
+        logger.warning(
+            'Could not load latest invoice for org=%s during bootstrap: %s',
+            org_key,
+            errors['latest_invoice'],
+        )
 
     access_status = org.get('status') or _compute_org_status(org_key)
     # A transient failure fetching onboarding_config is NOT the same as
@@ -3493,7 +3499,10 @@ def _reconcile_branch_cameras(sb, org_id: str, branch_id: str, incoming: list[di
     """
     existing = (
         sb.table('branch_cameras')
-        .select('id, camera_name, channel')
+        .select(
+            'id, camera_name, camera_type, channel, stream_path, rtsp_url, '
+            'public_rtsp_url, location, enabled'
+        )
         .eq('organization_id', str(org_id))
         .eq('branch_id', str(branch_id))
         .execute()
@@ -3530,12 +3539,17 @@ def _reconcile_branch_cameras(sb, org_id: str, branch_id: str, incoming: list[di
 
         kept.add(match)
         update = {k: v for k, v in row.items() if k not in ('organization_id', 'branch_id')}
+        update.pop('updated_at', None)
         if _first_present(camera, 'enabled', 'is_enabled', 'isEnabled') is None:
             update.pop('enabled', None)
         # A webcam must always carry a NULL public URL (DB CHECK constraint), so
         # for webcams the normalised None is written on purpose.
         if row['camera_type'] != 'webcam' and _first_present(camera, 'public_rtsp_url', 'publicRtspUrl') is None:
             update.pop('public_rtsp_url', None)
+        existing_row = by_id[match]
+        if all(existing_row.get(key) == value for key, value in update.items()):
+            continue
+        update['updated_at'] = row['updated_at']
         (
             sb.table('branch_cameras')
             .update(update)
@@ -3613,13 +3627,28 @@ def _sync_local_node_camera_config(
         # A network row is required even when each camera already has a complete
         # rtsp_url, because /api/local-node/config first checks
         # branch_network_configs before returning cameras.
-        network_result = (
+        existing_network = (
             sb.table('branch_network_configs')
-            .upsert(network_payload, on_conflict='organization_id,branch_id')
+            .select('public_ip, nvr_local_ip, rtsp_port, rtsp_username, rtsp_password')
+            .eq('organization_id', str(org_id))
+            .eq('branch_id', branch_id)
+            .limit(1)
             .execute()
-        )
-        if not network_result.data:
-            raise RuntimeError('Failed to save branch network configuration')
+        ).data or []
+        network_values = {
+            key: value for key, value in network_payload.items() if key != 'updated_at'
+        }
+        if not existing_network or any(
+            existing_network[0].get(key) != value
+            for key, value in network_values.items()
+        ):
+            network_result = (
+                sb.table('branch_network_configs')
+                .upsert(network_payload, on_conflict='organization_id,branch_id')
+                .execute()
+            )
+            if not network_result.data:
+                raise RuntimeError('Failed to save branch network configuration')
 
         # The submitted list is the source of truth for WHICH cameras exist on
         # this branch; existing rows are reconciled in place (see helper) so
@@ -3908,7 +3937,14 @@ def save_client_onboarding_config(
         }).eq('id', str(user_id)).execute()
         session_user = get_client_user_session_by_id(str(user_id))
 
-    bootstrap = get_client_bootstrap(str(org_id))
+    bootstrap = get_client_bootstrap(
+        str(org_id),
+        preloaded={
+            'org': org,
+            'branches': support_branches,
+            'onboarding_config': saved.data[0],
+        },
+    )
 
     return {
         'user': session_user,

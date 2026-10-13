@@ -130,3 +130,68 @@ export const buildStaffApiPayload = (
     ...(password ? { password } : {}),
   };
 };
+
+const STAFF_FORM_PAYLOAD_KEYS: Partial<
+  Record<keyof StaffFormData, (keyof StaffPayload)[]>
+> = {
+  name: ["name"],
+  personCode: [
+    "person_code",
+    "personCode",
+    "registration_number",
+    "employee_id",
+  ],
+  email: ["email"],
+  phone: ["phone"],
+  branchId: ["branch_id", "branch_ui_id", "branch_name"],
+  department: ["department"],
+  designationId: ["designation_id"],
+  designationName: ["designation_name"],
+  role: ["position"],
+  status: ["status"],
+  salary: ["salary"],
+  benefits: ["benefits"],
+  joinDate: ["join_date"],
+  staffType: [
+    "staff_type",
+    "geofence_lat",
+    "geofence_lng",
+    "geofence_radius_meters",
+    "geofence_label",
+    "office_ssid",
+    "office_bssid_list",
+  ],
+  shift: ["shift", "shift_id", "shift_label", "duty_start", "duty_end"],
+  customShiftStart: ["shift_id", "shift_label", "duty_start", "duty_end"],
+  customShiftEnd: ["shift_id", "shift_label", "duty_start", "duty_end"],
+  moduleAccess: ["access_modules"],
+  profileImageUrl: ["profile_image_url"],
+  profileImageName: ["profile_image_name"],
+  accountRole: ["account_role"],
+  geofenceLat: ["geofence_lat"],
+  geofenceLng: ["geofence_lng"],
+  geofenceRadiusMeters: ["geofence_radius_meters"],
+  geofenceLabel: ["geofence_label"],
+  officeSsid: ["office_ssid"],
+  officeBssidList: ["office_bssid_list"],
+  cnic: ["cnic"],
+  fatherName: ["father_name"],
+  fatherCnic: ["father_cnic"],
+  fatherPhone: ["father_phone"],
+};
+
+export function buildChangedStaffApiPayload(
+  payload: StaffPayload,
+  changedFields: ReadonlySet<keyof StaffFormData>,
+): StaffPayload {
+  const keys = new Set<keyof StaffPayload>();
+  changedFields.forEach((field) =>
+    STAFF_FORM_PAYLOAD_KEYS[field]?.forEach((key) => keys.add(key)),
+  );
+
+  return Object.fromEntries(
+    [...keys]
+      .filter((key) => payload[key] !== undefined)
+      .map((key) => [key, payload[key]]),
+  ) as StaffPayload;
+}

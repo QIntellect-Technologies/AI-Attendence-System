@@ -2742,7 +2742,11 @@ export function generateNextPersonCode(
 export const StaffModal: FC<{
   initial?: StaffMember;
   existingStaffMembers?: StaffMember[];
-  onSave: (data: StaffFormData, files: StaffMediaFiles) => void | Promise<void>;
+  onSave: (
+    data: StaffFormData,
+    files: StaffMediaFiles,
+    changedFields?: ReadonlySet<keyof StaffFormData>,
+  ) => void | Promise<void>;
   onClose: () => void;
   scope: "global" | "branch";
   branchId?: number;
@@ -2819,77 +2823,95 @@ export const StaffModal: FC<{
       setTouched((prev) => ({ ...prev, [field]: true }));
     }, []);
 
-    const [form, setForm] = useState<StaffFormData>(
+    const formFromMember = (member: StaffMember): StaffFormData => {
+      const shift = normalizeStaffShiftId(shiftDefinitions, member);
+      return {
+        name: member.name,
+        personCode:
+          member.personCode ||
+          member.registrationNumber ||
+          member.employeeId ||
+          "",
+        email: member.email ?? "",
+        phone: member.phone ?? "",
+        branchId: member.branchId,
+        department: member.department ?? "",
+        designationId: member.designationId ?? "",
+        role: member.role ?? "",
+        accountRole: member.accountRole || "staff",
+        status: member.status,
+        salary: member.salary ?? 1,
+        benefits: [...(member.benefits ?? [])],
+        joinDate: member.joinDate ?? new Date().toISOString().split("T")[0],
+        staffType: ((member as any).staffType ?? "office") as StaffWorkType,
+        shift,
+        customShiftStart:
+          shift === "custom" ? ((member as any).shiftStart ?? "09:00") : "09:00",
+        customShiftEnd:
+          shift === "custom" ? ((member as any).shiftEnd ?? "17:00") : "17:00",
+        moduleAccess: [...staffModules(member)],
+        liveShiftId: String(
+          (member as any)?.shiftIdRef ?? (member as any)?.shift_id_ref ?? "",
+        ),
+        liveDepartmentId: String(
+          (member as any)?.departmentId ??
+            (member as any)?.department_id ??
+            "",
+        ),
+        profileImageUrl: member.profileImageUrl ?? "",
+        profileImageName: member.profileImageName ?? "",
+        geofenceLat:
+          member.geofenceLat !== undefined && member.geofenceLat !== null
+            ? String(member.geofenceLat)
+            : "",
+        geofenceLng:
+          member.geofenceLng !== undefined && member.geofenceLng !== null
+            ? String(member.geofenceLng)
+            : "",
+        geofenceRadiusMeters:
+          member.geofenceRadiusMeters !== undefined &&
+          member.geofenceRadiusMeters !== null
+            ? String(member.geofenceRadiusMeters)
+            : "100",
+        geofenceLabel: member.geofenceLabel ?? "",
+        officeSsid: member.officeSsid ?? "",
+        officeBssidList: [...(member.officeBssidList ?? [])],
+        cnic: member.cnic ?? "",
+        fatherName: member.fatherName ?? "",
+        fatherCnic: member.fatherCnic ?? "",
+        fatherPhone: member.fatherPhone ?? "",
+        designationName: member.designationName ?? "",
+      };
+    };
+    const [form, setForm] = useState<StaffFormData>(() =>
       initial
-        ? {
-          name: initial.name,
-          personCode:
-            initial.personCode ||
-            initial.registrationNumber ||
-            initial.employeeId ||
-            "",
-          email: initial.email ?? "",
-          phone: initial.phone ?? "",
-          branchId: initial.branchId,
-          department: initial.department ?? "", // string — direct
-          designationId: initial.designationId ?? "",
-          role: initial.role ?? "", // string — direct
-          accountRole: initial.accountRole || "staff",
-          status: initial.status, // typed union — direct
-          salary: initial.salary ?? 1,
-          benefits: [...(initial.benefits ?? [])],
-          joinDate: initial.joinDate ?? new Date().toISOString().split("T")[0], // correct field name
-          staffType: ((initial as any).staffType ?? "office") as StaffWorkType,
-          shift: normalizeStaffShiftId(shiftDefinitions, initial),
-          customShiftStart:
-            normalizeStaffShiftId(shiftDefinitions, initial) === "custom"
-              ? ((initial as any).shiftStart ?? "09:00")
-              : "09:00",
-          customShiftEnd:
-            normalizeStaffShiftId(shiftDefinitions, initial) === "custom"
-              ? ((initial as any).shiftEnd ?? "17:00")
-              : "17:00",
-          moduleAccess: [...staffModules(initial)],
-          liveShiftId: String(
-            (initial as any)?.shiftIdRef ??
-            (initial as any)?.shift_id_ref ??
-            "",
-          ),
-          liveDepartmentId: String(
-            (initial as any)?.departmentId ??
-            (initial as any)?.department_id ??
-            "",
-          ),
-          profileImageUrl: initial.profileImageUrl ?? "",
-          profileImageName: initial.profileImageName ?? "",
-          geofenceLat:
-            initial.geofenceLat !== undefined && initial.geofenceLat !== null
-              ? String(initial.geofenceLat)
-              : "",
-          geofenceLng:
-            initial.geofenceLng !== undefined && initial.geofenceLng !== null
-              ? String(initial.geofenceLng)
-              : "",
-          geofenceRadiusMeters:
-            initial.geofenceRadiusMeters !== undefined &&
-              initial.geofenceRadiusMeters !== null
-              ? String(initial.geofenceRadiusMeters)
-              : "100",
-          geofenceLabel: initial.geofenceLabel ?? "",
-          officeSsid: initial.officeSsid ?? "",
-          officeBssidList: [...(initial.officeBssidList ?? [])],
-          cnic: initial.cnic ?? "",
-          fatherName: initial.fatherName ?? "",
-          fatherCnic: initial.fatherCnic ?? "",
-          fatherPhone: initial.fatherPhone ?? "",
-        }
+        ? formFromMember(initial)
         : {
-          ...EMPTY_FORM,
-          personCode: initialPersonCode,
-          branchId: branchId ?? cfg.branches[0]?.id ?? 0,
-          shift: shiftDefinitions[0]?.id ?? "morning",
-        },
+            ...EMPTY_FORM,
+            personCode: initialPersonCode,
+            branchId: branchId ?? cfg.branches[0]?.id ?? 0,
+            shift: shiftDefinitions[0]?.id ?? "morning",
+          },
     );
+    const initialFormRef = useRef(initial ? formFromMember(initial) : form);
+    const lastInitialRef = useRef(initial);
+
+    useEffect(() => {
+      if (!initial || lastInitialRef.current === initial) return;
+      const previous = initialFormRef.current;
+      const next = formFromMember(initial);
+      setForm((current) => {
+        const merged = { ...current };
+        (Object.keys(next) as (keyof StaffFormData)[]).forEach((key) => {
+          if (JSON.stringify(current[key]) === JSON.stringify(previous[key])) {
+            merged[key] = next[key];
+          }
+        });
+        return merged;
+      });
+      initialFormRef.current = next;
+      lastInitialRef.current = initial;
+    }, [initial]);
     // Profile photo routes require a Bearer token; a plain <img src> can't
     // attach one, so the preview goes through the authenticated-fetch hook
     // instead (persisted photo URLs only — local blob/data previews from a
@@ -3022,6 +3044,7 @@ export const StaffModal: FC<{
     // staff member (initial set) — a new record has no salary_configs row
     // yet, and never for students, since payroll doesn't apply to them.
     const showAllowancesField = Boolean(initial) && !peopleModel.isStudent;
+    const staffRecordId = initial?.id ?? "";
     const [staffSalaryConfig, setStaffSalaryConfig] =
       useState<PayrollSalaryConfig | null>(null);
     const [staffSalaryConfigLoading, setStaffSalaryConfigLoading] =
@@ -3044,7 +3067,7 @@ export const StaffModal: FC<{
         return undefined;
       }
       setStaffSalaryConfigLoading(true);
-      getSalaryConfigForStaff(initial.id, organizationId)
+      getSalaryConfigForStaff(staffRecordId, organizationId)
         .then((config) => {
           if (!cancelled) setStaffSalaryConfig(config);
         })
@@ -3057,7 +3080,7 @@ export const StaffModal: FC<{
       return () => {
         cancelled = true;
       };
-    }, [showAllowancesField, initial, organizationId]);
+    }, [showAllowancesField, staffRecordId, organizationId]);
 
     const staffAllowanceItems = staffSalaryConfig?.allowancesBreakdown ?? [];
     useEffect(() => {
@@ -3070,7 +3093,7 @@ export const StaffModal: FC<{
       setStaffAllowanceTypesError(null);
       getPayrollPolicy(organizationId, {
         branchId: staffBackendBranchId,
-        staffId: initial.id,
+        staffId: staffRecordId,
       })
         .then((policy) => {
           if (!cancelled) setStaffAllowanceTypes(policy.allowanceTypes ?? {});
@@ -3093,7 +3116,7 @@ export const StaffModal: FC<{
       };
     }, [
       showAllowancesField,
-      initial,
+      staffRecordId,
       organizationId,
       staffBackendBranchId,
     ]);
@@ -3327,6 +3350,14 @@ export const StaffModal: FC<{
     const [liveDesignations, setLiveDesignations] = useState<DesignationRecord[]>(
       [],
     );
+    const designationCacheRef = useRef(
+      new Map<string, DesignationRecord[]>(),
+    );
+    const designationRequestRef = useRef(0);
+    const departmentAssignmentQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const departmentAssignmentRequestRef = useRef(0);
+    const shiftAssignmentQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const shiftAssignmentRequestRef = useRef(0);
     const [liveShifts, setLiveShifts] = useState<ShiftRecord[]>([]);
     const [isLoadingLiveShifts, setIsLoadingLiveShifts] = useState(false);
     const [isSavingLiveDepartment, setIsSavingLiveDepartment] = useState(false);
@@ -3334,6 +3365,14 @@ export const StaffModal: FC<{
     const [liveAssignmentError, setLiveAssignmentError] = useState<string | null>(
       null,
     );
+    const initialDepartmentId = String(
+      (initial as any)?.departmentId ?? (initial as any)?.department_id ?? "",
+    );
+    const persistedDepartmentIdRef = useRef(initialDepartmentId);
+    const initialShiftId = String(
+      (initial as any)?.shiftIdRef ?? (initial as any)?.shift_id_ref ?? "",
+    );
+    const persistedShiftIdRef = useRef(initialShiftId);
 
     useEffect(() => {
       if (!organizationId || !apiBranchId) {
@@ -3363,13 +3402,7 @@ export const StaffModal: FC<{
         // keystroke elsewhere in the form). In Add mode `initial` is undefined
         // so this resolves to "" and loadLiveDesignations no-ops, exactly
         // right since nothing's selected yet.
-        loadLiveDesignations(
-          String(
-            (initial as any)?.departmentId ??
-            (initial as any)?.department_id ??
-            "",
-          ),
-        );
+        void loadLiveDesignations(initialDepartmentId);
       } else {
         setLiveDepartments([]);
         setLiveDesignations([]);
@@ -3391,7 +3424,7 @@ export const StaffModal: FC<{
         cancelled = true;
       };
     }, [
-      initial,
+      initialDepartmentId,
       organizationId,
       apiBranchId,
       peopleModel.peopleType,
@@ -3419,43 +3452,60 @@ export const StaffModal: FC<{
     const handleLiveDepartmentChange = async (departmentId: string) => {
       set("liveDepartmentId", departmentId);
       set("designationId", "");
-      setLiveDesignations([]);
-      if (departmentId && organizationId) {
-        loadLiveDesignations(departmentId);
-      }
+      void loadLiveDesignations(departmentId);
 
       if (!initial || !onAssignDepartment) return;
       const staffId = (initial as any).userId ?? initial.id;
+      const requestId = ++departmentAssignmentRequestRef.current;
       setIsSavingLiveDepartment(true);
       setLiveAssignmentError(null);
-      try {
+      const assignment = departmentAssignmentQueueRef.current.then(async () => {
         await onAssignDepartment(staffId, departmentId || null);
+      });
+      departmentAssignmentQueueRef.current = assignment.catch(() => undefined);
+      try {
+        await assignment;
+        persistedDepartmentIdRef.current = departmentId;
       } catch (error) {
-        setLiveAssignmentError(
-          error instanceof Error ? error.message : "Failed to assign department.",
-        );
-        // Revert the dropdown to the last known-good value since the PATCH
-        // failed — form.liveDepartmentId must not silently claim a department
-        // that was never actually persisted for an existing staff member.
-        const revertId = String(
-          (initial as any)?.departmentId ?? (initial as any)?.department_id ?? "",
-        );
-        set("liveDepartmentId", revertId);
-        loadLiveDesignations(revertId);
+        if (requestId === departmentAssignmentRequestRef.current) {
+          setLiveAssignmentError(
+            error instanceof Error
+              ? error.message
+              : "Failed to assign department.",
+          );
+          // Revert only the latest selection when its assignment fails.
+          const revertId = persistedDepartmentIdRef.current;
+          set("liveDepartmentId", revertId);
+          void loadLiveDesignations(revertId);
+        }
       } finally {
-        setIsSavingLiveDepartment(false);
+        if (requestId === departmentAssignmentRequestRef.current) {
+          setIsSavingLiveDepartment(false);
+        }
       }
     };
 
     const loadLiveDesignations = async (departmentId: string) => {
+      const requestId = ++designationRequestRef.current;
       if (!departmentId || !organizationId) {
         setLiveDesignations([]);
         return;
       }
+      const cached = designationCacheRef.current.get(departmentId);
+      if (cached) {
+        setLiveDesignations(cached);
+        return;
+      }
       try {
-        setLiveDesignations(await listDesignations(departmentId, organizationId));
+        const rows = await listDesignations(departmentId, organizationId);
+        designationCacheRef.current.set(departmentId, rows);
+        if (requestId === designationRequestRef.current) {
+          setLiveDesignations(rows);
+        }
       } catch {
-        setLiveDesignations([]);
+        if (requestId === designationRequestRef.current) {
+          setLiveDesignations([]);
+        }
       }
     };
 
@@ -3467,25 +3517,28 @@ export const StaffModal: FC<{
       set("liveShiftId", shiftId);
       if (!initial || !onAssignShift) return;
       const staffId = (initial as any).userId ?? initial.id;
+      const requestId = ++shiftAssignmentRequestRef.current;
       setIsSavingLiveShift(true);
       setLiveAssignmentError(null);
-      try {
+      const assignment = shiftAssignmentQueueRef.current.then(async () => {
+        if (requestId !== shiftAssignmentRequestRef.current) return;
         await onAssignShift(staffId, shiftId || null);
+        persistedShiftIdRef.current = shiftId;
+      });
+      shiftAssignmentQueueRef.current = assignment.catch(() => undefined);
+      try {
+        await assignment;
       } catch (error) {
-        setLiveAssignmentError(
-          error instanceof Error ? error.message : "Failed to assign shift.",
-        );
-        // Revert the dropdown to the last known-good value since the PATCH
-        // failed — form.liveShiftId must not silently claim a shift that
-        // was never actually persisted for an existing staff member.
-        set(
-          "liveShiftId",
-          String(
-            (initial as any)?.shiftIdRef ?? (initial as any)?.shift_id_ref ?? "",
-          ),
-        );
+        if (requestId === shiftAssignmentRequestRef.current) {
+          setLiveAssignmentError(
+            error instanceof Error ? error.message : "Failed to assign shift.",
+          );
+          set("liveShiftId", persistedShiftIdRef.current);
+        }
       } finally {
-        setIsSavingLiveShift(false);
+        if (requestId === shiftAssignmentRequestRef.current) {
+          setIsSavingLiveShift(false);
+        }
       }
     };
 
@@ -3608,7 +3661,7 @@ export const StaffModal: FC<{
       return () => {
         cancelled = true;
       };
-    }, [initial, organizationId, staffId]);
+    }, [Boolean(initial), organizationId, staffId]);
 
     const handleManagerChange = async (managerId: string) => {
       if (!initial) {
@@ -4471,7 +4524,6 @@ export const StaffModal: FC<{
                       ]}
                       ariaLabel="Select assigned department"
                       width="100%"
-                      disabled={isSavingLiveDepartment}
                     />
                   </div>
                 )}
@@ -4704,7 +4756,6 @@ export const StaffModal: FC<{
                         ]}
                         ariaLabel="Select shift"
                         width="100%"
-                        disabled={isSavingLiveShift}
                       />
                     )}
                     {!initial && form.liveShiftId && (
@@ -4953,11 +5004,14 @@ export const StaffModal: FC<{
               loading={isSaving}
               disabled={
                 Boolean(mediaError) ||
-                salaryBlocked
+                salaryBlocked ||
+                isSavingLiveDepartment ||
+                isSavingLiveShift
               }
               onClick={async () => {
                 setHasAttemptedSubmit(true);
                 if (isSaving) return;
+                if (isSavingLiveDepartment || isSavingLiveShift) return;
                 if (mediaError) return;
                 if (salaryBlocked) return;
 
@@ -4980,6 +5034,19 @@ export const StaffModal: FC<{
                     {
                       profileImageFile: profileImageFileRef.current,
                     },
+                    initial
+                      ? new Set(
+                          (
+                            Object.keys(initialFormRef.current) as (
+                              keyof StaffFormData
+                            )[]
+                          ).filter(
+                            (key) =>
+                              JSON.stringify(form[key]) !==
+                              JSON.stringify(initialFormRef.current[key]),
+                          ),
+                        )
+                      : undefined,
                   );
                 } finally {
                   setIsSaving(false);

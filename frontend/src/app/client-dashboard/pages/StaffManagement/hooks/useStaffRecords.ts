@@ -824,6 +824,9 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           created_by_user_id: currentUserId,
         });
 
+        // Do not let a list request that started before or during this save
+        // replace the freshly-updated row with its stale snapshot.
+        staffMutationVersionRef.current += 1;
         const mappedRow = apiUserToStaffMember(result.user);
         const row = withBackendBenefits(
           {
