@@ -3128,6 +3128,77 @@ def resolve_effective_allowances(applied_allowances: dict | None, policy: dict, 
     return items, round(total, 2)
 
 
+def build_payroll_compensation_snapshot(
+    salary_config: dict | None,
+    policy: dict,
+    basic_salary: float,
+    effective_ot_rate: float,
+    present_days: int,
+) -> dict:
+    """Capture policy-priced compensation alongside a paid breakdown."""
+    salary_config = salary_config or {}
+    applied_allowances = salary_config.get('applied_allowances')
+    applied_allowances = (
+        applied_allowances if isinstance(applied_allowances, dict) else {}
+    )
+    allowance_items, named_allowance_total = resolve_effective_allowances(
+        applied_allowances,
+        policy,
+        basic_salary,
+    )
+    manual_allowance = _payroll_float(salary_config.get('allowances'))
+    return {
+        'manual_allowance': manual_allowance,
+        'applied_allowances': applied_allowances,
+        'allowances_breakdown': allowance_items,
+        'allowances': manual_allowance + named_allowance_total,
+        'effective_ot_rate': _payroll_float(effective_ot_rate),
+        'present_days': max(0, int(present_days)),
+    }
+
+
+def resolve_paid_payroll_compensation(
+    breakdown: dict,
+    fallback_manual_allowance: float = 0,
+) -> dict:
+    """Use captured compensation, never current policy, for a paid payroll row."""
+    snapshot = breakdown.get('compensation_snapshot')
+    if isinstance(snapshot, dict):
+        return {
+            'manual_allowance': _payroll_float(snapshot.get('manual_allowance')),
+            'applied_allowances': (
+                snapshot.get('applied_allowances')
+                if isinstance(snapshot.get('applied_allowances'), dict)
+                else {}
+            ),
+            'allowances_breakdown': (
+                snapshot.get('allowances_breakdown')
+                if isinstance(snapshot.get('allowances_breakdown'), list)
+                else []
+            ),
+            'allowances': _payroll_float(snapshot.get('allowances')),
+            'effective_ot_rate': _payroll_float(
+                snapshot.get('effective_ot_rate'),
+            ),
+            'present_days': _payroll_float(snapshot.get('present_days')),
+        }
+
+    # Older payment records have no priced allowance/rate snapshot. Keep the
+    # manual allowance, but do not re-price named allowances from today's rules.
+    overtime_hours = _payroll_float(breakdown.get('overtime_hours'))
+    overtime_amount = _payroll_float(breakdown.get('overtime_amount'))
+    return {
+        'manual_allowance': _payroll_float(fallback_manual_allowance),
+        'applied_allowances': {},
+        'allowances_breakdown': [],
+        'allowances': _payroll_float(fallback_manual_allowance),
+        'effective_ot_rate': (
+            overtime_amount / overtime_hours if overtime_hours > 0 else 0.0
+        ),
+        'present_days': None,
+    }
+
+
 def get_payroll_policy(
     org_id: str,
     branch_id: str | None = None,
@@ -6080,6 +6151,17 @@ def _payroll_page_row(
         if salary_config.get('basic_salary') is not None
         else staff.get('salary')
     )
+    # Payroll "paid" status must never be read off staff/config rows that
+    # weren't scoped to this period.
+    if paid_staff_ids is not None:
+        normalized_status = 'Paid' if staff_id in paid_staff_ids else 'Pending'
+    else:
+        status = _payroll_text(salary_config.get('status') or 'Paid') or 'Paid'
+        normalized_status = 'Pending' if status.lower() == 'pending' else 'Paid'
+    paid_for_period = (
+        paid_staff_ids is not None and staff_id in paid_staff_ids
+    )
+
     # Legacy flat number — kept as an "Other / Manual Adjustment" line rather
     # than migrated away, same as app.py's _tenant_salary_map_row, so a
     # genuine one-off adjustment someone already has on file doesn't
@@ -6087,26 +6169,39 @@ def _payroll_page_row(
     manual_allowance = _payroll_float(salary_config.get('allowances'))
     applied_allowances = salary_config.get('applied_allowances')
     applied_allowances = applied_allowances if isinstance(applied_allowances, dict) else {}
-    allowance_items, named_allowance_total = resolve_effective_allowances(
-        applied_allowances, policy or {}, basic_salary,
-    )
-    allowances = manual_allowance + named_allowance_total
+    if paid_for_period:
+        paid_compensation = resolve_paid_payroll_compensation(
+            breakdown if isinstance(breakdown, dict) else {},
+            manual_allowance,
+        )
+        manual_allowance = paid_compensation['manual_allowance']
+        applied_allowances = paid_compensation['applied_allowances']
+        allowance_items = paid_compensation['allowances_breakdown']
+        allowances = paid_compensation['allowances']
+        resolved_ot_rate = paid_compensation['effective_ot_rate']
+    else:
+        allowance_items, named_allowance_total = resolve_effective_allowances(
+            applied_allowances, policy or {}, basic_salary,
+        )
+        allowances = manual_allowance + named_allowance_total
+        resolved_ot_rate = (
+            _payroll_float(effective_ot_rate)
+            if effective_ot_rate is not None
+            else _payroll_float(salary_config.get('ot_rate'))
+        )
     # ot_rate: raw per-staff override only (0 = none set) — kept as-is so
     # the frontend can still prefill the "OT Rate Override" edit field with
     # exactly what's stored, distinct from the resolved rate below.
     ot_rate = _payroll_float(salary_config.get('ot_rate'))
-    # effective_ot_rate: the rate actually applied to this staff member's
-    # pay — individual override, else their branch's override, else the
-    # org default (see resolve_effective_ot_rate). This is what the "OT
-    # RATE/HR" column should display; falls back to the raw ot_rate above
-    # only if a caller doesn't pass it (defensive, shouldn't happen from
-    # get_client_payroll_page).
-    resolved_ot_rate = _payroll_float(effective_ot_rate) if effective_ot_rate is not None else ot_rate
 
     if breakdown is not None:
         ot_hours = _payroll_float(breakdown.get('overtime_hours'))
         overtime_amount = _payroll_float(breakdown.get('overtime_amount'))
         deductions = _payroll_float(breakdown.get('total_deductions'))
+    elif paid_for_period:
+        ot_hours = _payroll_float(salary_config.get('ot_hours'))
+        overtime_amount = _payroll_float(salary_config.get('overtime_amount'))
+        deductions = _payroll_float(salary_config.get('deductions'))
     else:
         ot_hours = _payroll_float(salary_config.get('ot_hours'))
         overtime_amount = _payroll_float(salary_config.get('overtime_amount'), ot_hours * ot_rate)
@@ -6117,17 +6212,13 @@ def _payroll_page_row(
     employee_id = _payroll_text(staff.get('employee_id')) or staff_id
     display_name = _payroll_text(staff.get('name')) or 'Unknown'
 
-    # Payroll "paid" status must never be read off staff/config rows that
-    # weren't scoped to this period — see mark_payroll_paid/get_paid_payroll_periods.
-    if paid_staff_ids is not None:
-        normalized_status = 'Paid' if staff_id in paid_staff_ids else 'Pending'
-    else:
-        status = _payroll_text(salary_config.get('status') or 'Paid') or 'Paid'
-        normalized_status = 'Pending' if status.lower() == 'pending' else 'Paid'
-
     resolved_present_days = _payroll_float(
         present_days if present_days is not None else salary_config.get('present_days')
     )
+    if paid_for_period and isinstance(breakdown, dict):
+        snapshot_present_days = paid_compensation['present_days']
+        if snapshot_present_days is not None:
+            resolved_present_days = snapshot_present_days
 
     cnic = _payroll_text(staff.get('cnic'))
 
@@ -6623,6 +6714,11 @@ def get_client_payroll_page(
         staff_id = _payroll_text(staff.get('id'))
         if not staff_id:
             continue
+        if (
+            staff_id in paid_staff_ids
+            and staff_id not in paid_snapshot_breakdowns
+        ):
+            continue
         staff_branch_id = _payroll_text(staff.get('branch_id')) or None
         staff_department_id = _payroll_text(staff.get('department_id')) or None
         policy = resolve_policy(staff_branch_id, staff_department_id, staff_id)
@@ -6839,6 +6935,8 @@ def get_client_payroll_page(
                 for staff in staff_rows:
                     staff_id = _payroll_text(staff.get('id'))
                     if not staff_id:
+                        continue
+                    if staff_id in paid_staff_ids:
                         continue
                     staff_branch_id = _payroll_text(staff.get('branch_id')) or None
                     salary_config = salary_by_staff.get(staff_id, {})

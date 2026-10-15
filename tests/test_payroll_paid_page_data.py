@@ -212,6 +212,98 @@ def test_breakdown_cache_is_limited_to_closed_paid_rows_with_snapshots():
     )
 
 
+def test_paid_payroll_row_uses_saved_compensation_instead_of_current_policy():
+    row = payroll_db._payroll_page_row(
+        "org-1",
+        {
+            "id": "staff-1",
+            "name": "Example",
+            "branch_id": "branch-1",
+            "salary": 50000,
+        },
+        {},
+        {},
+        salary_config={
+            "basic_salary": 50000,
+            "allowances": 999,
+            "applied_allowances": {"housing": {"enabled": True}},
+        },
+        breakdown={
+            "base_salary": 50000,
+            "overtime_hours": 4,
+            "overtime_amount": 200,
+            "total_deductions": 800,
+            "compensation_snapshot": {
+                "manual_allowance": 100,
+                "applied_allowances": {"travel": {"enabled": True}},
+                "allowances_breakdown": [
+                    {
+                        "key": "travel",
+                        "label": "Travel",
+                        "mode": "fixed",
+                        "value": 1100,
+                        "amount": 1100,
+                    }
+                ],
+                "allowances": 1200,
+                "effective_ot_rate": 50,
+                "present_days": 19,
+            },
+        },
+        present_days=25,
+        paid_staff_ids={"staff-1"},
+        effective_ot_rate=900,
+        policy={
+            "allowanceTypes": {
+                "housing": {"label": "Housing", "mode": "fixed", "value": 9000},
+            },
+        },
+    )
+
+    assert row["status"] == "Paid"
+    assert row["allowances"] == 1200
+    assert row["manual_allowance"] == 100
+    assert row["applied_allowances"] == {"travel": {"enabled": True}}
+    assert row["allowances_breakdown"][0]["amount"] == 1100
+    assert row["effective_ot_rate"] == 50
+    assert row["present_days"] == 19
+    assert row["net_pay"] == 50600
+
+
+def test_paid_payroll_row_without_snapshot_does_not_apply_current_policy():
+    row = payroll_db._payroll_page_row(
+        "org-1",
+        {
+            "id": "staff-1",
+            "name": "Example",
+            "branch_id": "branch-1",
+            "salary": 50000,
+        },
+        {},
+        {},
+        salary_config={
+            "basic_salary": 50000,
+            "allowances": 300,
+            "applied_allowances": {"housing": {"enabled": True}},
+            "ot_hours": 4,
+        },
+        paid_staff_ids={"staff-1"},
+        effective_ot_rate=900,
+        policy={
+            "allowanceTypes": {
+                "housing": {"label": "Housing", "mode": "fixed", "value": 9000},
+            },
+        },
+    )
+
+    assert row["status"] == "Paid"
+    assert row["allowances"] == 300
+    assert row["allowances_breakdown"] == []
+    assert row["effective_ot_rate"] == 0
+    assert row["overtime_amount"] == 0
+    assert row["net_pay"] == 50300
+
+
 def test_mark_payroll_paid_verifies_the_saved_staff_and_period(monkeypatch):
     client = PaymentClient([])
     monkeypatch.setattr(payroll_db, "get_supabase", lambda: client)

@@ -519,17 +519,14 @@ export default function LeaveManagement() {
     isGlobal ? (branch.selectedBranchId ?? null) : (scopedBranchId ?? null),
   );
 
-  // A failed leaveTypeRules fetch and "org has no leave types configured
-  // yet" both resolve leaveTypeConfig to null, which makes the filter fall
-  // back to the hardcoded PREDEFINED_LEAVE_TYPES list identically either
-  // way (see buildLeaveTypeFilterOptions). Logging here is what tells the
-  // two apart — check the console/network tab if the filter shows the
-  // full hardcoded list instead of just what's configured in Payroll Rules.
+  // Leave-type filters are driven only by quota keys from Payroll Rules.
+  // If the request fails, the hook exposes the error and the filter's empty
+  // state remains visible rather than falling back to unrelated leave rows.
   useEffect(() => {
     if (leaveTypeConfigError) {
       // eslint-disable-next-line no-console
       console.error(
-        "[LeaveManagement] Failed to load configured leave types — filter is showing the hardcoded fallback list:",
+        "[LeaveManagement] Failed to load configured leave quotas:",
         leaveTypeConfigError,
       );
     }

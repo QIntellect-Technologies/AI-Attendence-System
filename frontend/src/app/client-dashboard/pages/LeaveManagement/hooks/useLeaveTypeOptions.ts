@@ -23,11 +23,8 @@ export interface UseLeaveTypeOptionsReturn {
   /** Raw { [leaveType]: annualQuotaDays } map. A type absent here has no
    * configured quota yet (unknown, not zero) — see useLeaveHistory. */
   leaveTypeQuotas: LeaveTypeQuotas;
-  /** Sorted list of configured type keys, or null when none are
-   * configured yet — callers (useLeaveFilters) fall back to deriving
-   * options from the actual leave rows when this is null, same contract
-   * the old cfg.payrollPolicy.leaveTypeRules-derived value had. */
-  leaveTypes: string[] | null;
+  /** Sorted leave types with an entry in Payroll Rules' annual quota map. */
+  leaveTypes: string[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -171,11 +168,11 @@ export function useLeaveTypeOptions(
   }, [load]);
 
   const leaveTypes = useMemo(() => {
-    const keys = Object.keys(allocations.leaveTypeRules)
+    return Object.keys(allocations.leaveTypeQuotas)
       .map((type) => type.trim())
-      .filter((type) => type.length > 0);
-    return keys.length ? keys.sort() : null;
-  }, [allocations.leaveTypeRules]);
+      .filter((type) => type.length > 0)
+      .sort();
+  }, [allocations.leaveTypeQuotas]);
 
   return {
     leaveTypeRules: allocations.leaveTypeRules,

@@ -949,6 +949,7 @@ export default function PayrollModule() {
       : undefined;
   const isGlobal = scopedBranchId === undefined;
   const branchSelector = useBranchSelector("filter");
+  const rulesBranchSelector = useBranchSelector("filter");
   const payrollDateFilter = useDateFilter("monthly");
   const showSalaryBranchFilter = isGlobal && branchSelector.hasMultipleBranches;
 
@@ -1423,7 +1424,7 @@ export default function PayrollModule() {
   const contextLabel = isGlobal
     ? branchSelector.selectedBranchId
       ? branchSelector.selected.name
-      : "All Branches"
+      : "Branches"
     : (cfg.branches.find((branch) => branch.id === scopedBranchId)?.name ??
       "Branch");
 
@@ -2277,25 +2278,26 @@ export default function PayrollModule() {
     hasOvertime,
   ]);
 
-  // Payroll Rules modal scope is derived from where the person already is
-  // — the route/sidebar branch context (`scopedBranchId`/`isGlobal`,
-  // computed above from `useParams`/`activeBranchId`) — never from a
-  // switcher inside the modal. This is deliberate, not a missing feature:
-  // an in-modal org/branch/staff picker would let anyone who can open a
-  // branch dashboard also reach up and overwrite the org-wide default
-  // every other branch falls back to. Opening Payroll Rules from the
-  // org-level ("All Branches") page edits the org default; opening it
-  // from a specific branch's dashboard edits that branch's override only.
-  //
-  // Deliberately NOT `effectiveBranchId` — that also folds in the
-  // page-local branch *filter* dropdown (branchSelector), which is
-  // display-only and must never change what gets written.
+  // The policy scope selector is separate from the page's display filter.
+  // On the org-wide page it can select an authorized branch; branch pages
+  // remain locked to their route/sidebar scope.
   const rulesBranch = useMemo(
     () =>
       isGlobal
-        ? null
+        ? rulesBranchSelector.hasMultipleBranches &&
+          rulesBranchSelector.selectedBranchId !== undefined
+          ? (cfg.branches.find(
+              (branch) => branch.id === rulesBranchSelector.selectedBranchId,
+            ) ?? null)
+          : null
         : (cfg.branches.find((branch) => branch.id === scopedBranchId) ?? null),
-    [isGlobal, scopedBranchId, cfg.branches],
+    [
+      isGlobal,
+      scopedBranchId,
+      cfg.branches,
+      rulesBranchSelector.hasMultipleBranches,
+      rulesBranchSelector.selectedBranchId,
+    ],
   );
   // payroll_policy_overrides is keyed on the backend branch UUID, not
   // cfg.branches' numeric UI id (see rulesBranchOptions' former filter —
@@ -2303,11 +2305,111 @@ export default function PayrollModule() {
   // UUID, so it can't hold an override; surfaced as a blocking notice in
   // the modal rather than silently falling back to an org-wide save.
   const rulesBranchId: string | null = rulesBranch?.backendBranchId ?? null;
-  const rulesBranchUnavailable = !isGlobal && !rulesBranchId;
+  const rulesBranchUnavailable =
+    (!isGlobal || rulesBranchSelector.selectedBranchId !== undefined) &&
+    !rulesBranchId;
+  const showRulesBranchSelector =
+    isGlobal && rulesBranchSelector.hasMultipleBranches;
+  const rulesDepartmentBranchIds = useMemo(
+    () =>
+      cfg.branches
+        .filter((branch) => {
+          if (!isGlobal) return branch.id === scopedBranchId;
+          return (
+            !rulesBranchSelector.hasMultipleBranches ||
+            rulesBranchSelector.selectedBranchId === undefined ||
+            branch.id === rulesBranchSelector.selectedBranchId
+          );
+        })
+        .map((branch) => getBackendBranchId(branch) ?? String(branch.id))
+        .filter(Boolean),
+    [
+      cfg.branches,
+      isGlobal,
+      scopedBranchId,
+      rulesBranchSelector.hasMultipleBranches,
+      rulesBranchSelector.selectedBranchId,
+    ],
+  );
+  const [rulesConfiguredDepartments, setRulesConfiguredDepartments] = useState<
+    DepartmentRecord[]
+  >([]);
+  useEffect(() => {
+    if (!organizationId || rulesDepartmentBranchIds.length === 0) {
+      setRulesConfiguredDepartments([]);
+      return;
+    }
+    setRulesConfiguredDepartments([]);
+    let cancelled = false;
+    Promise.all(
+      rulesDepartmentBranchIds.map(async (branchId) => {
+        const branch = cfg.branches.find(
+          (item) => (getBackendBranchId(item) ?? String(item.id)) === branchId,
+        );
+        const departments = await listBranchDepartments(
+          branchId,
+          organizationId,
+        );
+        return departments.map((department) => ({
+          ...department,
+          branch_id: department.branch_id ?? branchId,
+          branch_name: branch?.name,
+        }));
+      }),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        setRulesConfiguredDepartments(
+          Array.from(
+            new Map(
+              results
+                .flat()
+                .filter(
+                  (department) => department.id && department.name?.trim(),
+                )
+                .map((department) => [
+                  String(department.id),
+                  {
+                    ...department,
+                    id: String(department.id),
+                    name: department.name!.trim(),
+                  },
+                ]),
+            ).values(),
+          ).sort((a, b) => a.name.localeCompare(b.name)),
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load payroll departments.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId, rulesDepartmentBranchIds, cfg.branches]);
   const rulesDepartmentId =
     rulesPeopleType === "student" ? null : selectedRulesDepartmentId || null;
-  const rulesDepartment = configuredDepartments.find(
+  const rulesDepartment = rulesConfiguredDepartments.find(
     (department) => department.id === rulesDepartmentId,
+  );
+  const rulesDepartmentOptions = useMemo(
+    () =>
+      rulesConfiguredDepartments.map((department) => ({
+        value: department.id,
+        label:
+          !rulesBranchId && rulesDepartmentBranchIds.length > 1
+            ? `${String(department.branch_name ?? "Branch")} — ${department.name}`
+            : department.name,
+      })),
+    [
+      rulesConfiguredDepartments,
+      rulesBranchId,
+      rulesDepartmentBranchIds.length,
+    ],
   );
 
   const {
@@ -2353,6 +2455,7 @@ export default function PayrollModule() {
 
   const openIncomeTaxModal = useCallback(() => {
     setSelectedRulesDepartmentId("");
+    setRulesPeopleType("staff");
     setDraftIncomeTaxEnabled(policy.incomeTaxEnabled);
     setDraftIncomeTaxSlabs(policy.incomeTaxSlabs);
     setIncomeTaxSaveError(null);
@@ -2364,13 +2467,13 @@ export default function PayrollModule() {
       let overrideExistingScopes = false;
       if (!rulesDepartmentId) {
         const choice = await payrollPolicyScopeDialog(
-          isGlobal ? "organization" : "branch",
+          rulesBranchId ? "branch" : "organization",
         );
         if (!choice) return false;
         overrideExistingScopes = choice === "override";
       }
       const status = await getPreviousMonthPayrollStatus({
-        branchId: rulesDepartmentId ? null : rulesBranchId,
+        branchId: rulesBranchId,
         departmentId: rulesDepartmentId,
       });
       let overridePreviousMonth = false;
@@ -2394,7 +2497,7 @@ export default function PayrollModule() {
       });
       return true;
     },
-    [isGlobal, rulesBranchId, rulesDepartmentId, savePolicy],
+    [rulesBranchId, rulesDepartmentId, savePolicy],
   );
 
   const saveIncomeTaxPolicy = useCallback(async () => {
@@ -2409,7 +2512,7 @@ export default function PayrollModule() {
         hasOvertime ? nextPolicy : withoutOvertimeRate(nextPolicy),
       );
       if (!saved) return;
-      if (isGlobal && !rulesDepartmentId) {
+      if (!rulesBranchId && !rulesDepartmentId) {
         updateCfg({ payrollPolicy: nextPolicy });
       } else {
         void refresh({ force: true });
@@ -2427,11 +2530,11 @@ export default function PayrollModule() {
     draftIncomeTaxEnabled,
     draftIncomeTaxSlabs,
     hasOvertime,
-    isGlobal,
     policy,
     refresh,
     savePolicyWithPreviousMonthChoice,
     updateCfg,
+    rulesBranchId,
     rulesDepartmentId,
   ]);
 
@@ -2444,7 +2547,7 @@ export default function PayrollModule() {
         : withoutOvertimeRate(draftPolicy);
       const saved = await savePolicyWithPreviousMonthChoice(policyToSave);
       if (!saved) return;
-      if (isGlobal && !rulesDepartmentId) {
+      if (!rulesBranchId && !rulesDepartmentId) {
         // usePayrollPolicy's own `policy` state is now fresh, but that
         // hook instance is local to this modal — it's not what the
         // payroll table reads. usePayrollData derives each row's
@@ -2462,10 +2565,10 @@ export default function PayrollModule() {
       setIsRulesModalOpen(false);
       toastSuccess(
         rulesDepartment
-          ? `Payroll rules saved for ${rulesDepartment.name}`
-          : isGlobal
-            ? "Payroll rules saved for the organization"
-            : `Payroll rules saved for ${rulesBranch?.name ?? "this branch"}`,
+          ? `Payroll rules saved for ${rulesDepartment.name}${rulesBranchId ? ` (${rulesBranch?.name ?? "branch"})` : ""}`
+          : rulesBranchId
+            ? `Payroll rules saved for ${rulesBranch?.name ?? "this branch"}`
+            : "Payroll rules saved for the organization",
       );
     } catch {
       toastError("Failed to save payroll rules");
@@ -2478,27 +2581,72 @@ export default function PayrollModule() {
     payrollRulesError,
     payrollRulesOtRateError,
     savePolicyWithPreviousMonthChoice,
-    isGlobal,
     updateCfg,
     refresh,
     rulesBranch,
     hasOvertime,
     rulesDepartmentId,
     rulesDepartment,
+    rulesBranchId,
   ]);
 
   const rulesScopeSummary = useMemo(() => {
     if (rulesDepartment) {
-      return `Overrides the rules for ${rulesDepartment.name} only. Staff in this department use these rules before branch or organization defaults.`;
-    }
-    if (isGlobal) {
-      return "Saved org-wide — the default every branch and staff member falls back to unless they have their own override.";
+      return rulesBranchId
+        ? `Overrides the rules for ${rulesDepartment.name} in ${rulesBranch?.name ?? "this branch"} only.`
+        : `Overrides the rules for ${rulesDepartment.name} only. Staff in this department use these rules before branch or organization defaults.`;
     }
     if (rulesBranchUnavailable) {
       return "This branch hasn't finished syncing yet, so it can't hold its own payroll rules. Try again once setup completes, or edit rules from the organization-wide Payroll page.";
     }
+    if (!rulesBranchId) {
+      return "Saved org-wide — the default every branch and staff member falls back to unless they have their own override.";
+    }
     return `Overrides the org default for ${rulesBranch?.name ?? "this branch"} only — other branches and the org default are unaffected.`;
-  }, [isGlobal, rulesBranchUnavailable, rulesBranch, rulesDepartment]);
+  }, [rulesBranchUnavailable, rulesBranch, rulesBranchId, rulesDepartment]);
+  const renderPolicyScopeSelectors = (showDepartment: boolean) => (
+    <>
+      {showRulesBranchSelector && (
+        <div style={{ marginBottom: 20 }}>
+          <Field label="Branch">
+            <ModernSelect
+              value={String(rulesBranchSelector.selected.id)}
+              onChange={(value) => {
+                const branch = rulesBranchSelector.selectorBranches.find(
+                  (option) => String(option.id) === value,
+                );
+                if (!branch) return;
+                setSelectedRulesDepartmentId("");
+                rulesBranchSelector.onChange(branch);
+              }}
+              ariaLabel="Payroll policy branch"
+              width="100%"
+              options={rulesBranchSelector.selectorBranches.map((branch) => ({
+                value: String(branch.id),
+                label: branch.name,
+              }))}
+            />
+          </Field>
+        </div>
+      )}
+      {showDepartment && (
+        <div style={{ marginBottom: 20 }}>
+          <Field label="Department">
+            <ModernSelect
+              value={selectedRulesDepartmentId}
+              onChange={setSelectedRulesDepartmentId}
+              ariaLabel="Payroll policy department"
+              width="100%"
+              options={[
+                { value: "", label: "Departments" },
+                ...rulesDepartmentOptions,
+              ]}
+            />
+          </Field>
+        </div>
+      )}
+    </>
+  );
 
   const tabStyle = (tab: ActiveTab): React.CSSProperties => ({
     display: "flex",
@@ -3618,9 +3766,9 @@ export default function PayrollModule() {
           <h2 style={modalTitleStyle}>
             {isStudentCalendar
               ? "Student Working-Day Calendar"
-              : isGlobal
-                ? "Company Payroll Rules"
-                : `Payroll Rules — ${rulesBranch?.name ?? "Branch"}`}
+              : rulesBranch || !isGlobal
+                ? `Payroll Rules — ${rulesBranch?.name ?? "Branch"}`
+                : "Company Payroll Rules"}
           </h2>
           <p style={modalSubStyle}>
             {isStudentCalendar
@@ -3649,25 +3797,7 @@ export default function PayrollModule() {
             </div>
           )}
 
-          {!isStudentCalendar && (
-            <div style={{ marginBottom: 20 }}>
-              <Field label="Department">
-                <ModernSelect
-                  value={selectedRulesDepartmentId}
-                  onChange={setSelectedRulesDepartmentId}
-                  ariaLabel="Payroll rules department"
-                  width="100%"
-                  options={[
-                    { value: "", label: "Departments" },
-                    ...configuredDepartments.map((department) => ({
-                      value: department.id,
-                      label: department.name,
-                    })),
-                  ]}
-                />
-              </Field>
-            </div>
-          )}
+          {renderPolicyScopeSelectors(!isStudentCalendar)}
 
           {hasOvertime && !isStudentCalendar && (
             <div
@@ -4528,7 +4658,7 @@ export default function PayrollModule() {
             disabled={
               policySaving ||
               policyLoading ||
-              (rulesBranchUnavailable && !rulesDepartmentId) ||
+              rulesBranchUnavailable ||
               Boolean(payrollRulesError)
             }
             style={{
@@ -4540,14 +4670,14 @@ export default function PayrollModule() {
               cursor:
                 policySaving ||
                 policyLoading ||
-                (rulesBranchUnavailable && !rulesDepartmentId) ||
+                rulesBranchUnavailable ||
                 Boolean(payrollRulesError)
                   ? "not-allowed"
                   : "pointer",
               opacity:
                 policySaving ||
                 policyLoading ||
-                (rulesBranchUnavailable && !rulesDepartmentId) ||
+                rulesBranchUnavailable ||
                 Boolean(payrollRulesError)
                   ? 0.7
                   : 1,
@@ -4570,34 +4700,20 @@ export default function PayrollModule() {
           scrollable
           onClose={() => !policySaving && setIsIncomeTaxModalOpen(false)}
         >
-          <h2 style={modalTitleStyle}>Income Tax Slabs</h2>
+          <h2 style={modalTitleStyle}>
+            {rulesBranch || !isGlobal
+              ? `Income Tax Slabs — ${rulesBranch?.name ?? "Branch"}`
+              : "Income Tax Slabs"}
+          </h2>
           <p style={modalSubStyle}>
             Configure annual taxable salary thresholds and the monthly tax
             deduction
             {rulesDepartment
-              ? ` for ${rulesDepartment.name}.`
-              : ` for the ${isGlobal ? "organization" : "branch"} policy.`}
+              ? ` for ${rulesDepartment.name}${rulesBranchId ? ` in ${rulesBranch?.name ?? "this branch"}` : ""}.`
+              : ` for the ${rulesBranchId ? `${rulesBranch?.name ?? "branch"} branch` : "organization"} policy.`}
           </p>
 
-          {configuredDepartments.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <Field label="Department">
-                <ModernSelect
-                  value={selectedRulesDepartmentId}
-                  onChange={setSelectedRulesDepartmentId}
-                  ariaLabel="Income tax department"
-                  width="100%"
-                  options={[
-                    { value: "", label: "Departments" },
-                    ...configuredDepartments.map((department) => ({
-                      value: department.id,
-                      label: department.name,
-                    })),
-                  ]}
-                />
-              </Field>
-            </div>
-          )}
+          {renderPolicyScopeSelectors(true)}
 
           <label
             style={{
@@ -4826,7 +4942,7 @@ export default function PayrollModule() {
             </table>
           </div>
 
-          {rulesBranchUnavailable && !rulesDepartmentId && (
+          {rulesBranchUnavailable && (
             <div role="alert" style={{ color: T.red600, marginBottom: 12 }}>
               This branch is not ready for payroll policy changes yet.
             </div>

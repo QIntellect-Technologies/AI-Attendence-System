@@ -19,25 +19,9 @@ interface TemplateOptionSource {
 }
 
 /**
- * Predefined leave types that should always be available as filter options.
- * Can be extended with custom types from actual leave data.
- */
-const PREDEFINED_LEAVE_TYPES = [
-  "Annual",
-  "Casual",
-  "Sick",
-  "Emergency",
-  "Maternity",
-  "Paternity",
-  "Unpaid",
-  "Compensatory",
-];
-
-/**
  * Sentinel filter value for "half day only". Half-day is a modifier that
- * can apply to any leave category (Annual, Sick, ...), not a category of
- * its own — so it's a separate option in the same dropdown rather than a
- * ninth entry in PREDEFINED_LEAVE_TYPES, and matches on `halfDayPeriod`
+ * can apply to any configured leave category, not a category of its own —
+ * it is a separate option in the same dropdown and matches on `halfDayPeriod`
  * presence rather than on `type`. See leaveMatchesFilters below.
  */
 export const HALF_DAY_FILTER_VALUE = "__half_day__";
@@ -411,9 +395,8 @@ export function buildDepartmentFilterOptions(
  * Build leave type filter options from leaves.
  *
  * - Always includes "All Types" as first option
- * - Includes predefined leave types (Annual, Casual, Sick, etc.)
+ * - Includes only leave types configured in Payroll Rules' quota map
  * - Counts how many leaves match each type
- * - Supplements with custom types found in the actual data
  * - Used to populate dropdown
  */
 export function normalizeConfiguredLeaveType(value: unknown): string | null {
@@ -434,64 +417,36 @@ export function buildLeaveTypeFilterOptions(
         .filter((t): t is string => !!t)
     : [];
 
-  const typeCounts = new Map<string, { label: string; count: number }>();
-
-  const addType = (type: string) => {
-    const normalized = normalizeLeaveType(type);
-    if (!normalized) return;
-    if (!typeCounts.has(normalized)) {
-      typeCounts.set(normalized, {
-        label: type.charAt(0).toUpperCase() + type.slice(1),
-        count: 0,
-      });
-    }
-  };
-
-  const configuredSet = new Set<string>();
-  if (configured.length > 0) {
-    configured.forEach((type) => {
-      const normalized = normalizeLeaveType(type);
-      if (normalized) {
-        configuredSet.add(normalized);
-        addType(type);
-      }
-    });
-  } else {
-    PREDEFINED_LEAVE_TYPES.forEach(addType);
+  if (configured.length === 0) {
+    return [
+      {
+        value: "__all__",
+        label: "No leave types configured",
+        description: "Configure leave quotas in Payroll Rules",
+      },
+    ];
   }
 
-  let halfDayCount = 0;
-
-  leaves.forEach((leave) => {
-    const type = leave.type ? normalizeLeaveType(leave.type) : "leave";
-    if (type) {
-      if (!typeCounts.has(type)) {
-        typeCounts.set(type, {
+  const typeCounts = new Map(
+    configured.map((type) => {
+      const normalized = type.trim().toLowerCase();
+      return [
+        normalized,
+        {
           label: type.charAt(0).toUpperCase() + type.slice(1),
           count: 0,
-        });
-      }
-      typeCounts.get(type)!.count += 1;
-    }
+        },
+      ];
+    }),
+  );
+
+  let halfDayCount = 0;
+  leaves.forEach((leave) => {
+    const type = leave.type ? normalizeLeaveType(leave.type) : null;
+    const configuredType = type ? typeCounts.get(type) : undefined;
+    if (configuredType) configuredType.count += 1;
     if (leave.halfDayPeriod) halfDayCount += 1;
   });
-
-  const configuredTypesOrdered =
-    configured.length > 0
-      ? Array.from(typeCounts.entries())
-          .filter(([type]) => configuredSet.has(type))
-          .map(([type, entry]) => ({ type, ...entry }))
-      : [];
-
-  const extraTypes = Array.from(typeCounts.entries())
-    .filter(([type]) => !configuredSet.has(type))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([type, entry]) => ({ type, ...entry }));
-
-  const sortedTypes =
-    configuredTypesOrdered.length > 0
-      ? [...configuredTypesOrdered, ...extraTypes]
-      : extraTypes;
 
   return [
     {
@@ -509,7 +464,7 @@ export function buildLeaveTypeFilterOptions(
           ? `${halfDayCount} pending leave request${halfDayCount === 1 ? "" : "s"}`
           : "No current requests",
     },
-    ...sortedTypes.map(({ type, label, count }) => ({
+    ...Array.from(typeCounts.entries()).map(([type, { label, count }]) => ({
       value: type,
       label,
       count,

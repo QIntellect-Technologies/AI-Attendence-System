@@ -5061,6 +5061,13 @@ def _tenant_salary_map_row(row, staff_lookup=None, breakdown=None, paid_staff_id
         if row.get('basic_salary') is not None
         else (staff.get('salary') or 0)
     )
+    status = 'Paid' if paid_staff_ids and staff_id in paid_staff_ids else 'Pending'
+    paid_for_period = bool(paid_staff_ids and staff_id in paid_staff_ids)
+    breakdown_data = (
+        breakdown.to_dict()
+        if breakdown is not None and hasattr(breakdown, 'to_dict')
+        else breakdown if isinstance(breakdown, dict) else None
+    )
     # Legacy flat number -- kept as an "Other / Manual Adjustment" line
     # rather than migrated away, so a genuine one-off adjustment someone
     # already has on file doesn't silently vanish once named allowance
@@ -5068,18 +5075,45 @@ def _tenant_salary_map_row(row, staff_lookup=None, breakdown=None, paid_staff_id
     # replacement going forward.
     manual_allowance = float(row.get('allowances') or 0)
     applied_allowances = row.get('applied_allowances')
-    allowance_items, named_allowance_total = support_cp_db.resolve_effective_allowances(
-        applied_allowances if isinstance(applied_allowances, dict) else {},
-        policy or {},
-        basic_salary,
-    )
-    allowances = manual_allowance + named_allowance_total
     ot_rate = float(row.get('ot_rate') or 0)
-    resolved_ot_rate = float(effective_ot_rate) if effective_ot_rate is not None else ot_rate
+    if paid_for_period:
+        paid_compensation = support_cp_db.resolve_paid_payroll_compensation(
+            breakdown_data or {},
+            manual_allowance,
+        )
+        manual_allowance = paid_compensation['manual_allowance']
+        applied_allowances = paid_compensation['applied_allowances']
+        allowance_items = paid_compensation['allowances_breakdown']
+        allowances = paid_compensation['allowances']
+        resolved_ot_rate = paid_compensation['effective_ot_rate']
+    else:
+        allowance_items, named_allowance_total = support_cp_db.resolve_effective_allowances(
+            applied_allowances if isinstance(applied_allowances, dict) else {},
+            policy or {},
+            basic_salary,
+        )
+        allowances = manual_allowance + named_allowance_total
+        resolved_ot_rate = (
+            float(effective_ot_rate)
+            if effective_ot_rate is not None
+            else ot_rate
+        )
 
     if breakdown is not None:
-        deductions = breakdown.total_deductions
-        overtime_amount = breakdown.overtime_amount
+        deductions = (
+            breakdown_data['total_deductions']
+            if breakdown_data is not None
+            else breakdown.total_deductions
+        )
+        overtime_amount = (
+            breakdown_data['overtime_amount']
+            if breakdown_data is not None
+            else breakdown.overtime_amount
+        )
+        net_pay = max(0, basic_salary + allowances + overtime_amount - deductions)
+    elif paid_for_period:
+        deductions = float(row.get('deductions') or 0)
+        overtime_amount = float(row.get('overtime_amount') or 0)
         net_pay = max(0, basic_salary + allowances + overtime_amount - deductions)
     else:
         deductions = float(row.get('deductions') or 0)
@@ -5093,8 +5127,6 @@ def _tenant_salary_map_row(row, staff_lookup=None, breakdown=None, paid_staff_id
     # supplied by the caller (period-scoped), is the real source of truth;
     # with no period resolvable there's nothing to report paid, so default
     # honestly to Pending rather than always showing Paid.
-    status = 'Paid' if paid_staff_ids and staff_id in paid_staff_ids else 'Pending'
-
     result = {
         'id': row.get('id') or staff_id,
         'user_id': staff_id,
@@ -5130,8 +5162,8 @@ def _tenant_salary_map_row(row, staff_lookup=None, breakdown=None, paid_staff_id
         'status': status,
         'present_days': row.get('present_days') if row.get('present_days') is not None else 0,
     }
-    if breakdown is not None:
-        result['payroll_breakdown'] = breakdown.to_dict()
+    if breakdown_data is not None:
+        result['payroll_breakdown'] = breakdown_data
     return result
 
 def _tenant_salary_branch_map(org_id: str) -> tuple[list[dict], dict[str, dict], dict[str, str]]:
@@ -5247,6 +5279,7 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
     period_start_date = period_end_date = None
     period_resolvable = False
     paid_staff_ids: set[str] = set()
+    paid_breakdowns: dict[str, dict] = {}
     salary_period_snapshots = (
         support_db_payroll.get_payroll_salary_period_snapshots(
             org_id,
@@ -5275,7 +5308,7 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
             )
             (
                 paid_staff_ids,
-                _paid_breakdowns,
+                paid_breakdowns,
                 paid_salary_snapshots,
             ) = support_db_payroll.get_paid_payroll_page_data(
                 org_id, period_start, period_end,
@@ -5347,13 +5380,26 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
         effective_ot_rate = support_cp_db.resolve_effective_ot_rate(overlay, policy)
 
         breakdown = None
-        if period_resolvable:
+        if staff_id in paid_staff_ids:
+            breakdown = paid_breakdowns.get(staff_id)
+        elif period_resolvable:
             basic_salary = float(overlay.get('basic_salary') or 0)
             # Real, approved-this-period OT hours from Overtime Management,
             # plus node-classified overtime the local-node payroll-decision
             # screen has approved (never routes through overtime_requests —
             # see get_local_node_overtime_hours_for_payroll_period).
             ot_hours = overtime_by_staff.get(staff_id, 0.0) + local_node_overtime_by_staff.get(staff_id, 0.0)
+            _, named_allowances = support_cp_db.resolve_effective_allowances(
+                overlay.get('applied_allowances'),
+                policy,
+                basic_salary,
+            )
+            monthly_gross_salary = (
+                basic_salary
+                + float(overlay.get('allowances') or 0)
+                + named_allowances
+                + ot_hours * effective_ot_rate
+            )
             breakdown = payroll_engine.compute_payroll_breakdown(
                 base_salary=basic_salary,
                 ot_hours=ot_hours,
@@ -5363,6 +5409,7 @@ def _tenant_salary_configs(organization_id, branch_id=None, period_start=None, p
                 policy=policy,
                 attendance_rows=attendance_by_staff.get(staff_id, []),
                 leave_rows=leaves_by_staff.get(staff_id, []),
+                monthly_gross_salary=monthly_gross_salary,
             )
             present_dates = {r['date'] for r in attendance_by_staff.get(staff_id, []) if r.get('date')}
             overlay['present_days'] = len(present_dates)
@@ -5860,27 +5907,99 @@ def _compute_staff_payroll_breakdown(org_id: str, staff_id: str, period_start: s
     if not branch_id:
         return None
     try:
-        policy = support_cp_db.get_payroll_policy(
+        salary_config = _tenant_salary_config_row(org_id, staff_id)
+        period_salary = support_db_payroll.get_payroll_salary_period_snapshots(
             org_id,
+            [staff_id],
+            period_start,
+            period_end,
+        ).get(staff_id, {})
+        salary_config = {**salary_config, **period_salary}
+        policy = support_cp_db.get_payroll_policy_for_period(
+            org_id,
+            period_start,
             branch_id=branch_id,
             staff_id=staff_id,
             department_id=_clean_id_text(staff.get('department_id')) or None,
         )
+        module_flags = support_cp_db.get_org_payroll_module_flags(org_id)
         attendance = support_cp_db.get_staff_attendance_for_payroll_period(org_id, branch_id, period_start, period_end)
-        leaves = support_cp_db.get_approved_leaves_for_payroll_period(org_id, branch_id, period_start, period_end)
-        overtime = support_cp_db.get_approved_overtime_hours_for_payroll_period(org_id, branch_id, period_start, period_end)
-        local_node_overtime = support_cp_db.get_local_node_overtime_hours_for_payroll_period(org_id, branch_id, period_start, period_end)
+        leaves = (
+            support_cp_db.get_approved_leaves_for_payroll_period(
+                org_id, branch_id, period_start, period_end,
+            )
+            if module_flags['leave']
+            else {}
+        )
+        overtime = (
+            support_cp_db.get_approved_overtime_hours_for_payroll_period(
+                org_id, branch_id, period_start, period_end,
+            )
+            if module_flags['overtime']
+            else {}
+        )
+        local_node_overtime = (
+            support_cp_db.get_local_node_overtime_hours_for_payroll_period(
+                org_id, branch_id, period_start, period_end,
+            )
+            if module_flags['overtime']
+            else {}
+        )
+        basic_salary = float(
+            salary_config.get('basic_salary')
+            if salary_config.get('basic_salary') is not None
+            else (staff.get('salary') or 0)
+        )
+        effective_ot_rate = (
+            support_cp_db.resolve_effective_ot_rate(salary_config, policy)
+            if module_flags['overtime']
+            else 0.0
+        )
+        ot_hours = (
+            overtime.get(staff_id, 0.0)
+            + local_node_overtime.get(staff_id, 0.0)
+        )
+        _, named_allowances = support_cp_db.resolve_effective_allowances(
+            salary_config.get('applied_allowances'),
+            policy,
+            basic_salary,
+        )
+        monthly_gross_salary = (
+            basic_salary
+            + float(salary_config.get('allowances') or 0)
+            + named_allowances
+            + ot_hours * effective_ot_rate
+        )
         breakdown = payroll_engine.compute_payroll_breakdown(
-            base_salary=float(staff.get('salary') or 0),
-            ot_hours=overtime.get(staff_id, 0.0) + local_node_overtime.get(staff_id, 0.0),
-            ot_rate_per_hour=float(policy.get('otRatePerHour') or 0),
+            base_salary=basic_salary,
+            ot_hours=ot_hours,
+            ot_rate_per_hour=effective_ot_rate,
             period_start=date.fromisoformat(period_start),
             period_end=date.fromisoformat(period_end),
-            policy=policy,
+            policy=(
+                policy
+                if module_flags.get('income_tax', False)
+                else {**policy, 'incomeTaxEnabled': False}
+            ),
             attendance_rows=attendance.get(staff_id, []),
             leave_rows=leaves.get(staff_id, []),
+            monthly_gross_salary=monthly_gross_salary,
         )
         snapshot = breakdown.to_dict()
+        present_days = len({
+            row.get('date')
+            for row in attendance.get(staff_id, [])
+            if row.get('date')
+        })
+        snapshot['compensation_snapshot'] = (
+            support_cp_db.build_payroll_compensation_snapshot(
+                salary_config,
+                policy,
+                basic_salary,
+                effective_ot_rate,
+                present_days,
+            )
+        )
         snapshot['snapshot_branch_id'] = branch_id
         return snapshot
     except Exception:
