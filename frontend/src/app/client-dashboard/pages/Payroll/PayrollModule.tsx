@@ -993,6 +993,11 @@ export default function PayrollModule() {
     () => payrollDateFilter.range.startDate.slice(0, 7),
     [payrollDateFilter.range.startDate],
   );
+  const currentDate = new Date();
+  const currentCalendarMonth = `${currentDate.getFullYear()}-${String(
+    currentDate.getMonth() + 1,
+  ).padStart(2, "0")}`;
+  const isPastPayrollMonth = periodMonth < currentCalendarMonth;
   const monthCalendar: PayrollMonthCalendar =
     draftPolicy.payrollCalendarsByMonth[periodMonth] ?? {};
   const monthHolidayDates = Array.isArray(monthCalendar.holidayDates)
@@ -1030,7 +1035,6 @@ export default function PayrollModule() {
       payrollWeeklyOffDays: weeklyOffDays,
       payrollWeeklyOffDaysEffectiveFrom: periodMonth,
     }));
-  const currentDate = new Date();
   const nextMonthDate = new Date(
     currentDate.getFullYear(),
     currentDate.getMonth() + 1,
@@ -3041,9 +3045,9 @@ export default function PayrollModule() {
                 lineHeight: 1.5,
               }}
             >
-              Weekly days off repeat from the selected month onward. Holidays are
-              specific to each month and must be confirmed separately. You can
-              change these settings later.
+              {isPastPayrollMonth
+                ? "Past payroll calendars are read-only. These are the settings saved for the selected month."
+                : "Weekly days off repeat from the selected month onward. Holidays are specific to each month and must be confirmed separately. You can change these settings later."}
             </p>
             <div style={{ display: "grid", gap: 12 }}>
               <div>
@@ -3058,21 +3062,14 @@ export default function PayrollModule() {
                 >
                   Weekly days off
                 </label>
-                <details
-                  style={{
-                    position: "relative",
-                    fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
-                  }}
-                >
-                  <summary
+                {isPastPayrollMonth ? (
+                  <div
                     style={{
                       ...inputStyle,
                       minHeight: 38,
                       boxSizing: "border-box",
                       display: "flex",
                       alignItems: "center",
-                      cursor: "pointer",
-                      listStyle: "none",
                       color: T.textHeading,
                       fontWeight: 700,
                     }}
@@ -3080,65 +3077,90 @@ export default function PayrollModule() {
                     {selectedMonthWeeklyOffDays
                       .map((day) => day[0].toUpperCase() + day.slice(1))
                       .join(", ") || "Select weekly days off"}
-                  </summary>
-                  <div
+                  </div>
+                ) : (
+                  <details
                     style={{
                       position: "relative",
-                      marginTop: 6,
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: "2px 8px",
-                      padding: 10,
-                      border: `1px solid ${T.border}`,
-                      borderRadius: 12,
-                      background: T.bgCard,
-                      boxShadow: T.shadowCard,
+                      fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
                     }}
                   >
-                    {(
-                      [
-                        "monday",
-                        "tuesday",
-                        "wednesday",
-                        "thursday",
-                        "friday",
-                        "saturday",
-                        "sunday",
-                      ] as PayrollWeekday[]
-                    ).map((day) => (
-                      <label
-                        key={day}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "7px 6px",
-                          borderRadius: 8,
-                          cursor: "pointer",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: T.textHeading,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedMonthWeeklyOffDays.includes(day)}
-                          disabled={
-                            selectedMonthWeeklyOffDays.length === 1 &&
-                            selectedMonthWeeklyOffDays.includes(day)
-                          }
-                          onChange={(event) => {
-                            const days = new Set(selectedMonthWeeklyOffDays);
-                            if (event.target.checked) days.add(day);
-                            else days.delete(day);
-                            updateWeeklyOffDays([...days]);
+                    <summary
+                      style={{
+                        ...inputStyle,
+                        minHeight: 38,
+                        boxSizing: "border-box",
+                        display: "flex",
+                        alignItems: "center",
+                        cursor: "pointer",
+                        listStyle: "none",
+                        color: T.textHeading,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {selectedMonthWeeklyOffDays
+                        .map((day) => day[0].toUpperCase() + day.slice(1))
+                        .join(", ") || "Select weekly days off"}
+                    </summary>
+                    <div
+                      style={{
+                        position: "relative",
+                        marginTop: 6,
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "2px 8px",
+                        padding: 10,
+                        border: `1px solid ${T.border}`,
+                        borderRadius: 12,
+                        background: T.bgCard,
+                        boxShadow: T.shadowCard,
+                      }}
+                    >
+                      {(
+                        [
+                          "monday",
+                          "tuesday",
+                          "wednesday",
+                          "thursday",
+                          "friday",
+                          "saturday",
+                          "sunday",
+                        ] as PayrollWeekday[]
+                      ).map((day) => (
+                        <label
+                          key={day}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "7px 6px",
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: T.textHeading,
                           }}
-                        />
-                        {day[0].toUpperCase() + day.slice(1)}
-                      </label>
-                    ))}
-                  </div>
-                </details>
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedMonthWeeklyOffDays.includes(day)}
+                            disabled={
+                              selectedMonthWeeklyOffDays.length === 1 &&
+                              selectedMonthWeeklyOffDays.includes(day)
+                            }
+                            onChange={(event) => {
+                              const days = new Set(selectedMonthWeeklyOffDays);
+                              if (event.target.checked) days.add(day);
+                              else days.delete(day);
+                              updateWeeklyOffDays([...days]);
+                            }}
+                          />
+                          {day[0].toUpperCase() + day.slice(1)}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
               <div>
                 <label
@@ -3158,12 +3180,14 @@ export default function PayrollModule() {
                     min={`${periodMonth}-01`}
                     max={monthEndDate}
                     value={holidayDateDraft}
+                    disabled={isPastPayrollMonth}
                     onChange={(event) => setHolidayDateDraft(event.target.value)}
                     style={{ ...inputStyle, flex: 1 }}
                   />
                   <button
                     type="button"
                     disabled={
+                      isPastPayrollMonth ||
                       !holidayDateDraft ||
                       monthHolidayDates.includes(holidayDateDraft)
                     }
@@ -3178,6 +3202,7 @@ export default function PayrollModule() {
                       ...primaryButtonStyle,
                       padding: "8px 14px",
                       opacity:
+                        isPastPayrollMonth ||
                         !holidayDateDraft ||
                         monthHolidayDates.includes(holidayDateDraft)
                           ? 0.55
@@ -3208,6 +3233,7 @@ export default function PayrollModule() {
                         <button
                           type="button"
                           aria-label={`Remove holiday ${holiday}`}
+                          disabled={isPastPayrollMonth}
                           onClick={() =>
                             updateMonthCalendar({
                               holidayDates: monthHolidayDates.filter(
@@ -3219,9 +3245,10 @@ export default function PayrollModule() {
                             border: 0,
                             background: "transparent",
                             color: T.red600,
-                            cursor: "pointer",
+                            cursor: isPastPayrollMonth ? "not-allowed" : "pointer",
                             padding: 0,
                             fontWeight: 800,
+                            opacity: isPastPayrollMonth ? 0.5 : 1,
                           }}
                         >
                           ×
@@ -3242,11 +3269,15 @@ export default function PayrollModule() {
                     }}
                   >
                     <span style={{ color: T.textMuted, fontSize: 11 }}>
-                      {monthHolidaysConfirmed
-                        ? "No holidays recorded for this month."
-                        : "If this month has no holidays, confirm that here."}
+                      {isPastPayrollMonth
+                        ? monthHolidaysConfirmed
+                          ? "No holidays recorded for this month."
+                          : "No holiday configuration was saved for this month."
+                        : monthHolidaysConfirmed
+                          ? "No holidays recorded for this month."
+                          : "If this month has no holidays, confirm that here."}
                     </span>
-                    {monthHolidaysConfirmed ? (
+                    {isPastPayrollMonth ? null : monthHolidaysConfirmed ? (
                       <button
                         type="button"
                         onClick={() =>

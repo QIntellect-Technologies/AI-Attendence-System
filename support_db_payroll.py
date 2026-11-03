@@ -3184,6 +3184,39 @@ def get_paid_payroll_periods(org_id: str, period_start: str, period_end: str) ->
             logger.exception('get_paid_payroll_periods failed for org=%s', org_key)
         return set()
 
+def get_paid_payroll_snapshot_breakdowns(
+    org_id: str,
+    period_start: str,
+    period_end: str,
+) -> dict[str, dict]:
+    """Return saved payroll calculations for staff paid in this exact period."""
+    org_key = str(org_id)
+    try:
+        result = _execute_supabase(
+            'get_paid_payroll_snapshot_breakdowns',
+            lambda: (
+                get_supabase()
+                .table('payroll_payments')
+                .select('staff_id, breakdown')
+                .eq('org_id', org_key)
+                .eq('period_start', period_start)
+                .eq('period_end', period_end)
+            ),
+        )
+        return {
+            _payroll_text(row.get('staff_id')): row['breakdown']
+            for row in (result.data or [])
+            if _payroll_text(row.get('staff_id'))
+            and isinstance(row.get('breakdown'), dict)
+        }
+    except Exception as exc:
+        if not _table_missing(exc, 'payroll_payments'):
+            logger.exception(
+                'get_paid_payroll_snapshot_breakdowns failed for org=%s',
+                org_key,
+            )
+        return {}
+
 def mark_payroll_paid(
     org_id: str,
     staff_id: str,
@@ -5250,6 +5283,9 @@ def get_client_payroll_page(
         try:
             period_start_date = date.fromisoformat(period_start_text)
             period_end_date = date.fromisoformat(period_end_text)
+            paid_snapshot_breakdowns = get_paid_payroll_snapshot_breakdowns(
+                org_key, period_start_text, period_end_text,
+            )
 
             distinct_branch_ids = sorted({
                 _payroll_text(staff.get('branch_id'))
@@ -5350,6 +5386,10 @@ def get_client_payroll_page(
                         (dict(breakdown_by_staff), dict(present_days_by_staff), set(paid_staff_ids or set())),
                         _PAYROLL_BREAKDOWN_CACHE_TTL_SECONDS,
                     )
+            # Paid rows must display the calculation captured when they were
+            # processed. Reusing the live result here would let later policy
+            # changes rewrite a closed month's late-arrival deduction.
+            breakdown_by_staff.update(paid_snapshot_breakdowns)
         except Exception:
             logger.exception('Payroll breakdown computation failed for org=%s', org_key)
             breakdown_by_staff = {}

@@ -311,17 +311,7 @@ export default function NotificationsPage() {
           return n;
         }),
       );
-      setUnreadCount(
-        Math.max(
-          0,
-          response.unread_count -
-            response.notifications.filter(
-              (notification) =>
-                isLatePayrollDecisionNotification(notification) &&
-                !notification.is_read,
-            ).length,
-        ),
-      );
+      setUnreadCount(response.unread_count);
       const liveIds = new Set(visibleNotifications.map((n) => n.id));
       setSelectedIds((current) => {
         const next = new Set([...current].filter((id) => liveIds.has(id)));

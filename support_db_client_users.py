@@ -3030,7 +3030,9 @@ def _live_cameras_by_branch(org_id: str, branches: list[dict]) -> dict[str, list
             'location': str(item.get('location') or name).strip(),
             'rtspUrl': rtsp_url,
             'rtsp_url': rtsp_url,
-            'channel': str(item.get('channel') or '').strip(),
+            'channel': str(
+                item.get('channel') if item.get('channel') is not None else ''
+            ).strip(),
             'type': item.get('camera_type') or 'nvr',
             'cameraType': item.get('camera_type') or 'nvr',
             # Always one of Normal / Offline / Not Synced — see
