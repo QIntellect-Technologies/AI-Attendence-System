@@ -76,6 +76,7 @@ export interface AllowanceBreakdownItem {
 }
 
 export interface PayrollTaxSlab {
+  lowerLimit: number;
   upperLimit: number | null;
   baseTax: number;
   rate: number;
@@ -151,14 +152,14 @@ export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   allowanceTypes: {},
   incomeTaxEnabled: false,
   incomeTaxSlabs: [
-    { upperLimit: 600000, baseTax: 0, rate: 0 },
-    { upperLimit: 1200000, baseTax: 0, rate: 1 },
-    { upperLimit: 2200000, baseTax: 6000, rate: 11 },
-    { upperLimit: 3200000, baseTax: 116000, rate: 20 },
-    { upperLimit: 4100000, baseTax: 316000, rate: 25 },
-    { upperLimit: 5600000, baseTax: 541000, rate: 29 },
-    { upperLimit: 7000000, baseTax: 976000, rate: 32 },
-    { upperLimit: null, baseTax: 1424000, rate: 35 },
+    { lowerLimit: 0, upperLimit: 600000, baseTax: 0, rate: 0 },
+    { lowerLimit: 600000, upperLimit: 1200000, baseTax: 0, rate: 1 },
+    { lowerLimit: 1200000, upperLimit: 2200000, baseTax: 6000, rate: 11 },
+    { lowerLimit: 2200000, upperLimit: 3200000, baseTax: 116000, rate: 20 },
+    { lowerLimit: 3200000, upperLimit: 4100000, baseTax: 316000, rate: 25 },
+    { lowerLimit: 4100000, upperLimit: 5600000, baseTax: 541000, rate: 29 },
+    { lowerLimit: 5600000, upperLimit: 7000000, baseTax: 976000, rate: 32 },
+    { lowerLimit: 7000000, upperLimit: null, baseTax: 1424000, rate: 35 },
   ],
 };
 
@@ -197,6 +198,9 @@ function normalizePayrollPolicy(
       ],
     ),
   );
+  const rawIncomeTaxSlabs = Array.isArray(merged.incomeTaxSlabs)
+    ? merged.incomeTaxSlabs
+    : DEFAULT_PAYROLL_POLICY.incomeTaxSlabs;
   return {
     ...merged,
     perDayRateBasis: "scheduled_days",
@@ -209,6 +213,13 @@ function normalizePayrollPolicy(
     payrollWeeklyOffDaysEffectiveFrom:
       currentPolicy.payrollWeeklyOffDaysEffectiveFrom ?? currentMonth,
     payrollCalendarsByMonth: calendars,
+    incomeTaxSlabs: rawIncomeTaxSlabs.map((slab, index) => ({
+      ...slab,
+      lowerLimit:
+        slab.lowerLimit ??
+        (index > 0 ? rawIncomeTaxSlabs[index - 1]?.upperLimit : 0) ??
+        0,
+    })),
   };
 }
 
@@ -229,6 +240,7 @@ export interface PayrollBreakdown {
   halfDayDeductionAmount: number;
   unpaidLeaveDays: number;
   unpaidLeaveDeductionAmount: number;
+  incomeTaxAmount: number;
   overtimeHours: number;
   overtimeAmount: number;
   // Leave days that were excluded from the deduction because attendance
@@ -299,6 +311,7 @@ export interface RawPayrollBreakdown {
   half_day_deduction_amount?: number;
   unpaid_leave_days?: number;
   unpaid_leave_deduction_amount?: number;
+  income_tax_amount?: number;
   overtime_hours?: number;
   overtime_amount?: number;
   attendance_leave_conflict_days?: number;
@@ -374,6 +387,7 @@ export function mapBreakdown(
     halfDayDeductionAmount: Number(raw.half_day_deduction_amount ?? 0),
     unpaidLeaveDays: Number(raw.unpaid_leave_days ?? 0),
     unpaidLeaveDeductionAmount: Number(raw.unpaid_leave_deduction_amount ?? 0),
+    incomeTaxAmount: Number(raw.income_tax_amount ?? 0),
     overtimeHours: Number(raw.overtime_hours ?? 0),
     overtimeAmount: Number(raw.overtime_amount ?? 0),
     attendanceLeaveConflictDays: Number(

@@ -1640,7 +1640,7 @@ function ModulesTab({
                 </button>
               </div>
 
-              {isActive && branches.length > 0 && (
+              {isActive && definition.key !== "income_tax" && branches.length > 0 && (
                 <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                   <div
                     style={{

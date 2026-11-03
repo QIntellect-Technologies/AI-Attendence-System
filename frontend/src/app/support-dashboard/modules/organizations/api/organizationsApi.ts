@@ -98,6 +98,7 @@ export type ClientModuleKey =
   | "employees"
   | "leave"
   | "payroll"
+  | "income_tax"
   | "overtime"
   | "reports"
   | "cctv"
@@ -132,6 +133,12 @@ export const MODULE_DEFINITIONS: readonly ModuleDefinition[] = [
     key: "payroll",
     label: "Payroll",
     description: "Salary configuration, payroll dashboard, and reports.",
+  },
+  {
+    key: "income_tax",
+    label: "Payroll Income Tax",
+    description:
+      "Enables organization-configurable income-tax slabs and the separate tax column in payroll.",
   },
   {
     key: "overtime",

@@ -31,3 +31,47 @@ def test_distinct_allowance_labels_are_valid():
             }
         }
     )
+
+
+def test_income_tax_slabs_require_contiguous_limits():
+    with pytest.raises(ValueError, match="lowerLimit must equal the previous slab"):
+        _validate_payroll_policy(
+            {
+                "incomeTaxSlabs": [
+                    {
+                        "lowerLimit": 0,
+                        "upperLimit": 600_000,
+                        "baseTax": 0,
+                        "rate": 0,
+                    },
+                    {
+                        "lowerLimit": 500_000,
+                        "upperLimit": None,
+                        "baseTax": 0,
+                        "rate": 1,
+                    },
+                ]
+            }
+        )
+
+
+def test_income_tax_slabs_accept_a_terminal_unlimited_slab():
+    _validate_payroll_policy(
+        {
+            "incomeTaxEnabled": True,
+            "incomeTaxSlabs": [
+                {
+                    "lowerLimit": 0,
+                    "upperLimit": 600_000,
+                    "baseTax": 0,
+                    "rate": 0,
+                },
+                {
+                    "lowerLimit": 600_000,
+                    "upperLimit": None,
+                    "baseTax": 0,
+                    "rate": 1,
+                },
+            ],
+        }
+    )

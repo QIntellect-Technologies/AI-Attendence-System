@@ -163,6 +163,8 @@ function buildPayslip(
       deductions.push(["Short leave", breakdown.shortLeaveDeductionAmount]);
     if (breakdown.unpaidLeaveDeductionAmount > 0)
       deductions.push(["Unpaid leave", breakdown.unpaidLeaveDeductionAmount]);
+    if (breakdown.incomeTaxAmount > 0)
+      deductions.push(["Income tax", breakdown.incomeTaxAmount]);
   }
   const itemizedDeductions = deductions.reduce((total, [, amount]) => total + amount, 0);
   const otherDeductions = Math.max(0, row.deductions - itemizedDeductions);

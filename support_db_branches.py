@@ -458,15 +458,16 @@ def toggle_module(org_id: str, module_name: str, status: str) -> dict:
     """Toggle a single module independently from billing (Section 7)."""
     from support_db_client_users import _normalise_module_name, _seed_default_branch_module_people_types
     sb = get_supabase()
+    canonical_module = _normalise_module_name(module_name)
 
     result = sb.table('organization_modules').upsert({
         'org_id':       org_id,
-        'module_name':  module_name,
+        'module_name':  canonical_module,
         'status':       status,
     }, on_conflict='org_id,module_name').execute()
 
     if not result.data:
-        raise RuntimeError(f'Failed to toggle module {module_name}')
+        raise RuntimeError(f'Failed to toggle module {canonical_module}')
 
     # A module turned on for an org that already has branches needs the same
     # default people-type seed a brand-new branch gets in create_branch —
@@ -474,10 +475,10 @@ def toggle_module(org_id: str, module_name: str, status: str) -> dict:
     # admin manually visits the Modules tab. Seeding is insert-if-absent, so
     # this is a no-op for branches that already have rows for this module.
     if str(status).strip().lower() == 'active':
-        canonical_module = _normalise_module_name(module_name)
-        for branch in list_branches(str(org_id)):
-            _seed_default_branch_module_people_types(
-                str(org_id), str(branch['id']), module_keys=[canonical_module],
-            )
+        if canonical_module != 'income_tax':
+            for branch in list_branches(str(org_id)):
+                _seed_default_branch_module_people_types(
+                    str(org_id), str(branch['id']), module_keys=[canonical_module],
+                )
 
     return result.data[0]

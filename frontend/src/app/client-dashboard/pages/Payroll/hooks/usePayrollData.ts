@@ -94,6 +94,7 @@ export interface PayrollRow {
   appliedAllowances: Record<string, AppliedAllowance>;
   allowancesBreakdown: AllowanceBreakdownItem[];
   deductions: number;
+  incomeTaxAmount: number;
   otHours: number;
   /** Effective OT rate applied to this staff member: their override if set, else the org/branch default. */
   otRate: number;
@@ -459,6 +460,11 @@ function normalizePayrollRow(
     appliedAllowances,
     allowancesBreakdown,
     deductions,
+    incomeTaxAmount: numberValue(
+      merged.incomeTaxAmount ??
+        merged.income_tax_amount ??
+        breakdown?.incomeTaxAmount,
+    ),
     otHours,
     otRate,
     otRateOverride,

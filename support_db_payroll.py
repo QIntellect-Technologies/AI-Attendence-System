@@ -2605,6 +2605,17 @@ _DEFAULT_PAYROLL_POLICY = {
     # catalog of what allowance types exist and their default math, mirroring
     # leaveTypeRules' shape/precedence exactly (see get_payroll_policy).
     'allowanceTypes': {},
+    'incomeTaxEnabled': False,
+    'incomeTaxSlabs': [
+        {'lowerLimit': 0, 'upperLimit': 600000, 'baseTax': 0, 'rate': 0},
+        {'lowerLimit': 600000, 'upperLimit': 1200000, 'baseTax': 0, 'rate': 1},
+        {'lowerLimit': 1200000, 'upperLimit': 2200000, 'baseTax': 6000, 'rate': 11},
+        {'lowerLimit': 2200000, 'upperLimit': 3200000, 'baseTax': 116000, 'rate': 20},
+        {'lowerLimit': 3200000, 'upperLimit': 4100000, 'baseTax': 316000, 'rate': 25},
+        {'lowerLimit': 4100000, 'upperLimit': 5600000, 'baseTax': 541000, 'rate': 29},
+        {'lowerLimit': 5600000, 'upperLimit': 7000000, 'baseTax': 976000, 'rate': 32},
+        {'lowerLimit': 7000000, 'upperLimit': None, 'baseTax': 1424000, 'rate': 35},
+    ],
     'payrollCalendarsByMonth': {},
 }
 
@@ -3097,6 +3108,54 @@ def _validate_payroll_policy(policy: dict) -> None:
                 # Matches the frontend's maxLength={40} on the allowance
                 # label input (PayrollModule.tsx).
                 raise ValueError(f'allowanceTypes.{key}.label must be 40 characters or fewer')
+
+    if 'incomeTaxEnabled' in policy and not isinstance(policy['incomeTaxEnabled'], bool):
+        raise ValueError('incomeTaxEnabled must be a boolean')
+
+    tax_slabs = policy.get('incomeTaxSlabs')
+    if tax_slabs is not None:
+        if not isinstance(tax_slabs, list) or not tax_slabs:
+            raise ValueError('incomeTaxSlabs must be a non-empty array')
+        previous_upper: float | None = None
+        for index, slab in enumerate(tax_slabs):
+            label = f'incomeTaxSlabs[{index}]'
+            if not isinstance(slab, dict):
+                raise ValueError(f'{label} must be an object')
+            lower = slab.get('lowerLimit')
+            upper = slab.get('upperLimit')
+            base_tax = slab.get('baseTax')
+            rate = slab.get('rate')
+            for field_name, value in (
+                ('lowerLimit', lower),
+                ('baseTax', base_tax),
+                ('rate', rate),
+            ):
+                _validate_non_negative_number(value, f'{label}.{field_name}')
+            lower_value = float(lower)
+            rate_value = float(rate)
+            base_tax_value = float(base_tax)
+            if index == 0 and lower_value != 0:
+                raise ValueError('incomeTaxSlabs[0].lowerLimit must be 0')
+            if rate_value > _PAYROLL_PERCENT_MAX:
+                raise ValueError(f'{label}.rate cannot exceed {int(_PAYROLL_PERCENT_MAX)}%')
+            if base_tax_value > _PAYROLL_VALUE_MAX:
+                raise ValueError(f'{label}.baseTax cannot exceed {int(_PAYROLL_VALUE_MAX)}')
+            if previous_upper is not None and lower_value != previous_upper:
+                raise ValueError(f'{label}.lowerLimit must equal the previous slab upperLimit')
+            is_last = index == len(tax_slabs) - 1
+            if upper is None:
+                if not is_last:
+                    raise ValueError(f'{label}.upperLimit may be null only for the last slab')
+            else:
+                _validate_non_negative_number(upper, f'{label}.upperLimit')
+                upper_value = float(upper)
+                if upper_value <= lower_value:
+                    raise ValueError(f'{label}.upperLimit must exceed lowerLimit')
+                if upper_value > _PAYROLL_VALUE_MAX:
+                    raise ValueError(f'{label}.upperLimit cannot exceed {int(_PAYROLL_VALUE_MAX)}')
+                previous_upper = upper_value
+                if is_last:
+                    raise ValueError('The last income tax slab must have a null upperLimit')
 
 
 def save_payroll_policy(org_id: str, policy: dict, branch_id: str | None = None, staff_id: str | None = None) -> dict:
@@ -4071,7 +4130,7 @@ def get_client_staff_leave_taken_bulk(
 
 
 def get_org_payroll_module_flags(org_id: str) -> dict[str, bool]:
-    """Which payroll-feeding modules ('leave', 'overtime') the org has ACTIVE.
+    """Which payroll-feeding modules the org has ACTIVE.
 
     Payroll must not read leave / overtime data for an org that never bought
     those modules: the UI hides the related rules and columns, so any
@@ -4087,8 +4146,12 @@ def get_org_payroll_module_flags(org_id: str) -> dict[str, bool]:
         active = set(_active_client_modules(str(org_id)))
     except Exception:
         logger.exception('Payroll module flag lookup failed for org=%s; assuming enabled', org_id)
-        return {'leave': True, 'overtime': True}
-    return {'leave': 'leave' in active, 'overtime': 'overtime' in active}
+        return {'leave': True, 'overtime': True, 'income_tax': False}
+    return {
+        'leave': 'leave' in active,
+        'overtime': 'overtime' in active,
+        'income_tax': 'income_tax' in active,
+    }
 
 def get_approved_overtime_hours_for_payroll_period(
     org_id: str,
@@ -4986,6 +5049,7 @@ def get_client_payroll_page(
     module_flags = get_org_payroll_module_flags(org_key)
     has_leave_module = module_flags['leave']
     has_overtime_module = module_flags['overtime']
+    has_income_tax_module = module_flags.get('income_tax', False)
 
     backend_branch_id: str | None = None
     if _payroll_text(branch_id):
@@ -5322,6 +5386,7 @@ def get_client_payroll_page(
                     f'{org_key}:{"|".join(distinct_branch_ids)}:'
                     f'{period_start_text}:{period_end_text}:{"|".join(sorted(staff_ids))}:'
                     f'L{int(has_leave_module)}O{int(has_overtime_module)}'
+                    f'T{int(has_income_tax_module)}'
                 )
                 cached_breakdown = _cache_get(_PAYROLL_BREAKDOWN_CACHE, cache_key)
 
@@ -5381,15 +5446,31 @@ def get_client_payroll_page(
                     # plus node-classified overtime the local-node payroll-decision
                     # screen approved (never routes through overtime_requests).
                     ot_hours = overtime_by_staff.get(staff_id, 0.0) + local_node_overtime_by_staff.get(staff_id, 0.0)
+                    _, named_allowances = resolve_effective_allowances(
+                        salary_config.get('applied_allowances'),
+                        policy,
+                        basic_salary,
+                    )
+                    monthly_gross_salary = (
+                        basic_salary
+                        + _payroll_float(salary_config.get('allowances'))
+                        + named_allowances
+                        + ot_hours * effective_ot_rate_by_staff.get(staff_id, 0.0)
+                    )
                     breakdown = payroll_engine.compute_payroll_breakdown(
                         base_salary=basic_salary,
                         ot_hours=ot_hours,
                         ot_rate_per_hour=effective_ot_rate_by_staff.get(staff_id, 0.0),
                         period_start=period_start_date,
                         period_end=period_end_date,
-                        policy=policy,
+                        policy=(
+                            policy
+                            if has_income_tax_module
+                            else {**policy, 'incomeTaxEnabled': False}
+                        ),
                         attendance_rows=attendance_by_staff.get(staff_id, []),
                         leave_rows=leaves_by_staff.get(staff_id, []),
+                        monthly_gross_salary=monthly_gross_salary,
                     )
                     breakdown_by_staff[staff_id] = breakdown.to_dict()
                     present_dates = {r['date'] for r in attendance_by_staff.get(staff_id, []) if r.get('date')}

@@ -84,6 +84,7 @@ import {
   type AllowanceMode,
   type AllowanceType,
   type AppliedAllowance,
+  type PayrollTaxSlab,
   PAYROLL_VALUE_MIN,
   PAYROLL_VALUE_MAX,
   PAYROLL_PERCENT_MAX,
@@ -859,6 +860,7 @@ export default function PayrollModule() {
   const gates = usePayrollModuleGates();
   const hasOvertime = gates.overtime;
   const hasLeave = gates.leave;
+  const hasIncomeTax = cfg.modules.includes("income_tax");
 
   // Route param takes highest priority (branch dashboard pages).
   // Falls back to sidebar-selected branch (activeBranchId from OrgConfigContext).
@@ -887,6 +889,14 @@ export default function PayrollModule() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+  const [isIncomeTaxModalOpen, setIsIncomeTaxModalOpen] = useState(false);
+  const [draftIncomeTaxEnabled, setDraftIncomeTaxEnabled] = useState(false);
+  const [draftIncomeTaxSlabs, setDraftIncomeTaxSlabs] = useState<
+    PayrollTaxSlab[]
+  >(DEFAULT_PAYROLL_POLICY.incomeTaxSlabs);
+  const [incomeTaxSaveError, setIncomeTaxSaveError] = useState<string | null>(
+    null,
+  );
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [payslipRow, setPayslipRow] = useState<PayrollRow | null>(null);
   const [lateDecisionRow, setLateDecisionRow] = useState<PayrollRow | null>(
@@ -1343,6 +1353,17 @@ export default function PayrollModule() {
         align: "right" as const,
         numFmt: PKR_NUM_FMT,
       },
+      ...(hasIncomeTax
+        ? [
+            {
+              header: "Income Tax",
+              accessor: (row: PayrollRow) => row.incomeTaxAmount,
+              pdfAccessor: (row: PayrollRow) => fmtPKR(row.incomeTaxAmount),
+              align: "right" as const,
+              numFmt: PKR_NUM_FMT,
+            },
+          ]
+        : []),
       {
         header: "Net Salary",
         accessor: (row: PayrollRow) => row.netPay,
@@ -1352,7 +1373,7 @@ export default function PayrollModule() {
       },
       { header: "Status", accessor: (row: PayrollRow) => row.status },
     ],
-    [otRatePerHour],
+    [hasIncomeTax, otRatePerHour],
   );
 
   const visibleExportFields = useMemo(
@@ -1693,11 +1714,12 @@ export default function PayrollModule() {
         { key: "lateComings", label: "Late Comings" },
         { key: "unpaidLeaves", label: "Unpaid Leaves", requires: "leave" },
         { key: "deductions", label: "Deductions" },
+        ...(hasIncomeTax ? [{ key: "incomeTax", label: "Income Tax" }] : []),
         { key: "net", label: "Net Salary" },
         { key: "status", label: "Status" },
         { key: "action", label: "" },
       ]),
-    [isGlobal, gates],
+    [hasIncomeTax, isGlobal, gates],
   );
 
   // Body cells render off the same filtered list as the header, so a column
@@ -2011,10 +2033,59 @@ export default function PayrollModule() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [policy, isRulesModalOpen]);
 
+  React.useEffect(() => {
+    if (isIncomeTaxModalOpen) {
+      setDraftIncomeTaxEnabled(policy.incomeTaxEnabled);
+      setDraftIncomeTaxSlabs(policy.incomeTaxSlabs);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policy, isIncomeTaxModalOpen]);
+
   const openRulesModal = useCallback(() => {
     setDraftPolicy(policy);
     setIsRulesModalOpen(true);
   }, [policy]);
+
+  const openIncomeTaxModal = useCallback(() => {
+    setDraftIncomeTaxEnabled(policy.incomeTaxEnabled);
+    setDraftIncomeTaxSlabs(policy.incomeTaxSlabs);
+    setIncomeTaxSaveError(null);
+    setIsIncomeTaxModalOpen(true);
+  }, [policy]);
+
+  const saveIncomeTaxPolicy = useCallback(async () => {
+    try {
+      setIncomeTaxSaveError(null);
+      const nextPolicy = {
+        ...policy,
+        incomeTaxEnabled: draftIncomeTaxEnabled,
+        incomeTaxSlabs: draftIncomeTaxSlabs,
+      };
+      await savePolicy(
+        hasOvertime ? nextPolicy : withoutOvertimeRate(nextPolicy),
+      );
+      if (isGlobal) {
+        updateCfg({ payrollPolicy: nextPolicy });
+      } else {
+        void refresh({ force: true });
+      }
+      setIsIncomeTaxModalOpen(false);
+      toastSuccess("Income tax settings saved");
+    } catch (err) {
+      setIncomeTaxSaveError(
+        err instanceof Error ? err.message : "Failed to save income tax settings.",
+      );
+    }
+  }, [
+    draftIncomeTaxEnabled,
+    draftIncomeTaxSlabs,
+    hasOvertime,
+    isGlobal,
+    policy,
+    refresh,
+    savePolicy,
+    updateCfg,
+  ]);
 
   const handleSaveRules = useCallback(async () => {
     try {
@@ -2194,6 +2265,30 @@ export default function PayrollModule() {
           >
             <Settings size={14} color="#fff" /> Payroll Rules
           </button>
+          {hasIncomeTax && (
+            <button
+              type="button"
+              onClick={openIncomeTaxModal}
+              disabled={policyLoading}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                background: T.teal600,
+                border: "none",
+                borderRadius: 10,
+                padding: "9px 16px",
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#fff",
+                cursor: policyLoading ? "wait" : "pointer",
+                opacity: policyLoading ? 0.7 : 1,
+                boxShadow: T.shadowMd,
+              }}
+            >
+              <DollarSign size={14} color="#fff" /> Income Tax Slabs
+            </button>
+          )}
         </div>
       </div>
 
@@ -2704,11 +2799,25 @@ export default function PayrollModule() {
                                 row.breakdown.attendanceLeaveConflictDays > 0
                                   ? `⚠ ${row.breakdown.attendanceLeaveConflictDays}d on file as leave but also attended — excluded from deduction`
                                   : "",
+                                row.breakdown.incomeTaxAmount > 0
+                                  ? `Income tax: ${fmtPKR(row.breakdown.incomeTaxAmount)}`
+                                  : "",
                               ].filter(Boolean)
                             : []
                         }
                       />
                     </td>
+                    {showCol("incomeTax") && (
+                      <td
+                        style={{
+                          ...tableCellStyle,
+                          color: T.red600,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {fmtPKR(row.incomeTaxAmount)}
+                      </td>
+                    )}
                     <td
                       style={{
                         ...tableCellStyle,
@@ -3856,6 +3965,282 @@ export default function PayrollModule() {
             )}
             {policySaving ? "Saving…" : "Save Configuration"}
           </button>
+        </Modal>
+      )}
+
+      {isIncomeTaxModalOpen && (
+        <Modal
+          scrollable
+          onClose={() => !policySaving && setIsIncomeTaxModalOpen(false)}
+        >
+          <h2 style={modalTitleStyle}>Income Tax Slabs</h2>
+          <p style={modalSubStyle}>
+            Configure annual taxable salary thresholds and the monthly tax
+            deduction. Changes apply to this organization or branch policy.
+          </p>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 18,
+              padding: 12,
+              border: `1px solid ${T.border}`,
+              borderRadius: 10,
+              fontSize: 13,
+              fontWeight: 700,
+              color: T.textBody,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={draftIncomeTaxEnabled}
+              onChange={(event) =>
+                setDraftIncomeTaxEnabled(event.target.checked)
+              }
+            />
+            Apply income tax as a payroll deduction
+          </label>
+
+          <div
+            style={{
+              overflowX: "auto",
+              marginBottom: 16,
+              border: `1px solid ${T.border}`,
+              borderRadius: 10,
+            }}
+          >
+            <table
+              style={{
+                width: "100%",
+                minWidth: 580,
+                borderCollapse: "collapse",
+                fontSize: 12,
+              }}
+            >
+              <thead>
+                <tr style={{ background: T.slate50 }}>
+                  {[
+                    "Annual taxable salary (PKR)",
+                    "Base tax (PKR)",
+                    "Rate (%)",
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      style={{
+                        padding: 9,
+                        textAlign: "left",
+                        border: `1px solid ${T.border}`,
+                        color: T.textMuted,
+                        fontSize: 10,
+                      }}
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {draftIncomeTaxSlabs.map((slab, index) => (
+                  <tr key={`${slab.lowerLimit}-${index}`}>
+                    <td
+                      style={{
+                        ...tableCellStyle,
+                        border: `1px solid ${T.border}`,
+                      }}
+                    >
+                      {slab.upperLimit === null ? (
+                        `Above ${slab.lowerLimit.toLocaleString("en-PK")}`
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <span>
+                            {index === 0
+                              ? "Up to"
+                              : `${(slab.lowerLimit + 1).toLocaleString("en-PK")} –`}
+                          </span>
+                          <input
+                            type="number"
+                            min={slab.lowerLimit + 1}
+                            max={Math.min(
+                              PAYROLL_VALUE_MAX,
+                              draftIncomeTaxSlabs[index + 1]?.upperLimit
+                                ? draftIncomeTaxSlabs[index + 1].upperLimit! - 1
+                                : PAYROLL_VALUE_MAX,
+                            )}
+                            step="1"
+                            value={slab.upperLimit}
+                            aria-label={`Slab ${index + 1} upper salary limit`}
+                            onChange={(event) => {
+                              const upperLimit = Math.max(
+                                slab.lowerLimit + 1,
+                                Math.min(
+                                  PAYROLL_VALUE_MAX,
+                                  Number(event.target.value) ||
+                                    slab.lowerLimit + 1,
+                                ),
+                              );
+                              setDraftIncomeTaxSlabs((current) =>
+                                current.map((currentSlab, currentIndex) =>
+                                  currentIndex === index
+                                    ? { ...currentSlab, upperLimit }
+                                    : currentIndex === index + 1
+                                      ? {
+                                          ...currentSlab,
+                                          lowerLimit: upperLimit,
+                                        }
+                                      : currentSlab,
+                                ),
+                              );
+                            }}
+                            style={{
+                              width: 100,
+                              minWidth: 0,
+                              padding: 4,
+                              border: "none",
+                              outline: "none",
+                              background: "transparent",
+                              color: T.textBody,
+                              font: "inherit",
+                            }}
+                          />
+                        </div>
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        ...tableCellStyle,
+                        border: `1px solid ${T.border}`,
+                      }}
+                    >
+                      <input
+                        type="number"
+                        min={0}
+                        max={PAYROLL_VALUE_MAX}
+                        step="1"
+                        value={slab.baseTax}
+                        aria-label={`Slab ${index + 1} base tax`}
+                        onChange={(event) =>
+                          setDraftIncomeTaxSlabs((current) =>
+                            current.map((currentSlab, currentIndex) =>
+                              currentIndex === index
+                                ? {
+                                    ...currentSlab,
+                                    baseTax: Math.max(
+                                      0,
+                                      Math.min(
+                                        PAYROLL_VALUE_MAX,
+                                        Number(event.target.value) || 0,
+                                      ),
+                                    ),
+                                  }
+                                : currentSlab,
+                            ),
+                          )
+                        }
+                        style={{
+                          width: 76,
+                          minWidth: 0,
+                          padding: 4,
+                          border: "none",
+                          outline: "none",
+                          background: "transparent",
+                          color: T.textBody,
+                          font: "inherit",
+                        }}
+                      />
+                    </td>
+                    <td
+                      style={{
+                        ...tableCellStyle,
+                        border: `1px solid ${T.border}`,
+                      }}
+                    >
+                      <input
+                        type="number"
+                        min={0}
+                        max={PAYROLL_PERCENT_MAX}
+                        step="any"
+                        value={slab.rate}
+                        aria-label={`Slab ${index + 1} tax rate`}
+                        onChange={(event) =>
+                          setDraftIncomeTaxSlabs((current) =>
+                            current.map((currentSlab, currentIndex) =>
+                              currentIndex === index
+                                ? {
+                                    ...currentSlab,
+                                    rate: Math.max(
+                                      0,
+                                      Math.min(
+                                        PAYROLL_PERCENT_MAX,
+                                        Number(event.target.value) || 0,
+                                      ),
+                                    ),
+                                  }
+                                : currentSlab,
+                            ),
+                          )
+                        }
+                        style={{
+                          width: 52,
+                          minWidth: 0,
+                          padding: 4,
+                          border: "none",
+                          outline: "none",
+                          background: "transparent",
+                          color: T.textBody,
+                          font: "inherit",
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {rulesBranchUnavailable && (
+            <div role="alert" style={{ color: T.red600, marginBottom: 12 }}>
+              This branch is not ready for payroll policy changes yet.
+            </div>
+          )}
+          {(incomeTaxSaveError || policyError) && (
+            <div
+              role="alert"
+              style={{
+                color: T.red600,
+                fontSize: 12,
+                fontWeight: 600,
+                marginBottom: 12,
+              }}
+            >
+              {incomeTaxSaveError || policyError}
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setIsIncomeTaxModalOpen(false)}
+              disabled={policySaving}
+              style={secondaryButtonStyle}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveIncomeTaxPolicy()}
+              disabled={
+                policySaving ||
+                policyLoading ||
+                rulesBranchUnavailable ||
+                draftIncomeTaxSlabs.length === 0
+              }
+              style={primaryButtonStyle}
+            >
+              {policySaving ? "Saving…" : "Save Tax Settings"}
+            </button>
+          </div>
         </Modal>
       )}
 

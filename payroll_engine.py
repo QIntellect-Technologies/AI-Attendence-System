@@ -457,13 +457,15 @@ def _monthly_income_tax(monthly_gross: float, policy: dict) -> float:
         return 0.0
 
     annual_gross = max(0.0, monthly_gross) * 12
+    previous_upper_limit = 0.0
     for slab in slabs:
         if not isinstance(slab, dict):
             continue
         upper_limit = slab.get('upperLimit')
         if upper_limit is not None and annual_gross > float(upper_limit):
+            previous_upper_limit = float(upper_limit)
             continue
-        lower_limit = float(slab.get('lowerLimit') or 0)
+        lower_limit = float(slab.get('lowerLimit', previous_upper_limit) or 0)
         base_tax = float(slab.get('baseTax') or 0)
         rate = float(slab.get('rate') or 0)
         annual_tax = base_tax + max(0.0, annual_gross - lower_limit) * rate / 100
