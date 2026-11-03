@@ -2912,7 +2912,6 @@ import {
   Eye,
   GitBranch,
   Loader2,
-  Network,
   Plus,
   Save,
   ShieldCheck,
@@ -2937,6 +2936,8 @@ import {
   checkFileSize,
 } from "../../utils/uploadLimits";
 import { findInvalidCameraRtspUrl } from "../../utils/rtspValidation";
+import { confirmDialog } from "../../utils/notifications";
+import ModernSelect from "../../components/ui/ModernSelect";
 import ClassSectionEditor from "../Settings/ClassSectionEditor";
 
 type Branch = {
@@ -4793,8 +4794,6 @@ function CamerasStep({
   branches,
   cameras,
   setCameras,
-  network,
-  setNetwork,
   terminology,
   organization,
 }: {
@@ -4803,8 +4802,6 @@ function CamerasStep({
   setCameras: React.Dispatch<
     React.SetStateAction<Record<string, CameraItem[]>>
   >;
-  network: NetworkConfig;
-  setNetwork: React.Dispatch<React.SetStateAction<NetworkConfig>>;
   terminology: DynamicTerminology;
   organization: BootstrapResponse["organization"];
 }) {
@@ -4852,88 +4849,36 @@ function CamerasStep({
     });
   };
 
+  const removeCamera = async (camera: CameraItem) => {
+    const branchId = activeBranchId;
+    const confirmation = await confirmDialog({
+      title: "Delete camera?",
+      text: `Are you sure you want to delete "${camera.name || terminology.cameraLabel}"?`,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setCameras((prev) => ({
+      ...prev,
+      [branchId]: (prev[branchId] || []).filter(
+        (item) => item.id !== camera.id,
+      ),
+    }));
+  };
+
   return (
     <div>
       <h1 style={h1Style()}>
-        Network and {terminology.cameraPlural.toLowerCase()} configuration
+        {terminology.cameraPlural} configuration
       </h1>
       <p style={subStyle()}>
-        Add public IP, NVR/DVR IP, RTSP credentials, channels, and stream URLs
-        for each support-created branch.
+        Manage camera names, device indices, and direct stream URLs for each
+        support-created branch.
       </p>
 
-      <div style={cardStyle({ padding: 18, marginBottom: 20 })}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            ...sectionTitle(),
-          }}
-        >
-          <Network size={15} /> Network Settings
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 14,
-            marginTop: 14,
-          }}
-        >
-          <Field label="Public IP / Static IP">
-            <input
-              value={network.publicIp}
-              onChange={(e) =>
-                setNetwork((n) => ({ ...n, publicIp: e.target.value }))
-              }
-              style={inputStyle()}
-              placeholder="e.g. 111.88.xx.xx"
-            />
-          </Field>
-          <Field label="NVR / DVR Local IP">
-            <input
-              value={network.nvrDvrIp}
-              onChange={(e) =>
-                setNetwork((n) => ({ ...n, nvrDvrIp: e.target.value }))
-              }
-              style={inputStyle()}
-              placeholder="e.g. 192.168.1.10"
-            />
-          </Field>
-          <Field label="RTSP Port">
-            <input
-              value={network.rtspPort}
-              onChange={(e) =>
-                setNetwork((n) => ({ ...n, rtspPort: e.target.value }))
-              }
-              style={inputStyle()}
-              placeholder="554"
-            />
-          </Field>
-          <Field label="RTSP Username">
-            <input
-              value={network.rtspUsername}
-              onChange={(e) =>
-                setNetwork((n) => ({ ...n, rtspUsername: e.target.value }))
-              }
-              style={inputStyle()}
-              placeholder="admin"
-            />
-          </Field>
-          <Field label="RTSP Password">
-            <input
-              value={network.rtspPassword}
-              onChange={(e) =>
-                setNetwork((n) => ({ ...n, rtspPassword: e.target.value }))
-              }
-              type="password"
-              style={inputStyle()}
-              placeholder="••••••••"
-            />
-          </Field>
-        </div>
-      </div>
+      {/* Temporarily hidden until RTSP URL construction is corrected. The
+          network state remains in the config flow to preserve existing values. */}
 
       <BranchTabs
         branches={branches}
@@ -5003,31 +4948,29 @@ function CamerasStep({
                   style={inputStyle()}
                   placeholder={cam.type === "webcam" ? "Device index" : "Ch."}
                 />
-                <select
+                <ModernSelect
                   value={cam.type}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     patchCamera(cam.id, {
-                      type: e.target.value as CameraItem["type"],
+                      type: value as CameraItem["type"],
                     })
                   }
-                  style={inputStyle()}
-                >
-                  <option value="nvr">NVR</option>
-                  <option value="dvr">DVR</option>
-                  <option value="ip_camera">IP Camera</option>
-                  {organization?.attendance_mode === "local" && (
-                    <option value="webcam">Webcam (USB/built-in)</option>
-                  )}
-                </select>
+                  options={[
+                    { value: "nvr", label: "NVR" },
+                    { value: "dvr", label: "DVR" },
+                    { value: "ip_camera", label: "IP Camera" },
+                    ...(organization?.attendance_mode === "local"
+                      ? [{ value: "webcam", label: "Webcam (USB/built-in)" }]
+                      : []),
+                  ]}
+                  ariaLabel={`${cam.name || terminology.cameraLabel} type`}
+                  width="100%"
+                  minWidth={0}
+                />
                 <button
-                  onClick={() =>
-                    setCameras((prev) => ({
-                      ...prev,
-                      [activeBranchId]: (prev[activeBranchId] || []).filter(
-                        (c) => c.id !== cam.id,
-                      ),
-                    }))
-                  }
+                  type="button"
+                  aria-label={`Remove ${cam.name || terminology.cameraLabel}`}
+                  onClick={() => void removeCamera(cam)}
                   style={iconButtonStyle()}
                 >
                   <Trash2 size={15} />
@@ -5554,16 +5497,8 @@ export default function OnboardingWizard() {
                 typeof updater === "function" ? updater(prev.cameras) : updater,
             }))
           }
-          network={config.network}
           terminology={terminology}
           organization={organization}
-          setNetwork={(updater) =>
-            setConfig((prev) => ({
-              ...prev,
-              network:
-                typeof updater === "function" ? updater(prev.network) : updater,
-            }))
-          }
         />
       );
     }

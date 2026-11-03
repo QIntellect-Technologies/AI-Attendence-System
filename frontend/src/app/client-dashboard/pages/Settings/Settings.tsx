@@ -4335,7 +4335,6 @@ import {
   CheckCircle2,
   GraduationCap,
   Loader2,
-  Network,
   Plus,
   Save,
   ShieldCheck,
@@ -4347,6 +4346,8 @@ import { useOrg } from "../../contexts/OrgConfigContext";
 import { peopleFamilyForType } from "../../utils/templateRendering";
 import { readShiftEnabledPeopleTypes } from "../../utils/shiftSupport";
 import { fetchClientJson, loadClientBootstrap } from "../../services/clintApi";
+import { confirmDialog } from "../../utils/notifications";
+import ModernSelect from "../../components/ui/ModernSelect";
 import DepartmentDesignationEditor from "./DepartmentDesignationEditor";
 import ClassSectionEditor from "./ClassSectionEditor";
 import {
@@ -4581,12 +4582,6 @@ type OperationalPlan = {
   isFactory: boolean;
 };
 
-// UX-only guards for the network/camera/company-profile fields below — the
-// real boundary is the length caps applied server-side in
-// support_db_settings.py so a direct API call can't bypass these.
-const IP_MAX_LENGTH = 45; // fits IPv4, IPv6 and hostnames
-const PORT_MAX_LENGTH = 6;
-const CREDENTIAL_MAX_LENGTH = 128;
 const CAMERA_NAME_MAX_LENGTH = 100;
 const CAMERA_LOCATION_MAX_LENGTH = 150;
 const CAMERA_CHANNEL_MAX_LENGTH = 20;
@@ -5516,20 +5511,7 @@ function CameraSettingsEditor({
   }, [branches, activeBranchId, defaultBranchId]);
 
   const list = cameras[activeBranchId] || [];
-  // This branch's own Public IP / NVR-DVR IP / RTSP credentials only —
-  // never another branch's, even while defaultBranchId/hideTabs are unset
-  // (global view still edits one branch's network at a time via the tabs
-  // below, exactly like the camera list above).
-  const activeNetwork = network[activeBranchId] ?? emptyNetworkConfig();
-
-  const patchNetwork = (patch: Partial<NetworkConfig>) => {
-    if (!activeBranchId) return;
-    setNetwork((prev) => ({
-      ...prev,
-      [activeBranchId]: { ...(prev[activeBranchId] ?? emptyNetworkConfig()), ...patch },
-    }));
-  };
-
+  // Keep camera edits isolated to the active branch.
   const addCamera = () => {
     if (!activeBranchId) return;
     setCameras((prev) => ({
@@ -5572,10 +5554,28 @@ function CameraSettingsEditor({
     });
   };
 
+  const removeCamera = async (camera: CameraItem) => {
+    const branchId = activeBranchId;
+    const confirmation = await confirmDialog({
+      title: "Delete camera?",
+      text: `Are you sure you want to delete "${camera.name || terminology.cameraLabel}"?`,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setCameras((prev) => ({
+      ...prev,
+      [branchId]: (prev[branchId] || []).filter(
+        (item) => item.id !== camera.id,
+      ),
+    }));
+  };
+
   return (
     <ConfigCard
       icon={<Camera size={18} />}
-      title={`Network & ${terminology.cameraPlural}`}
+      title={terminology.cameraPlural}
     >
       <BranchTabs
         branches={branches}
@@ -5583,63 +5583,8 @@ function CameraSettingsEditor({
         onChange={setActiveBranchId}
         hideTabs={hideTabs}
       />
-      {/* Each branch has its own NVR/DVR on its own local network, so these
-          credentials are keyed by activeBranchId above — same isolation as
-          the camera list below, not one config shared across branches. */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-          gap: 14,
-          marginBottom: 18,
-        }}
-      >
-        <Field label="Public IP / Static IP">
-          <input
-            value={activeNetwork.publicIp}
-            onChange={(event) => patchNetwork({ publicIp: event.target.value })}
-            style={inputStyle()}
-            maxLength={IP_MAX_LENGTH}
-          />
-        </Field>
-        <Field label="NVR / DVR Local IP">
-          <input
-            value={activeNetwork.nvrDvrIp}
-            onChange={(event) => patchNetwork({ nvrDvrIp: event.target.value })}
-            style={inputStyle()}
-            maxLength={IP_MAX_LENGTH}
-          />
-        </Field>
-        <Field label="RTSP Port">
-          <input
-            value={activeNetwork.rtspPort}
-            onChange={(event) => patchNetwork({ rtspPort: event.target.value })}
-            style={inputStyle()}
-            maxLength={PORT_MAX_LENGTH}
-          />
-        </Field>
-        <Field label="RTSP Username">
-          <input
-            value={activeNetwork.rtspUsername}
-            onChange={(event) =>
-              patchNetwork({ rtspUsername: event.target.value })
-            }
-            style={inputStyle()}
-            maxLength={CREDENTIAL_MAX_LENGTH}
-          />
-        </Field>
-        <Field label="RTSP Password">
-          <input
-            type="password"
-            value={activeNetwork.rtspPassword}
-            onChange={(event) =>
-              patchNetwork({ rtspPassword: event.target.value })
-            }
-            maxLength={CREDENTIAL_MAX_LENGTH}
-            style={inputStyle()}
-          />
-        </Field>
-      </div>
+      {/* Temporarily hidden while RTSP URL construction is being corrected.
+          Keep network state and serialization intact so existing values survive saves. */}
 
       <div
         style={{
@@ -5707,33 +5652,29 @@ function CameraSettingsEditor({
                 placeholder={camera.type === "webcam" ? "Device index" : "Ch."}
                 maxLength={CAMERA_CHANNEL_MAX_LENGTH}
               />
-              <select
+              <ModernSelect
                 value={camera.type}
-                onChange={(event) =>
+                onChange={(value) =>
                   patchCamera(camera.id, {
-                    type: event.target.value as CameraItem["type"],
+                    type: value as CameraItem["type"],
                   })
                 }
-                style={inputStyle()}
-              >
-                <option value="nvr">NVR</option>
-                <option value="dvr">DVR</option>
-                <option value="ip_camera">IP Camera</option>
-                {organization?.attendance_mode === "local" && (
-                  <option value="webcam">Webcam (USB/built-in)</option>
-                )}
-              </select>
+                options={[
+                  { value: "nvr", label: "NVR" },
+                  { value: "dvr", label: "DVR" },
+                  { value: "ip_camera", label: "IP Camera" },
+                  ...(organization?.attendance_mode === "local"
+                    ? [{ value: "webcam", label: "Webcam (USB/built-in)" }]
+                    : []),
+                ]}
+                ariaLabel={`${camera.name || terminology.cameraLabel} type`}
+                width="100%"
+                minWidth={0}
+              />
               <button
                 type="button"
                 aria-label={`Remove ${camera.name || terminology.cameraLabel}`}
-                onClick={() =>
-                  setCameras((prev) => ({
-                    ...prev,
-                    [activeBranchId]: (prev[activeBranchId] || []).filter(
-                      (item) => item.id !== camera.id,
-                    ),
-                  }))
-                }
+                onClick={() => void removeCamera(camera)}
                 style={buttonStyle("danger")}
               >
                 <Trash2 size={15} />

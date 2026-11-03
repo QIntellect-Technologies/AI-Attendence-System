@@ -2876,12 +2876,10 @@ export const StaffModal: FC<{
   const showSalaryField = hasField("salary");
   const showBenefitsField = hasField("benefits");
   // Payroll rules are considered "implemented" if the org has configured at
-  // least one of: a non-zero OT rate, a non-zero default salary, or at least
-  // one allowance type. If none of these are set the salary input is shown
-  // but blocked with a clear message directing the user to set up Payroll Rules.
+  // least one of: a non-zero OT rate or an allowance type. If neither is set,
+  // the salary input is shown but blocked with a clear setup message.
   const hasPayrollRules =
     cfg.payrollPolicy.otRatePerHour > 0 ||
-    cfg.payrollPolicy.defaultSalary > 0 ||
     Object.keys(cfg.payrollPolicy.allowanceTypes).length > 0;
   const showStaffTypeField =
     peopleModel.showStaffTypeField && hasField("staffType");
@@ -4073,34 +4071,36 @@ export const StaffModal: FC<{
             />
           </div>
 
-          {/* Branch */}
-          <div>
-            <label style={labelStyle}>Branch *</label>
-            {scope === "branch" ? (
-              <div
-                style={{
-                  ...inputStyle,
-                  background: T.teal50,
-                  color: T.teal600,
-                  fontWeight: 600,
-                }}
-              >
-                {cfg.branches.find((b) => b.id === branchId)?.name ?? "Branch"}
-              </div>
-            ) : (
-              <ModernSelect
-                value={String(form.branchId)}
-                onChange={(value) => set("branchId", Number(value))}
-                options={cfg.branches.map((branch) => ({
-                  value: String(branch.id),
-                  label: `${branch.name}${branch.city ? ` — ${branch.city}` : ""}`,
-                }))}
-                ariaLabel="Select branch"
-                width="100%"
-                disabled={cfg.branches.length === 0}
-              />
-            )}
-          </div>
+          {(scope === "branch" || cfg.branches.length !== 1) && (
+            <div>
+              <label style={labelStyle}>Branch *</label>
+              {scope === "branch" ? (
+                <div
+                  style={{
+                    ...inputStyle,
+                    background: T.teal50,
+                    color: T.teal600,
+                    fontWeight: 600,
+                  }}
+                >
+                  {cfg.branches.find((b) => b.id === branchId)?.name ??
+                    "Branch"}
+                </div>
+              ) : (
+                <ModernSelect
+                  value={String(form.branchId)}
+                  onChange={(value) => set("branchId", Number(value))}
+                  options={cfg.branches.map((branch) => ({
+                    value: String(branch.id),
+                    label: `${branch.name}${branch.city ? ` — ${branch.city}` : ""}`,
+                  }))}
+                  ariaLabel="Select branch"
+                  width="100%"
+                  disabled={cfg.branches.length === 0}
+                />
+              )}
+            </div>
+          )}
 
           {/* Class/Section (students only) — showGroupField/showSubGroupField
               are gated to peopleModel.isStudent above. Workforce

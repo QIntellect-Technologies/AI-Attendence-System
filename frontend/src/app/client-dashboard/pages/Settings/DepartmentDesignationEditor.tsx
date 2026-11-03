@@ -52,9 +52,7 @@ export default function DepartmentDesignationEditor({
   hideTabs?: boolean;
 }) {
   const [branchId, setBranchId] = useState(
-    defaultBranchId ??
-    branches[0]?.id ??
-    ""
+    defaultBranchId ?? branches[0]?.id ?? "",
   );
 
   useEffect(() => {
@@ -63,7 +61,10 @@ export default function DepartmentDesignationEditor({
       if (branchId !== defaultBranchId) setBranchId(defaultBranchId);
       return;
     }
-    if (branches.length && (!branchId || !branches.some((b) => b.id === branchId))) {
+    if (
+      branches.length &&
+      (!branchId || !branches.some((b) => b.id === branchId))
+    ) {
       setBranchId(branches[0].id);
     }
   }, [branches, branchId, defaultBranchId]);
@@ -92,17 +93,26 @@ export default function DepartmentDesignationEditor({
   // department_id, see support_db_attendance_settings.py) so this is just
   // the currently loaded department's own rows — no join table anymore.
   const departmentDesignationChips = useMemo(
-    () => designations.slice().sort(byName).map((item) => ({ id: item.id, name: item.name })),
+    () =>
+      designations
+        .slice()
+        .sort(byName)
+        .map((item) => ({ id: item.id, name: item.name })),
     [designations],
   );
 
   const changeDepartment = async (nextId: string) => {
     setDepartmentId(nextId);
-    if (!nextId) { setDesignations([]); return; }
+    if (!nextId) {
+      setDesignations([]);
+      return;
+    }
     try {
       setDesignations(await listDesignations(nextId, organizationId));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to load designations.");
+      setError(
+        cause instanceof Error ? cause.message : "Failed to load designations.",
+      );
     }
   };
 
@@ -113,7 +123,10 @@ export default function DepartmentDesignationEditor({
       setLoading(true);
       setError(null);
       try {
-        const nextDepartments = await listBranchDepartments(branchId, organizationId);
+        const nextDepartments = await listBranchDepartments(
+          branchId,
+          organizationId,
+        );
         if (cancelled) return;
         setDepartments(nextDepartments);
         const nextDepartmentId = nextDepartments.some(
@@ -178,7 +191,7 @@ export default function DepartmentDesignationEditor({
     const target = departments.find((item) => item.id === id);
     const confirmed = window.confirm(
       `Delete "${target?.name ?? "this department"}"?\n\nIt will also delete its designations.`,
-    );  
+    );
     if (!confirmed) return;
     setSaving(true);
     setError(null);
@@ -224,11 +237,15 @@ export default function DepartmentDesignationEditor({
     setSaving(true);
     setError(null);
     try {
-      const created = await createDesignation(departmentId, organizationId, { name });
+      const created = await createDesignation(departmentId, organizationId, {
+        name,
+      });
       setDesignations((items) => [...items, created].sort(byName));
       setNewDesignationName("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to add designation.");
+      setError(
+        cause instanceof Error ? cause.message : "Failed to add designation.",
+      );
     } finally {
       setSaving(false);
     }
@@ -240,9 +257,15 @@ export default function DepartmentDesignationEditor({
     setError(null);
     try {
       await deleteDesignation(designationId, organizationId);
-      setDesignations((items) => items.filter((item) => item.id !== designationId));
+      setDesignations((items) =>
+        items.filter((item) => item.id !== designationId),
+      );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to remove designation.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Failed to remove designation.",
+      );
     } finally {
       setSaving(false);
     }
@@ -251,8 +274,8 @@ export default function DepartmentDesignationEditor({
   return (
     <ConfigCard icon={<Users size={18} />} title="Departments & Designations">
       <p style={{ margin: "-6px 0 16px", color: C.textSub, fontSize: 12 }}>
-        Add departments for a branch, then add the designations that belong
-        to that department.
+        Add departments for a branch, then add the designations that belong to
+        that department.
       </p>
       {error && (
         <p
@@ -327,12 +350,8 @@ export default function DepartmentDesignationEditor({
                 ? `Designations for ${selectedDepartment.name}`
                 : "Designations"}
             </h3>
-            <p style={{ margin: "8px 0 12px", color: C.textSub, fontSize: 12 }}>
-              {selectedDepartment
-                ? `${departmentDesignationChips.length} assigned to ${selectedDepartment.name}.`
-                : "Select a department on the left to add its designations."}
-            </p>
-            <div style={{ display: "flex", gap: 10, margin: "0 0 14px" }}>
+
+            <div style={{ display: "flex", gap: 10, margin: "12px 0 14px" }}>
               <input
                 value={newDesignationName}
                 onChange={(event) => setNewDesignationName(event.target.value)}
@@ -352,11 +371,7 @@ export default function DepartmentDesignationEditor({
                 type="button"
                 onClick={() => void addDesignationToDepartment()}
                 style={buttonStyle("primary")}
-                disabled={
-                  saving ||
-                  !departmentId ||
-                  !newDesignationName.trim()
-                }
+                disabled={saving || !departmentId || !newDesignationName.trim()}
               >
                 <Plus size={15} /> Add
               </button>

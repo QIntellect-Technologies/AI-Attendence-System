@@ -282,7 +282,8 @@ connection.
 from __future__ import annotations
 from calendar import monthrange
 from datetime import date
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
+from math import isfinite
 
 
 @dataclass
@@ -307,12 +308,41 @@ class PayrollBreakdown:
     scheduled_work_days: int
     absent_days: float
     absence_deduction_amount: float
+    income_tax_amount: float
     total_deductions: float
     total_additions: float
     net_pay: float
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def is_complete_breakdown_snapshot(snapshot: object) -> bool:
+    """Validate a stored calculation against the current breakdown schema."""
+    if not isinstance(snapshot, dict):
+        return False
+    if not isinstance(snapshot.get('pending_late_decisions'), list):
+        return False
+
+    numeric_fields = (
+        field.name
+        for field in fields(PayrollBreakdown)
+        if field.name != 'pending_late_decisions'
+    )
+    values: dict[str, float] = {}
+    try:
+        for name in numeric_fields:
+            raw_value = snapshot[name]
+            if isinstance(raw_value, bool):
+                return False
+            values[name] = float(raw_value)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    return (
+        all(isfinite(value) for value in values.values())
+        and values['scheduled_work_days'] > 0
+    )
 
 
 def _month_calendar(policy: dict, month_key: str) -> tuple[set[int], set[str]]:
@@ -419,6 +449,28 @@ def _late_deduction(late_count: int, per_day_rate: float, policy: dict) -> tuple
     return 0.0, 0.0  # mode == 'none'
 
 
+def _monthly_income_tax(monthly_gross: float, policy: dict) -> float:
+    if not policy.get('incomeTaxEnabled'):
+        return 0.0
+    slabs = policy.get('incomeTaxSlabs')
+    if not isinstance(slabs, list):
+        return 0.0
+
+    annual_gross = max(0.0, monthly_gross) * 12
+    for slab in slabs:
+        if not isinstance(slab, dict):
+            continue
+        upper_limit = slab.get('upperLimit')
+        if upper_limit is not None and annual_gross > float(upper_limit):
+            continue
+        lower_limit = float(slab.get('lowerLimit') or 0)
+        base_tax = float(slab.get('baseTax') or 0)
+        rate = float(slab.get('rate') or 0)
+        annual_tax = base_tax + max(0.0, annual_gross - lower_limit) * rate / 100
+        return round(annual_tax / 12, 2)
+    return 0.0
+
+
 def _decision_included(row: dict, key: str) -> bool:
     """A row with no decision recorded yet (None -- the pre-migration
     default, and every historical row before Phase 1 shipped) is treated
@@ -514,6 +566,7 @@ def compute_payroll_breakdown(
     policy: dict,
     attendance_rows: list[dict],   # [{date, checkInStatus, dayStatus}]
     leave_rows: list[dict],        # [{leaveType, days, dates?}]
+    monthly_gross_salary: float | None = None,
 ) -> PayrollBreakdown:
     # Guarded here, not just at the route layer, so every current and
     # future caller of this function is protected regardless of how it got
@@ -660,6 +713,12 @@ def compute_payroll_breakdown(
         short_leave_deduction_amount += hours_short * (per_day_rate / shift_hours)
 
     overtime_amount = ot_hours * ot_rate_per_hour
+    income_tax_amount = _monthly_income_tax(
+        monthly_gross_salary
+        if monthly_gross_salary is not None
+        else base_salary + overtime_amount,
+        policy,
+    )
 
     total_deductions = (
         absence_deduction_amount
@@ -667,6 +726,7 @@ def compute_payroll_breakdown(
         + half_day_deduction_amount
         + short_leave_deduction_amount
         + unpaid_leave_deduction_amount
+        + income_tax_amount
     )
     total_additions = overtime_amount
     net_pay = max(0.0, base_salary + total_additions - total_deductions)
@@ -692,6 +752,7 @@ def compute_payroll_breakdown(
         scheduled_work_days=len(scheduled_dates),
         absent_days=round(absent_days, 2),
         absence_deduction_amount=round(absence_deduction_amount, 2),
+        income_tax_amount=income_tax_amount,
         total_deductions=round(total_deductions, 2),
         total_additions=round(total_additions, 2),
         net_pay=round(net_pay, 2),

@@ -74,6 +74,12 @@ export interface AllowanceBreakdownItem {
   value: number;
   amount: number;
 }
+
+export interface PayrollTaxSlab {
+  upperLimit: number | null;
+  baseTax: number;
+  rate: number;
+}
 export type LateComingMode =
   | "none"
   | "occurrence_threshold"
@@ -125,6 +131,8 @@ export interface PayrollPolicy {
   /** Org/branch-scoped catalog of named allowance types. Keyed the same way
    * as leaveTypeRules (lowercase slug). See AllowanceType. */
   allowanceTypes: Record<string, AllowanceType>;
+  incomeTaxEnabled: boolean;
+  incomeTaxSlabs: PayrollTaxSlab[];
 }
 
 export type PayrollPolicyWrite = Omit<PayrollPolicy, "otRatePerHour"> &
@@ -141,6 +149,17 @@ export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   leaveTypeRules: {},
   leaveTypeQuotas: {},
   allowanceTypes: {},
+  incomeTaxEnabled: false,
+  incomeTaxSlabs: [
+    { upperLimit: 600000, baseTax: 0, rate: 0 },
+    { upperLimit: 1200000, baseTax: 0, rate: 1 },
+    { upperLimit: 2200000, baseTax: 6000, rate: 11 },
+    { upperLimit: 3200000, baseTax: 116000, rate: 20 },
+    { upperLimit: 4100000, baseTax: 316000, rate: 25 },
+    { upperLimit: 5600000, baseTax: 541000, rate: 29 },
+    { upperLimit: 7000000, baseTax: 976000, rate: 32 },
+    { upperLimit: null, baseTax: 1424000, rate: 35 },
+  ],
 };
 
 function normalizePayrollPolicy(

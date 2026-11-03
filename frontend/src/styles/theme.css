@@ -8,7 +8,7 @@
 /* ── Core palette ─────────────────────────────────────────── */
 :root {
   /* ── Typography ────────────────────────────────────────── */
-  --font-body: "Times New Roman", system-ui, -apple-system, sans-serif;
+  --font-body: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-heading: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-display:
     "DM Serif Display", Georgia, serif; /* for hero numbers / big stat values */
@@ -91,6 +91,7 @@
 
 body {
   font-family: var(--font-body);
+  font-synthesis: none;
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-body);

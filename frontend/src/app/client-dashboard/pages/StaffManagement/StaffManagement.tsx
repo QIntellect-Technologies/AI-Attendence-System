@@ -227,17 +227,26 @@ const StaffDirectory: FC = () => {
   const [activeTab, setActiveTab] = useState<StaffDirectoryTab>("directory");
   const debouncedQuery = useDebouncedValue(query, 250);
 
+  const visibleBranches = useMemo(
+    () =>
+      isBranchDashboard
+        ? cfg.branches.filter((branch) => branch.id === effectiveBranchId)
+        : cfg.branches,
+    [isBranchDashboard, cfg.branches, effectiveBranchId],
+  );
+  const hasMultipleBranches = visibleBranches.length > 1;
   const peopleTableColumns = useMemo(
     () =>
       getPeopleTableColumns(
         templateColumnModel.peopleColumns,
-        isGlobalDashboard,
+        isGlobalDashboard && hasMultipleBranches,
         peopleModel.peopleType,
         cfg.modules,
         peopleModel.showStaffTypeField,
       ),
     [
       cfg.modules,
+      hasMultipleBranches,
       isGlobalDashboard,
       peopleModel.peopleType,
       peopleModel.showStaffTypeField,
@@ -247,13 +256,6 @@ const StaffDirectory: FC = () => {
   const peopleTableGridTemplate = useMemo(
     () => staffGridTemplate(peopleTableColumns),
     [peopleTableColumns],
-  );
-  const visibleBranches = useMemo(
-    () =>
-      isBranchDashboard
-        ? cfg.branches.filter((branch) => branch.id === effectiveBranchId)
-        : cfg.branches,
-    [isBranchDashboard, cfg.branches, effectiveBranchId],
   );
   const selectedBranch = useMemo(
     () =>
@@ -852,7 +854,7 @@ const StaffDirectory: FC = () => {
         id: "branch",
         type: "select",
         label: templateFilterByKey.get("branchId")?.label ?? "Branch",
-        hidden: !isGlobalDashboard,
+        hidden: !isGlobalDashboard || !hasMultipleBranches,
         value: String(branchFilter),
         options: branchOptions,
         minWidth: 190,
@@ -956,6 +958,7 @@ const StaffDirectory: FC = () => {
       query,
       resetFilters,
       isGlobalDashboard,
+      hasMultipleBranches,
       sortDir,
       sortDirectionOptions,
       sortKey,
@@ -1937,6 +1940,7 @@ const StaffDirectory: FC = () => {
   );
 
   const headerCols = peopleTableColumns;
+  const showBranchColumn = isGlobalDashboard && hasMultipleBranches;
 
   return (
     <div
@@ -2401,7 +2405,9 @@ const StaffDirectory: FC = () => {
                   style={{
                     display: "grid",
                     gridTemplateColumns:
-                      "36px 1.4fr 1.1fr 1fr 1fr .9fr 1fr 210px",
+                      showBranchColumn
+                        ? "36px 1.4fr 1.1fr 1fr 1fr .9fr 1fr 210px"
+                        : "36px 1.4fr 1.1fr 1fr .9fr 1fr 210px",
                     gap: 12,
                     padding: "10px 16px",
                     background: T.teal50,
@@ -2431,7 +2437,7 @@ const StaffDirectory: FC = () => {
                   />
                   <div>Name</div>
                   <div>{peopleCodeModel(peopleModel.peopleType).label}</div>
-                  <div>Branch</div>
+                  {showBranchColumn && <div>Branch</div>}
                   <div>Department</div>
                   <div>Status</div>
                   <div>Biometrics</div>
@@ -2446,8 +2452,9 @@ const StaffDirectory: FC = () => {
                       key={member.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns:
-                          "36px 1.4fr 1.1fr 1fr 1fr .9fr 1fr 210px",
+                        gridTemplateColumns: showBranchColumn
+                          ? "36px 1.4fr 1.1fr 1fr 1fr .9fr 1fr 210px"
+                          : "36px 1.4fr 1.1fr 1fr .9fr 1fr 210px",
                         gap: 12,
                         padding: "12px 16px",
                         borderBottom: `1px solid ${T.teal50}`,
@@ -2474,9 +2481,11 @@ const StaffDirectory: FC = () => {
                         {member.personCode || member.employeeId || "—"}
                       </div>
 
-                      <div style={{ color: T.navy600, fontWeight: 700 }}>
-                        {branchName(member.branchId)}
-                      </div>
+                      {showBranchColumn && (
+                        <div style={{ color: T.navy600, fontWeight: 700 }}>
+                          {branchName(member.branchId)}
+                        </div>
+                      )}
 
                       <div style={{ color: T.head }}>
                         {member.department || "—"}

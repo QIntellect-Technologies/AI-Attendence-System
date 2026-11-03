@@ -3189,7 +3189,11 @@ def get_paid_payroll_snapshot_breakdowns(
     period_start: str,
     period_end: str,
 ) -> dict[str, dict]:
-    """Return saved payroll calculations for staff paid in this exact period."""
+    """Return complete saved payroll calculations for staff paid this period.
+
+    Older/incomplete snapshots must not override the live calculation with
+    missing fields that the payroll UI would otherwise display as zero.
+    """
     org_key = str(org_id)
     try:
         result = _execute_supabase(
@@ -3203,12 +3207,23 @@ def get_paid_payroll_snapshot_breakdowns(
                 .eq('period_end', period_end)
             ),
         )
-        return {
-            _payroll_text(row.get('staff_id')): row['breakdown']
-            for row in (result.data or [])
-            if _payroll_text(row.get('staff_id'))
-            and isinstance(row.get('breakdown'), dict)
-        }
+        snapshots: dict[str, dict] = {}
+        for row in result.data or []:
+            staff_id = _payroll_text(row.get('staff_id'))
+            breakdown = row.get('breakdown')
+            if not staff_id or not isinstance(breakdown, dict):
+                continue
+            if not payroll_engine.is_complete_breakdown_snapshot(breakdown):
+                logger.warning(
+                    'Ignoring incomplete payroll snapshot for org=%s staff=%s period=%s..%s',
+                    org_key,
+                    staff_id,
+                    period_start,
+                    period_end,
+                )
+                continue
+            snapshots[staff_id] = breakdown
+        return snapshots
     except Exception as exc:
         if not _table_missing(exc, 'payroll_payments'):
             logger.exception(

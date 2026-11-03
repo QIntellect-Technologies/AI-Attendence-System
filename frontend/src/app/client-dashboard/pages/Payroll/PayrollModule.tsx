@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
+  FileText,
   Edit2,
   Loader2,
   Settings,
@@ -94,6 +95,7 @@ import {
 import { listBranchDepartments } from "../StaffManagement/api/attendanceSettingsApi";
 import GroupedBarChartCard from "../../components/ui/charts/GroupedBarChartCard";
 import LineChartCard from "../../components/ui/charts/LineChartCard";
+import PayrollPayslipDialog from "./components/PayrollPayslipDialog";
 const T = {
   teal600: "#0d9488",
   teal200: "#99f6e4",
@@ -886,6 +888,7 @@ export default function PayrollModule() {
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [payslipRow, setPayslipRow] = useState<PayrollRow | null>(null);
   const [lateDecisionRow, setLateDecisionRow] = useState<PayrollRow | null>(
     null,
   );
@@ -1050,13 +1053,6 @@ export default function PayrollModule() {
     month: "long",
     year: "numeric",
   });
-  const showNextMonthCalendarReminder =
-    currentMonthLastDate - currentDate.getDate() <= 7 &&
-    policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidaysConfirmed !==
-      true &&
-    (policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidayDates?.length ??
-      0) === 0;
-
   const effectiveBranchId = isGlobal
     ? branchSelector.selectedBranchId
     : scopedBranchId;
@@ -2000,6 +1996,12 @@ export default function PayrollModule() {
     error: policyError,
     save: savePolicy,
   } = usePayrollPolicy({ branchId: rulesBranchId });
+  const showNextMonthCalendarReminder =
+    currentMonthLastDate - currentDate.getDate() <= 7 &&
+    policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidaysConfirmed !==
+      true &&
+    (policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidayDates?.length ??
+      0) === 0;
 
   // Keep the draft in sync with the effective policy for the current
   // (implicit) scope — fires on open, and again if the person navigates
@@ -2755,21 +2757,44 @@ export default function PayrollModule() {
                       </button>
                     </td>
                     <td style={tableCellStyle}>
-                      <button
-                        onClick={() => openEditModal(row)}
-                        style={{
-                          background: "none",
-                          border: `1px solid ${T.border}`,
-                          borderRadius: 8,
-                          padding: "6px 8px",
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          color: T.textMuted,
-                        }}
-                      >
-                        <Edit2 size={13} />
-                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button
+                          type="button"
+                          aria-label={`View ${row.name}'s payslip`}
+                          title="View or download payslip"
+                          onClick={() => setPayslipRow(row)}
+                          style={{
+                            background: "none",
+                            border: `1px solid ${T.border}`,
+                            borderRadius: 8,
+                            padding: "6px 8px",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            color: T.teal600,
+                          }}
+                        >
+                          <FileText size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Edit ${row.name}'s payroll`}
+                          title="Edit payroll"
+                          onClick={() => openEditModal(row)}
+                          style={{
+                            background: "none",
+                            border: `1px solid ${T.border}`,
+                            borderRadius: 8,
+                            padding: "6px 8px",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            color: T.textMuted,
+                          }}
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -2849,6 +2874,22 @@ export default function PayrollModule() {
           branches={branchOptions}
           selectedBranchId={effectiveBranchId}
           onEditRow={openEditModal}
+        />
+      )}
+
+      {payslipRow && (
+        <PayrollPayslipDialog
+          row={payslipRow}
+          companyName={cfg.orgName}
+          companyAddress={cfg.address}
+          logoUrl={cfg.logo}
+          branchLocation={
+            cfg.branches.find((branch) => branch.id === payslipRow.branchId)
+              ?.city ?? ""
+          }
+          period={payrollDateFilter.label}
+          formatCurrency={fmtPKR}
+          onClose={() => setPayslipRow(null)}
         />
       )}
 

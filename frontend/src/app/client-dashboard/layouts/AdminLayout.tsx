@@ -722,7 +722,6 @@ export default function AdminLayout() {
         height: "100vh",
         overflow: "hidden",
         background: T.bg,
-        fontFamily: "'DM Sans', sans-serif",
       }}
     >
       {/* ── REUSABLE SIDEBAR ── */}
