@@ -15,10 +15,12 @@ import DashboardCard from "./DashboardCard";
 import { T } from "../../ui/theme";
 import { useOrg } from "../../../contexts/OrgConfigContext";
 import type {
-  DashboardLiveLogItem,
   TodayStatusItem,
 } from "../../../hooks/useDashboardOverviewData";
-import { getAttendanceLogs } from "../../../pages/attendance_temp/api/attendanceApi";
+import {
+  getAttendanceToday,
+  type TodayAttendanceRecord,
+} from "../../../pages/attendance_temp/api/attendanceApi";
 import { MoreHorizontal, ChevronDown, Building2, Users } from "lucide-react";
 
 // ─── Department colours ────────────────────────────────────────────────────────
@@ -58,7 +60,6 @@ interface DeptStats {
 interface TodayStatusCardProps {
   data?: TodayStatusItem[];
   presentToday: number;
-  liveLog?: DashboardLiveLogItem[];
   totalStaff?: number;
 }
 
@@ -66,25 +67,28 @@ interface TodayStatusCardProps {
 const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
   data,
   presentToday,
-  liveLog = [],
   totalStaff = 0,
 }) => {
   const items = data ?? [];
   const { cfg } = useOrg();
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [fetchedLogs, setFetchedLogs] = useState<any[]>([]);
+  const [todayRecords, setTodayRecords] = useState<TodayAttendanceRecord[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (liveLog.length === 0) {
-      getAttendanceLogs(500)
-        .then((logs) => setFetchedLogs(logs))
-        .catch(() => {});
-    } else {
-      setFetchedLogs(liveLog);
-    }
-  }, [liveLog]);
+    let active = true;
+    getAttendanceToday({ limit: 2000 })
+      .then((records) => {
+        if (active) setTodayRecords(records);
+      })
+      .catch((error) => {
+        console.error("Failed to load today's department attendance", error);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // ── All configured department names (source of truth) ─────────────────────
   const cfgDeptNames = useMemo<string[]>(() => {
@@ -114,9 +118,15 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
       cfgDeptNames.map((name) => [name, { present: 0, late: 0, absent: 0 }])
     );
 
-    for (const entry of fetchedLogs) {
+    const seenStaff = new Set<string>();
+    for (const entry of todayRecords) {
       const dept = entry.department;
       if (!dept) continue; // skip entries with no department (don't bucket as Unassigned)
+      const staffId = entry.staffId ?? entry.userId ?? entry.id;
+      const identity = String(staffId);
+      if (seenStaff.has(identity)) continue;
+      seenStaff.add(identity);
+
       // Case-insensitive match to cfg dept names
       const matched = cfgDeptNames.find(
         (n) => n.toLowerCase() === dept.toLowerCase()
@@ -124,7 +134,10 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
       if (!map.has(matched)) map.set(matched, { present: 0, late: 0, absent: 0 });
       const bucket = map.get(matched)!;
       const status = (entry.status || "").toLowerCase();
-      if (status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day") bucket.present++;
+      if (status === "present" || status === "late" || status === "checked_in" || status === "checked_out" || status === "half_day") {
+        if (status === "late") bucket.late++;
+        else bucket.present++;
+      }
       else if (status === "absent") bucket.absent++;
     }
 
@@ -135,7 +148,7 @@ const TodayStatusCard: React.FC<TodayStatusCardProps> = ({
         ...counts,
       }))
       .sort((a, b) => b.total - a.total);
-  }, [fetchedLogs, cfgDeptNames]);
+  }, [todayRecords, cfgDeptNames]);
 
   const hasDeptData = deptStats.length > 0;
 

@@ -395,7 +395,6 @@ const BranchOverviewTab: React.FC<BranchOverviewTabProps> = ({ branchId }) => {
             <TodayStatusCard
               data={data.todayStatus}
               presentToday={data.stats.presentToday}
-              liveLog={data.liveLog}
               totalStaff={data.stats.totalStaff}
             />
           )}

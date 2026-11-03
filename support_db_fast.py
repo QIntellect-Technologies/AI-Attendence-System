@@ -2535,8 +2535,11 @@ def _direct_staff_page(scope: FastScope, page: int, page_size: int, search: Opti
     if scope.scope_ids is not None and not scope.scope_ids:
         return _page_result("staff", [], 0, page, page_size, (page - 1) * page_size, "client_staff")
 
+    timing_started = time.perf_counter()
     sb = get_supabase_client()
+    branch_started = time.perf_counter()
     branch_id = _resolve_branch_id(sb, scope.org_id, scope.branch_id)
+    branch_ms = (time.perf_counter() - branch_started) * 1000
     # Deliberately does NOT filter .eq("role", "staff") — the Staff
     # Directory is a roster of everyone in the org, and an admin is still
     # an employee, not a separate account type that exits the roster (see
@@ -2553,7 +2556,9 @@ def _direct_staff_page(scope: FastScope, page: int, page_size: int, search: Opti
     if scope.scope_ids is not None:
         base = base.in_("id", list(scope.scope_ids))
     base = _or_search(base, search, ["name", "email", "employee_id", "department_name", "role_name", "phone"])
+    count_started = time.perf_counter()
     total = _safe_count(base)
+    count_ms = (time.perf_counter() - count_started) * 1000
 
     query = sb.table("client_staff").select("*").eq("org_id", scope.org_id).eq("is_archived", False)
     if branch_id:
@@ -2571,22 +2576,88 @@ def _direct_staff_page(scope: FastScope, page: int, page_size: int, search: Opti
     # unhandled postgrest/pydantic exception reaching the route layer as an
     # opaque 500 -- this was the actual query on the Staff Search path
     # involved in the WAF-crash bug.
+    rows_started = time.perf_counter()
     result = _execute_supabase(
         "fast.staff_page.rows",
         lambda: query.range(offset, offset + page_size - 1),
     )
+    rows_ms = (time.perf_counter() - rows_started) * 1000
     rows = result.data or []
+    branch_indexes_ms: Optional[float] = None
+    shift_ms: Optional[float] = None
+    department_ms: Optional[float] = None
+    designation_ms: Optional[float] = None
+    mapping_ms: Optional[float] = None
+    branch_indexes_started: Optional[float] = None
+    shift_started: Optional[float] = None
+    department_started: Optional[float] = None
+    designation_started: Optional[float] = None
+    mapping_started: Optional[float] = None
     try:
         import support_db  # local project mapper keeps camelCase aliases and UI branch ids consistent
+        import support_db_staff
+
+        branch_indexes_started = time.perf_counter()
+        branch_indexes = support_db_staff._client_branch_indexes(scope.org_id)
+        branch_indexes_ms = (time.perf_counter() - branch_indexes_started) * 1000
+        shift_started = time.perf_counter()
         shifts_by_id = support_db._resolve_shift_map(
             scope.org_id, {row.get('shift_id_ref') for row in rows}
         )
+        shift_ms = (time.perf_counter() - shift_started) * 1000
+        department_started = time.perf_counter()
+        departments_by_id = support_db_staff._resolve_department_map(
+            scope.org_id, {row.get('department_id') for row in rows}
+        )
+        department_ms = (time.perf_counter() - department_started) * 1000
+        designation_started = time.perf_counter()
+        designations_by_id = support_db_staff._resolve_designation_map(
+            scope.org_id, {row.get('designation_id') for row in rows}
+        )
+        designation_ms = (time.perf_counter() - designation_started) * 1000
+        mapping_started = time.perf_counter()
         rows = [
-            support_db._client_staff_safe(row, scope.org_id, shifts_by_id=shifts_by_id)
+            support_db._client_staff_safe(
+                row,
+                scope.org_id,
+                branch_indexes=branch_indexes,
+                shifts_by_id=shifts_by_id,
+                departments_by_id=departments_by_id,
+                designations_by_id=designations_by_id,
+            )
             for row in rows
         ]
+        mapping_ms = (time.perf_counter() - mapping_started) * 1000
     except Exception:
+        if branch_indexes_ms is None and branch_indexes_started is not None:
+            branch_indexes_ms = (time.perf_counter() - branch_indexes_started) * 1000
+        if shift_ms is None and shift_started is not None:
+            shift_ms = (time.perf_counter() - shift_started) * 1000
+        if department_ms is None and department_started is not None:
+            department_ms = (time.perf_counter() - department_started) * 1000
+        if designation_ms is None and designation_started is not None:
+            designation_ms = (time.perf_counter() - designation_started) * 1000
+        if mapping_ms is None and mapping_started is not None:
+            mapping_ms = (time.perf_counter() - mapping_started) * 1000
         pass
+    logger.info(
+        "fast.staff_page timing cache=miss page=%s page_size=%s rows=%s "
+        "branch_ms=%.1f count_ms=%.1f rows_ms=%.1f branch_indexes_ms=%s "
+        "shift_ms=%s department_ms=%s designation_ms=%s mapping_ms=%s "
+        "total_ms=%.1f",
+        page,
+        page_size,
+        len(rows),
+        branch_ms,
+        count_ms,
+        rows_ms,
+        f"{branch_indexes_ms:.1f}" if branch_indexes_ms is not None else "failed",
+        f"{shift_ms:.1f}" if shift_ms is not None else "failed",
+        f"{department_ms:.1f}" if department_ms is not None else "failed",
+        f"{designation_ms:.1f}" if designation_ms is not None else "failed",
+        f"{mapping_ms:.1f}" if mapping_ms is not None else "failed",
+        (time.perf_counter() - timing_started) * 1000,
+    )
     return _page_result("staff", rows, total, page, page_size, offset, "client_staff")
 
 
@@ -3491,6 +3562,7 @@ def get_fast_page(entity: str, scope: FastScope, *, page: int = 1, page_size: in
     page = max(int(page or 1), 1)
     page_size = max(min(int(page_size or 50), 250), 1)
     entity = str(entity or "").strip().lower()
+    timing_started = time.perf_counter() if entity in {"staff", "employees"} else None
     offset = (page - 1) * page_size
     payload = {
         "p_entity": entity,
@@ -3517,6 +3589,15 @@ def get_fast_page(entity: str, scope: FastScope, *, page: int = 1, page_size: in
     key = "page:" + _json_hash(payload)
     cached = _cache.get(key)
     if cached is not None:
+        if timing_started is not None:
+            logger.info(
+                "fast.staff_page timing cache=hit page=%s page_size=%s "
+                "rows=%s total_ms=%.1f",
+                page,
+                page_size,
+                len(cached.get("rows", [])) if isinstance(cached, dict) else 0,
+                (time.perf_counter() - timing_started) * 1000,
+            )
         result = ok(cached, cached=True)
         result["page"] = page
         return result
