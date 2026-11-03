@@ -89,6 +89,11 @@ USAGE
         python -m scripts.seed_demo_org --cleanup-all            # delete all demo orgs
         python -m scripts.seed_demo_org --verify <org_id>        # re-check a live org
 
+    Load-test data is isolated in a new organization and never runs demo cleanup:
+
+        python seed_demo_org.py --load-test --dry-run
+        python seed_demo_org.py --load-test --months 2026-09 2026-10
+
     --dry-run needs no database and no .env at all. Always run it first.
 
     Requires SUPABASE_URL and SUPABASE_SERVICE_KEY in your .env (service role
@@ -199,6 +204,7 @@ MONTHLY_SALARY = {
 }
 
 MODULES = ["attendance", "employees", "leave", "payroll", "overtime", "reports"]
+LOAD_TEST_MODULES = ["attendance", "employees", "payroll", "reports"]
 
 # ── Shifts ───────────────────────────────────────────────────────────────
 # check_in_time / check_out_time here are the ONLY source of truth for what
@@ -395,13 +401,34 @@ def minutes_between(t1: time, t2: time) -> int:
     return (t2.hour * 60 + t2.minute) - (t1.hour * 60 + t1.minute)
 
 
-def annual_income_tax(annual_taxable: float) -> float:
+def annual_income_tax(annual_taxable: float, slabs: list[dict] | None = None) -> float:
     if not ENABLE_INCOME_TAX:
+        return 0.0
+    if slabs is not None:
+        for slab in slabs:
+            upper = slab.get("upperLimit")
+            if upper is not None and annual_taxable > float(upper):
+                continue
+            lower = float(slab.get("lowerLimit") or 0)
+            base_tax = float(slab.get("baseTax") or 0)
+            rate = float(slab.get("rate") or 0)
+            return base_tax + max(0.0, annual_taxable - lower) * rate / 100
         return 0.0
     for upper, fixed, rate, lower in INCOME_TAX_SLABS:
         if annual_taxable <= upper:
             return fixed + (annual_taxable - lower) * rate
     return 0.0
+
+
+def payroll_income_tax_slabs() -> list[dict]:
+    """Use the payroll module's own default slab configuration for a new
+    load-test organization instead of maintaining a second tax schedule."""
+    from support_db_payroll import _DEFAULT_PAYROLL_POLICY
+
+    slabs = _DEFAULT_PAYROLL_POLICY.get("incomeTaxSlabs")
+    if not isinstance(slabs, list) or not slabs:
+        raise RuntimeError("Payroll default income-tax slabs are unavailable.")
+    return [dict(slab) for slab in slabs]
 
 
 def weighted_pick(rng: random.Random, pairs: list[tuple[str, float]]) -> str:
@@ -498,6 +525,13 @@ class Dataset:
     org_id: str
     window_start: date
     window_end: date
+    org_name: str = ORG_NAME
+    email_domain: str = DEMO_EMAIL_DOMAIN
+    demo_marker: str = DEMO_MARKER
+    load_test_mode: bool = False
+    include_all_payroll: bool = False
+    expected_staff_count: int | None = None
+    income_tax_slabs: list[dict] = field(default_factory=list)
     holidays: dict[date, str] = field(default_factory=dict)
     org_row: dict = field(default_factory=dict)
     branches: list[dict] = field(default_factory=list)
@@ -548,8 +582,8 @@ def build_org(ds: Dataset) -> None:
     vc = _vertical_config()
     ds.org_row = {
         "id": ds.org_id,
-        "name": ORG_NAME,
-        "contact_email": CONTACT_EMAIL,
+        "name": ds.org_name,
+        "contact_email": f"admin@{ds.email_domain}",
         "contact_phone": "+92-300-1234567",
         "org_type": "school",
         "business_type": "school",
@@ -572,20 +606,21 @@ def build_org(ds: Dataset) -> None:
     }
 
 
-def build_branches(ds: Dataset) -> None:
-    for b in BRANCHES:
+def build_branches(ds: Dataset, staff_counts: list[int] | None = None) -> None:
+    for index, b in enumerate(BRANCHES):
+        staff_count = staff_counts[index] if staff_counts is not None else b["staff_count"]
         ds.branches.append({
             "id": new_id(),
             "org_id": ds.org_id,
             "name": b["name"],
             "location": b["location"],
-            "max_staff_capacity": max(100, b["staff_count"] * 2),
+            "max_staff_capacity": max(100, staff_count * 2),
             "fallback_active": False,
             "shift_enabled_people_types": ["staff"],
             "timezone": TIMEZONE,
             "created_at": now_iso(),
             "updated_at": now_iso(),
-            "_staff_count": b["staff_count"],  # stripped before insert
+            "_staff_count": staff_count,  # stripped before insert
         })
 
 
@@ -649,8 +684,16 @@ def build_roles(ds: Dataset) -> None:
             })
 
 
+def organization_modules(ds: Dataset) -> list[str]:
+    modules = list(LOAD_TEST_MODULES if ds.load_test_mode else MODULES)
+    if ds.load_test_mode and ENABLE_INCOME_TAX and "income_tax" not in modules:
+        modules.append("income_tax")
+    return modules
+
+
 def build_billing(ds: Dataset) -> None:
-    for name in MODULES:
+    modules = organization_modules(ds)
+    for name in modules:
         ds.modules.append({
             "id": new_id(), "org_id": ds.org_id, "module_name": name,
             "status": "active", "purchased_at": now_iso(),
@@ -683,7 +726,7 @@ def build_users(ds: Dataset, hash_fn) -> dict[str, str]:
     ds.users = [
         {
             "id": admin_id, "org_id": ds.org_id,
-            "email": f"principal@{DEMO_EMAIL_DOMAIN}", "password_hash": pw,
+            "email": f"principal@{ds.email_domain}", "password_hash": pw,
             "full_name": "Dr. Farrukh Zaman", "role": "admin", "is_active": True,
             "must_change_password": False, "password_changed_at": now_iso(),
             # requires_onboarding is driven off THIS column on client_users, not
@@ -694,7 +737,7 @@ def build_users(ds: Dataset, hash_fn) -> dict[str, str]:
         },
         {
             "id": manager_id, "org_id": ds.org_id,
-            "email": f"hr@{DEMO_EMAIL_DOMAIN}", "password_hash": pw,
+            "email": f"hr@{ds.email_domain}", "password_hash": pw,
             "full_name": "Ayesha Malik", "role": "hr", "is_active": True,
             "must_change_password": False, "password_changed_at": now_iso(),
             "onboarding_completed_at": now_iso(),
@@ -784,10 +827,17 @@ def build_staff(
 
             salary = MONTHLY_SALARY[role_name]
             is_manager = role_name in {"Principal", "Vice Principal"}
-            access_modules = (
-                MODULES if role_name in {"Principal", "Vice Principal", "HR Administrator"}
-                else ["attendance", "leave"]
-            )
+            if ds.load_test_mode:
+                access_modules = (
+                    organization_modules(ds)
+                    if role_name in {"Principal", "Vice Principal", "HR Administrator"}
+                    else ["attendance", "payroll"]
+                )
+            else:
+                access_modules = (
+                    MODULES if role_name in {"Principal", "Vice Principal", "HR Administrator"}
+                    else ["attendance", "leave"]
+                )
 
             staff_id = new_id()
             ds.staff.append({
@@ -796,7 +846,7 @@ def build_staff(
                 "branch_id": branch["id"],
                 "employee_id": code,
                 "name": f"{first} {last}",
-                "email": f"{first.lower()}.{last.lower()}{seq}@{DEMO_EMAIL_DOMAIN}",
+                "email": f"{first.lower()}.{last.lower()}{seq}@{ds.email_domain}",
                 "phone": f"+9230{rng.randint(10000000, 99999999)}",
                 "role": "staff",
                 "department_name": dept_name,
@@ -1065,7 +1115,10 @@ def build_leave(ds: Dataset) -> dict[str, dict[str, dict[str, float]]]:
     return balances
 
 
-def build_ledger_and_attendance(ds: Dataset) -> None:
+def build_ledger_and_attendance(
+    ds: Dataset,
+    day_weights: list[tuple[str, float]] | None = None,
+) -> None:
     """
     Walks every employee across every day of the window and writes the ledger,
     then emits the attendance rows implied by it.
@@ -1137,7 +1190,10 @@ def build_ledger_and_attendance(ds: Dataset) -> None:
                 days[day] = rec
                 continue
 
-            outcome = weighted_pick(rng, TODAY_WEIGHTS if day == ds.window_end else DAY_WEIGHTS)
+            weights = day_weights or (
+                TODAY_WEIGHTS if day == ds.window_end else DAY_WEIGHTS
+            )
+            outcome = weighted_pick(rng, weights)
 
             if outcome == "absent":
                 # Unauthorised absence: no attendance row, full day deducted.
@@ -1232,7 +1288,7 @@ def _emit_attendance_rows(ds: Dataset, staff: dict, days: dict[date, DayRecord],
             "confidence": round(rng.uniform(0.86, 0.99), 4),
             "created_at": iso_ts(day, rec.check_in),
             "metadata": {
-                "seed": DEMO_MARKER,
+                "seed": ds.demo_marker,
                 "shift_name": staff["shift_label"],
                 "shift_start": staff["duty_start"],
                 "shift_end": staff["duty_end"],
@@ -1246,7 +1302,7 @@ def _emit_attendance_rows(ds: Dataset, staff: dict, days: dict[date, DayRecord],
             "check_out_timestamp": iso_ts(day, rec.check_out) if rec.has_checkout and rec.check_out else None,
             "check_out_status": "on_time" if rec.day_status == "present" else rec.day_status,
             "check_out_confidence": round(rng.uniform(0.86, 0.99), 4) if rec.has_checkout else None,
-            "check_out_metadata": {"seed": DEMO_MARKER, "overtime_minutes": rec.overtime_minutes},
+            "check_out_metadata": {"seed": ds.demo_marker, "overtime_minutes": rec.overtime_minutes},
             "check_out_hold_reason": hold_reason,
             "day_status": rec.day_status,
             "check_in_confirmed": True,
@@ -1331,7 +1387,8 @@ def build_periods(ds: Dataset) -> None:
 def compute_payslip(
     staff: dict, period_start: date, period_end: date, finalized: bool,
     ledger_days: dict[date, DayRecord], approved_ot_hours: float,
-    holidays: dict[date, str],
+    holidays: dict[date, str], income_tax_slabs: list[dict] | None = None,
+    demo_marker: str = DEMO_MARKER,
 ) -> dict:
     """
     THE payslip calculation. Both the seeder and the verifier call this, and
@@ -1394,8 +1451,8 @@ def compute_payslip(
     penalised_lates = max(0, late_count - LATE_GRACE_PER_MONTH)
     late_deduction = money(penalised_lates * LATE_PENALTY_DAY_FRACTION * per_day)
     provident_fund = staff["_pf"]
-    monthly_taxable = basic + allowances
-    income_tax = money(annual_income_tax(monthly_taxable * 12) / 12)
+    monthly_taxable = gross if income_tax_slabs is not None else basic + allowances
+    income_tax = money(annual_income_tax(monthly_taxable * 12, income_tax_slabs) / 12)
     total_deductions = money(
         unpaid_leave_deduction + absence_deduction + late_deduction
         + provident_fund + income_tax
@@ -1470,7 +1527,7 @@ def compute_payslip(
         },
         "net_pay": net_pay,
         "notes": notes,
-        "seed": DEMO_MARKER,
+        "seed": demo_marker,
     }
 
 
@@ -1484,6 +1541,8 @@ def build_payroll(ds: Dataset, approved_ot: dict[tuple[str, int, int], float]) -
             breakdown = compute_payslip(
                 staff, period_start, period_end, finalized,
                 ds.ledger[staff["id"]], ot_hours, ds.holidays,
+                ds.income_tax_slabs or None,
+                ds.demo_marker,
             )
             ds.payroll.append({
                 "org_id": ds.org_id,
@@ -1574,7 +1633,7 @@ def build_notifications(ds: Dataset, users: dict[str, str]) -> None:
         e_row.update({
             "id": new_id(),
             "org_id": ds.org_id,
-            "metadata": {"seed": DEMO_MARKER},
+            "metadata": {"seed": ds.demo_marker},
             "created_at": (datetime.now(timezone.utc)
                            - timedelta(hours=rng.randint(1, 96))).isoformat(),
             "_recipients": list(users.values()),
@@ -1584,9 +1643,40 @@ def build_notifications(ds: Dataset, users: dict[str, str]) -> None:
 
 
 def build_onboarding(ds: Dataset) -> None:
+    tax_slabs = ds.income_tax_slabs or [
+        {
+            "lowerLimit": lower,
+            "upperLimit": None if upper == float("inf") else upper,
+            "baseTax": fixed,
+            "rate": rate * 100,
+        }
+        for upper, fixed, rate, lower in INCOME_TAX_SLABS
+    ]
+    weekday_names = (
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    )
+    weekly_off_days = [
+        name for weekday, name in enumerate(weekday_names) if weekday not in WORKDAYS
+    ]
+    payroll_calendars = {}
+    year, month = ds.window_start.year, ds.window_start.month
+    while (year, month) <= (ds.window_end.year, ds.window_end.month):
+        month_start, month_end = month_bounds(year, month)
+        payroll_calendars[f"{year:04d}-{month:02d}"] = {
+            "weeklyOffDays": weekly_off_days,
+            "holidayDates": [
+                day.isoformat()
+                for day in ds.holidays
+                if month_start <= day <= month_end
+            ],
+        }
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+
     ds.onboarding = {
         "org_id": ds.org_id,
-        "company_profile": {"name": ORG_NAME, "industry": "Education"},
+        "company_profile": {"name": ds.org_name, "industry": "Education"},
         "departments": {"default": [d for d, _ in DEPARTMENTS]},
         "roles": {"default": [r for r, _, _ in ROLES]},
         "shifts": {"default": [t["name"] for t in SHIFT_TEMPLATES]},
@@ -1616,6 +1706,12 @@ def build_onboarding(ds: Dataset) -> None:
             "standard_hours_per_day": STANDARD_HOURS_PER_DAY,
             "income_tax_enabled": ENABLE_INCOME_TAX,
             "workweek": sorted(WORKDAYS),
+            # Canonical payroll_engine keys; legacy onboarding keys remain
+            # available to existing readers and derive from the same config.
+            "incomeTaxEnabled": ENABLE_INCOME_TAX,
+            "incomeTaxSlabs": tax_slabs,
+            "payrollWeeklyOffDays": weekly_off_days,
+            "payrollCalendarsByMonth": payroll_calendars,
             "public_holidays": [
                 {"date": d.isoformat(), "name": n} for d, n in sorted(ds.holidays.items())
             ],
@@ -1840,6 +1936,8 @@ def verify_dataset(ds: Dataset) -> list[str]:
         expected = compute_payslip(
             s, ps, pe, finalized_by_period[(ps, pe)], rebuilt[s["id"]],
             approved_ot.get((s["id"], ps.year, ps.month), 0.0), ds.holidays,
+            ds.income_tax_slabs or None,
+            ds.demo_marker,
         )
         got = row["breakdown"]
         for section in ("attendance", "earnings", "deductions"):
@@ -1873,6 +1971,59 @@ def verify_dataset(ds: Dataset) -> list[str]:
         if int(row["late_count"]) != got["attendance"]["late_days"]:
             errors.append(f"payroll {s['name']}: late_count column != breakdown")
 
+    if ds.load_test_mode:
+        if len(ds.staff) != ds.expected_staff_count:
+            errors.append(
+                f"load test: expected {ds.expected_staff_count} staff, got {len(ds.staff)}"
+            )
+        if ds.leave_requests or ds.leave_balances:
+            errors.append("load test must not generate leave requests or balances")
+        if ds.overtime_requests or any(
+            a["day_status"] == "overtime" for a in ds.attendance
+        ):
+            errors.append("load test must not generate overtime")
+        if len(ds.periods) != 2 or any(not finalized for _, _, finalized in ds.periods):
+            errors.append("load test must contain exactly two finalized monthly periods")
+        expected_payslips = len(ds.staff) * 2
+        if len(ds.payroll) != expected_payslips:
+            errors.append(
+                f"load test expected {expected_payslips} payslips, got {len(ds.payroll)}"
+            )
+        policy = ds.onboarding.get("payroll_policy", {})
+        if policy.get("incomeTaxEnabled") != ENABLE_INCOME_TAX:
+            errors.append("load test tax enablement does not match its payroll policy")
+        if policy.get("incomeTaxSlabs") != ds.income_tax_slabs:
+            errors.append("load test tax slabs do not match the payroll policy")
+        if (
+            ENABLE_INCOME_TAX
+            and "income_tax" not in {row["module_name"] for row in ds.modules}
+        ):
+            errors.append("load test income-tax module entitlement is missing")
+        if ENABLE_INCOME_TAX and not any(
+            row["breakdown"]["deductions"]["income_tax"] > 0 for row in ds.payroll
+        ):
+            errors.append("load test payroll does not exercise configured income tax")
+        expected_weekly_off = {
+            name for weekday, name in enumerate(
+                ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+            ) if weekday not in WORKDAYS
+        }
+        if set(policy.get("payrollWeeklyOffDays", [])) != expected_weekly_off:
+            errors.append("load test weekly-off days do not match WORKDAYS")
+        calendars = policy.get("payrollCalendarsByMonth", {})
+        for period_start, period_end, _ in ds.periods:
+            month_key = period_start.strftime("%Y-%m")
+            calendar_config = calendars.get(month_key, {})
+            if set(calendar_config.get("weeklyOffDays", [])) != expected_weekly_off:
+                errors.append(f"load test weekly-off calendar mismatch for {month_key}")
+            configured_holidays = set(calendar_config.get("holidayDates", []))
+            expected_holidays = {
+                day.isoformat() for day in ds.holidays
+                if period_start <= day <= period_end
+            }
+            if configured_holidays != expected_holidays:
+                errors.append(f"load test payroll holiday calendar mismatch for {month_key}")
+
     return errors
 
 
@@ -1880,13 +2031,70 @@ def verify_dataset(ds: Dataset) -> list[str]:
 # Dataset assembly
 # ─────────────────────────────────────────────────────────────────────────
 
-def build_dataset(hash_fn) -> Dataset:
-    start, end = compute_window()
-    ds = Dataset(org_id=new_id(), window_start=start, window_end=end)
+LOAD_TEST_DAY_WEIGHTS = [
+    ("on_time", 0.94),
+    ("absent", 0.05),
+    ("missing_checkout", 0.01),
+]
+
+
+def completed_month_window(month_values: list[str] | None = None) -> tuple[date, date]:
+    """Return two consecutive, fully completed calendar months."""
+    current_month_start = date.today().replace(day=1)
+    if month_values is None:
+        last_month_end = current_month_start - timedelta(days=1)
+        second_start, _ = month_bounds(last_month_end.year, last_month_end.month)
+        previous_month_end = second_start - timedelta(days=1)
+        first_start, _ = month_bounds(previous_month_end.year, previous_month_end.month)
+        return first_start, last_month_end
+
+    if len(month_values) != 2:
+        raise ValueError("Exactly two --months values are required (YYYY-MM YYYY-MM).")
+    try:
+        months = [date.fromisoformat(f"{value}-01") for value in month_values]
+    except ValueError as exc:
+        raise ValueError("Months must use YYYY-MM format.") from exc
+    first_start, second_start = months
+    first_end = month_bounds(first_start.year, first_start.month)[1]
+    second_end = month_bounds(second_start.year, second_start.month)[1]
+    if first_end + timedelta(days=1) != second_start:
+        raise ValueError("The selected months must be consecutive and chronological.")
+    if second_end >= current_month_start:
+        raise ValueError("Load-test months must both be fully completed months.")
+    return first_start, second_end
+
+
+def build_dataset(
+    hash_fn, *, window: tuple[date, date] | None = None,
+    staff_count: int | None = None, load_test_mode: bool = False,
+) -> Dataset:
+    start, end = window or compute_window()
+    org_id = new_id()
+    token = org_id.split("-")[0]
+    ds = Dataset(
+        org_id=org_id,
+        window_start=start,
+        window_end=end,
+        load_test_mode=load_test_mode,
+        include_all_payroll=load_test_mode,
+        expected_staff_count=staff_count if load_test_mode else None,
+    )
+    if load_test_mode:
+        if staff_count is None or staff_count < 1:
+            raise ValueError("Load-test staff count must be greater than zero.")
+        if len(BRANCHES) != 2:
+            raise RuntimeError("The load-test profile requires exactly two configured branches.")
+        ds.org_name = f"AI Attendance Load Test {token}"
+        ds.email_domain = f"loadtest-{token}.qintellect.io"
+        ds.demo_marker = f"qintellect_load_test_seed_{token}"
+        ds.income_tax_slabs = payroll_income_tax_slabs()
+        branch_counts = [(staff_count + 1) // 2, staff_count // 2]
+    else:
+        branch_counts = None
     ds.holidays = build_holidays(start, end)
 
     build_org(ds)
-    build_branches(ds)
+    build_branches(ds, branch_counts)
     shifts_by_branch = build_shifts(ds)
     departments = build_departments(ds)
     build_roles(ds)
@@ -1894,9 +2102,12 @@ def build_dataset(hash_fn) -> Dataset:
     users = build_users(ds, hash_fn)
     build_staff(ds, shifts_by_branch, departments)
     build_salary_configs(ds)
-    build_leave(ds)
-    build_ledger_and_attendance(ds)
-    approved_ot = build_overtime_requests(ds)
+    if not load_test_mode:
+        build_leave(ds)
+    build_ledger_and_attendance(
+        ds, LOAD_TEST_DAY_WEIGHTS if load_test_mode else None
+    )
+    approved_ot = {} if load_test_mode else build_overtime_requests(ds)
     build_periods(ds)
     build_payroll(ds, approved_ot)
     build_notifications(ds, users)
@@ -1930,9 +2141,9 @@ def summarize(ds: Dataset) -> dict:
             "late_count": sum(int(r["late_count"]) for r in rows),
         })
 
-    return {
+    summary = {
         "org_id": ds.org_id,
-        "org_name": ORG_NAME,
+        "org_name": ds.org_name,
         "window": {"start": ds.window_start.isoformat(), "end": ds.window_end.isoformat(),
                    "days": (ds.window_end - ds.window_start).days + 1},
         "headcount": by_branch,
@@ -1957,6 +2168,20 @@ def summarize(ds: Dataset) -> dict:
         },
         "payroll_periods": periods,
     }
+    if ds.load_test_mode:
+        for period, (period_start, _, _) in zip(periods, ds.periods):
+            rows = [p for p in ds.payroll if p["period_start"] == period_start.isoformat()]
+            period["income_tax"] = money(sum(
+                r["breakdown"]["deductions"]["income_tax"] for r in rows
+            ))
+        summary["load_test"] = {
+            "staff_count": len(ds.staff),
+            "income_tax_enabled": ENABLE_INCOME_TAX,
+            "income_tax_slabs": ds.income_tax_slabs,
+            "working_weekdays": sorted(WORKDAYS),
+            "leave_and_overtime_generated": False,
+        }
+    return summary
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2040,7 +2265,7 @@ LEAVE_BALANCE_TABLE_CANDIDATES = ["leave_balances", "leave_quotas", "staff_leave
 
 
 def push_dataset(sb, ds: Dataset) -> None:
-    print(f"Organization created: {ds.org_id} ({ORG_NAME})")
+    print(f"Organization created: {ds.org_id} ({ds.org_name})")
     sb.table("organizations").insert(_public(ds.org_row)).execute()
     insert_batch(sb, "branches", ds.branches)
     insert_batch(sb, "shifts", ds.shifts)
@@ -2058,7 +2283,7 @@ def push_dataset(sb, ds: Dataset) -> None:
     insert_batch(sb, "overtime_requests", ds.overtime_requests)
     finalized_payroll_rows = [p for p in ds.payroll if p["paid_at"] is not None]
     payroll_rows = list(finalized_payroll_rows)
-    if not SEED_IN_PROGRESS_PAYROLL:
+    if not ds.include_all_payroll and not SEED_IN_PROGRESS_PAYROLL:
         pending_count = int(round(len(finalized_payroll_rows) * PAYROLL_PENDING_FRACTION))
         if pending_count > 0 and len(finalized_payroll_rows) > pending_count:
             rng = random.Random(RNG_SEED + 7)
@@ -2299,7 +2524,7 @@ def _hash_fn(real: bool):
 
 def _print_summary(ds: Dataset, summary: dict) -> None:
     print("\n" + "=" * 72)
-    print(f"{ORG_NAME}   org_id = {ds.org_id}")
+    print(f"{ds.org_name}   org_id = {ds.org_id}")
     print(f"Window: {summary['window']['start']} .. {summary['window']['end']}  "
           f"({summary['window']['days']} days)")
     print("Headcount: " + ", ".join(f"{k} {v}" for k, v in summary["headcount"].items())
@@ -2313,10 +2538,17 @@ def _print_summary(ds: Dataset, summary: dict) -> None:
           f"{summary['overtime']['approved_hours']:g}h approved "
           f"({summary['overtime']['pending_hours']:g}h pending)")
     print("\nPayroll periods")
-    print(f"  {'period':<26} {'status':<12} {'gross':>14} {'deductions':>13} {'net':>14}")
-    for p in summary["payroll_periods"]:
-        print(f"  {p['period']:<26} {p['status']:<12} {p['gross']:>14,.0f} "
-              f"{p['deductions']:>13,.0f} {p['net']:>14,.0f}")
+    if ds.load_test_mode:
+        print(f"  {'period':<26} {'status':<12} {'gross':>14} {'tax':>12} "
+              f"{'deductions':>13} {'net':>14}")
+        for p in summary["payroll_periods"]:
+            print(f"  {p['period']:<26} {p['status']:<12} {p['gross']:>14,.0f} "
+                  f"{p['income_tax']:>12,.0f} {p['deductions']:>13,.0f} {p['net']:>14,.0f}")
+    else:
+        print(f"  {'period':<26} {'status':<12} {'gross':>14} {'deductions':>13} {'net':>14}")
+        for p in summary["payroll_periods"]:
+            print(f"  {p['period']:<26} {p['status']:<12} {p['gross']:>14,.0f} "
+                  f"{p['deductions']:>13,.0f} {p['net']:>14,.0f}")
     print("=" * 72)
 
 
@@ -2341,8 +2573,8 @@ def seed(cleanup_first: bool = True, out_dir: Path | None = None) -> str:
     _write_artifacts(ds, summary, out_dir or Path.cwd())
     _print_summary(ds, summary)
     print("Client Dashboard login:")
-    print(f"  Admin -> principal@{DEMO_EMAIL_DOMAIN} / {DEMO_LOGIN_PASSWORD}")
-    print(f"  HR    -> hr@{DEMO_EMAIL_DOMAIN} / {DEMO_LOGIN_PASSWORD}")
+    print(f"  Admin -> principal@{ds.email_domain} / {DEMO_LOGIN_PASSWORD}")
+    print(f"  HR    -> hr@{ds.email_domain} / {DEMO_LOGIN_PASSWORD}")
     print(f"To delete later:  python -m scripts.seed_demo_org --cleanup {ds.org_id}")
     return ds.org_id
 
@@ -2372,6 +2604,57 @@ def dry_run(out_dir: Path) -> int:
     return 0
 
 
+def run_load_test(
+    *, dry: bool, staff_count: int, month_values: list[str] | None, out_dir: Path,
+) -> int:
+    try:
+        window = completed_month_window(month_values)
+        ds = build_dataset(
+            _hash_fn(real=not dry),
+            window=window,
+            staff_count=staff_count,
+            load_test_mode=True,
+        )
+    except (ImportError, RuntimeError, ValueError) as exc:
+        print(f"Load-test configuration error: {exc}")
+        return 2
+
+    errors = verify_dataset(ds)
+    summary = summarize(ds)
+    _print_summary(ds, summary)
+    if errors:
+        print(f"\n{len(errors)} CONSISTENCY FAILURE(S); nothing was written:")
+        for error in errors[:25]:
+            print(f"  ! {error}")
+        return 1
+
+    print(
+        f"\nLoad-test consistency check passed: {len(ds.staff)} staff, "
+        f"{len(ds.attendance):,} attendance rows, {len(ds.payroll)} payslips, "
+        f"{len(ds.periods)} completed periods."
+    )
+    if dry:
+        _write_artifacts(ds, summary, out_dir / "load_test_artifacts")
+        print("Dry run only: no database rows were written.")
+        return 0
+
+    try:
+        sb = get_client()
+        push_dataset(sb, ds)
+    except Exception as exc:
+        print(f"Load-test database insert failed for org {ds.org_id}: {exc}")
+        print(f"If any rows were inserted, delete this isolated org with --cleanup {ds.org_id}.")
+        return 1
+
+    _write_artifacts(ds, summary, out_dir / "load_test_artifacts")
+    _print_summary(ds, summary)
+    print("Client Dashboard login:")
+    print(f"  Admin -> principal@{ds.email_domain} / {DEMO_LOGIN_PASSWORD}")
+    print(f"  HR    -> hr@{ds.email_domain} / {DEMO_LOGIN_PASSWORD}")
+    print(f"To delete this load-test organization:  python seed_demo_org.py --cleanup {ds.org_id}")
+    return 0
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[2])
     parser.add_argument("--dry-run", action="store_true",
@@ -2389,10 +2672,32 @@ if __name__ == "__main__":
                              "deterministically and re-verifies the arithmetic)")
     parser.add_argument("--out", metavar="DIR", default=".",
                         help="Where to write the summary/balance JSON (default: cwd)")
+    parser.add_argument("--load-test", action="store_true",
+                        help="Generate an isolated staff/attendance/payroll load-test organization")
+    parser.add_argument("--staff-count", type=int, default=120,
+                        help="Staff count for --load-test (default: 120)")
+    parser.add_argument("--months", nargs=2, metavar=("YYYY-MM", "YYYY-MM"),
+                        help="Two consecutive completed months for --load-test "
+                             "(default: latest two completed months)")
     args = parser.parse_args()
 
     out = Path(args.out).resolve()
 
+    if args.load_test:
+        conflicting = (
+            args.cleanup or args.cleanup_all or args.purge_orphans or args.verify
+            or args.no_cleanup
+        )
+        if conflicting:
+            parser.error("--load-test cannot be combined with cleanup, verify, or --no-cleanup options")
+        raise SystemExit(run_load_test(
+            dry=args.dry_run,
+            staff_count=args.staff_count,
+            month_values=args.months,
+            out_dir=out,
+        ))
+    if args.months is not None or args.staff_count != 120:
+        parser.error("--months and --staff-count require --load-test")
     if args.dry_run:
         raise SystemExit(dry_run(out))
     if args.cleanup:

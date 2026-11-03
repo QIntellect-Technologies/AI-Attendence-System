@@ -2678,6 +2678,78 @@ def _payroll_policy_override(org_id: str, *, branch_id: str | None = None, staff
             logger.exception('payroll_policy_override lookup failed for org=%s', org_key)
         return None
 
+def _payroll_policy_overrides_for_page(
+    org_id: str,
+    branch_ids: list[str],
+    staff_ids: list[str],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Load all effective page-scope overrides in one tenant-scoped query."""
+    org_key = str(org_id)
+    branch_keys = {str(value) for value in branch_ids if value}
+    staff_keys = {str(value) for value in staff_ids if value}
+    if not branch_keys and not staff_keys:
+        return {}, {}
+
+    branch_overrides: dict[str, dict] = {}
+    staff_overrides: dict[str, dict] = {}
+    query_started_at = time.perf_counter()
+
+    def load_overrides(scope_column: str, scope_ids: set[str], empty_column: str) -> list[dict]:
+        if not scope_ids:
+            return []
+        try:
+            result = _execute_supabase(
+                f'get_payroll_policy_overrides_for_page.{scope_column}',
+                lambda: (
+                    get_supabase()
+                    .table('payroll_policy_overrides')
+                    .select('branch_id, staff_id, policy')
+                    .eq('org_id', org_key)
+                    .eq(empty_column, _PAYROLL_OVERRIDE_NO_SCOPE)
+                    .in_(scope_column, sorted(scope_ids))
+                ),
+            )
+            return result.data or []
+        except Exception as exc:
+            if not _table_missing(exc, 'payroll_policy_overrides'):
+                logger.exception(
+                    'payroll policy %s override batch lookup failed for org=%s',
+                    scope_column,
+                    org_key,
+                )
+            return []
+
+    from concurrency import gather
+
+    override_rows, _errors = gather({
+        'branches': lambda: load_overrides('branch_id', branch_keys, 'staff_id'),
+        'staff': lambda: load_overrides('staff_id', staff_keys, 'branch_id'),
+    }, max_workers=2)
+
+    for row in override_rows.get('branches', []):
+        policy = row.get('policy')
+        branch_key = str(row.get('branch_id') or '')
+        if branch_key in branch_keys and isinstance(policy, dict):
+            branch_overrides[branch_key] = policy
+
+    for row in override_rows.get('staff', []):
+        policy = row.get('policy')
+        staff_key = str(row.get('staff_id') or '')
+        if staff_key in staff_keys and isinstance(policy, dict):
+            staff_overrides[staff_key] = policy
+
+    logger.info(
+        'Payroll policy overrides loaded for org=%s branches=%d staff=%d overrides=%d',
+        org_key, len(branch_keys), len(staff_keys),
+        len(branch_overrides) + len(staff_overrides),
+    )
+    logger.info(
+        'Payroll policy override batch query completed for org=%s duration_ms=%.1f',
+        org_key,
+        (time.perf_counter() - query_started_at) * 1000,
+    )
+    return branch_overrides, staff_overrides
+
 def resolve_effective_ot_rate(salary_config: dict | None, policy: dict) -> float:
     """Single source of truth for 'what OT rate actually applies to this
     staff member': their own per-staff override (salary_configs.ot_rate)
@@ -3222,26 +3294,102 @@ def save_payroll_policy(org_id: str, policy: dict, branch_id: str | None = None,
     _invalidate_payroll_breakdown_cache(org_key)
     return policy
 
-def get_paid_payroll_periods(org_id: str, period_start: str, period_end: str) -> set[str]:
-    """staff_ids marked paid for a period that overlaps [period_start, period_end]."""
-    from support_db_attendance_dashboard import _support_clean_text
+def _paid_payroll_rows(
+    org_id: str,
+    period_start: str,
+    period_end: str,
+    columns: str,
+    log_label: str,
+) -> list[dict]:
     org_key = str(org_id)
     try:
-        def _query():
-            return (
+        result = _execute_supabase(
+            log_label,
+            lambda: (
                 get_supabase()
                 .table('payroll_payments')
-                .select('staff_id')
+                .select(columns)
                 .eq('org_id', org_key)
                 .eq('period_start', period_start)
                 .eq('period_end', period_end)
-            )
-        result = _execute_supabase('get_paid_payroll_periods', _query)
-        return {_support_clean_text(row.get('staff_id')) for row in (result.data or []) if row.get('staff_id')}
+            ),
+        )
+        return result.data or []
     except Exception as exc:
         if not _table_missing(exc, 'payroll_payments'):
-            logger.exception('get_paid_payroll_periods failed for org=%s', org_key)
-        return set()
+            logger.exception('%s failed for org=%s', log_label, org_key)
+        return []
+
+
+def get_paid_payroll_periods(org_id: str, period_start: str, period_end: str) -> set[str]:
+    """staff_ids marked paid for a period that overlaps [period_start, period_end]."""
+    rows = _paid_payroll_rows(
+        org_id, period_start, period_end, 'staff_id', 'get_paid_payroll_periods',
+    )
+    return {
+        _payroll_text(row.get('staff_id'))
+        for row in rows
+        if isinstance(row, dict) and _payroll_text(row.get('staff_id'))
+    }
+
+
+def _paid_payroll_page_data(
+    org_id: str,
+    period_start: str,
+    period_end: str,
+    log_label: str,
+) -> tuple[set[str], dict[str, dict]]:
+    """Return paid staff IDs and complete saved snapshots with one query."""
+    org_key = str(org_id)
+    rows = _paid_payroll_rows(
+        org_key,
+        period_start,
+        period_end,
+        'staff_id, breakdown',
+        log_label,
+    )
+    paid_staff_ids = {
+        _payroll_text(row.get('staff_id'))
+        for row in rows
+        if isinstance(row, dict) and _payroll_text(row.get('staff_id'))
+    }
+    snapshots: dict[str, dict] = {}
+    try:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            staff_id = _payroll_text(row.get('staff_id'))
+            if not staff_id:
+                continue
+            breakdown = row.get('breakdown')
+            if not isinstance(breakdown, dict):
+                continue
+            if not payroll_engine.is_complete_breakdown_snapshot(breakdown):
+                logger.warning(
+                    'Ignoring incomplete payroll snapshot for org=%s staff=%s period=%s..%s',
+                    org_key,
+                    staff_id,
+                    period_start,
+                    period_end,
+                )
+                continue
+            snapshots[staff_id] = breakdown
+    except Exception:
+        logger.exception('%s snapshot parsing failed for org=%s', log_label, org_key)
+        return paid_staff_ids, {}
+    return paid_staff_ids, snapshots
+
+
+def get_paid_payroll_page_data(
+    org_id: str,
+    period_start: str,
+    period_end: str,
+) -> tuple[set[str], dict[str, dict]]:
+    """Return paid staff IDs and complete saved snapshots with one query."""
+    return _paid_payroll_page_data(
+        org_id, period_start, period_end, 'get_paid_payroll_page_data',
+    )
+
 
 def get_paid_payroll_snapshot_breakdowns(
     org_id: str,
@@ -3254,42 +3402,13 @@ def get_paid_payroll_snapshot_breakdowns(
     missing fields that the payroll UI would otherwise display as zero.
     """
     org_key = str(org_id)
-    try:
-        result = _execute_supabase(
-            'get_paid_payroll_snapshot_breakdowns',
-            lambda: (
-                get_supabase()
-                .table('payroll_payments')
-                .select('staff_id, breakdown')
-                .eq('org_id', org_key)
-                .eq('period_start', period_start)
-                .eq('period_end', period_end)
-            ),
-        )
-        snapshots: dict[str, dict] = {}
-        for row in result.data or []:
-            staff_id = _payroll_text(row.get('staff_id'))
-            breakdown = row.get('breakdown')
-            if not staff_id or not isinstance(breakdown, dict):
-                continue
-            if not payroll_engine.is_complete_breakdown_snapshot(breakdown):
-                logger.warning(
-                    'Ignoring incomplete payroll snapshot for org=%s staff=%s period=%s..%s',
-                    org_key,
-                    staff_id,
-                    period_start,
-                    period_end,
-                )
-                continue
-            snapshots[staff_id] = breakdown
-        return snapshots
-    except Exception as exc:
-        if not _table_missing(exc, 'payroll_payments'):
-            logger.exception(
-                'get_paid_payroll_snapshot_breakdowns failed for org=%s',
-                org_key,
-            )
-        return {}
+    _, snapshots = _paid_payroll_page_data(
+        org_key,
+        period_start,
+        period_end,
+        'get_paid_payroll_snapshot_breakdowns',
+    )
+    return snapshots
 
 def mark_payroll_paid(
     org_id: str,
@@ -5033,6 +5152,7 @@ def get_client_payroll_page(
     not present in all tenant schemas. Department is a display value only and is
     derived after fetch when available; otherwise it becomes "General".
     """
+    page_started_at = time.perf_counter()
     from support_db_organizations import get_organization
     from support_db_staff import _client_branch_indexes, _resolve_client_branch
     org_key = _payroll_text(org_id)
@@ -5043,10 +5163,21 @@ def get_client_payroll_page(
         _normalize_people_type(people_type, '') if people_type else None
     ) or None
 
-    # Validates the organization and keeps metadata tenant-scoped/cached.
-    get_organization(org_key)
-    branches, backend_to_ui, branch_by_backend = _client_branch_indexes(org_key)
-    module_flags = get_org_payroll_module_flags(org_key)
+    # These tenant-scoped reads have no dependency on one another; avoid
+    # paying their network latency serially before the staff query can start.
+    from concurrency import gather_or_raise
+
+    preflight, _errors = gather_or_raise(
+        {
+            'organization': lambda: get_organization(org_key),
+            'branches': lambda: _client_branch_indexes(org_key),
+            'module_flags': lambda: get_org_payroll_module_flags(org_key),
+        },
+        essential=('organization', 'branches', 'module_flags'),
+        max_workers=3,
+    )
+    branches, backend_to_ui, branch_by_backend = preflight['branches']
+    module_flags = preflight['module_flags']
     has_leave_module = module_flags['leave']
     has_overtime_module = module_flags['overtime']
     has_income_tax_module = module_flags.get('income_tax', False)
@@ -5318,23 +5449,23 @@ def get_client_payroll_page(
     # distinct branch/staff for this one request so an org with N branches
     # costs N override lookups total, not one per staff row.
     org_policy_default = _org_default_payroll_policy(org_key)
-    branch_policy_cache: dict[str, dict] = {}
-    staff_policy_cache: dict[str, dict] = {}
+    page_branch_ids = sorted({
+        _payroll_text(staff.get('branch_id'))
+        for staff in staff_rows
+        if _payroll_text(staff.get('branch_id'))
+    })
+    branch_policy_overrides, staff_policy_overrides = (
+        _payroll_policy_overrides_for_page(org_key, page_branch_ids, staff_ids)
+    )
 
     def resolve_policy(branch_id: str | None, staff_id: str) -> dict:
         policy = org_policy_default
         if branch_id:
-            branch_policy = branch_policy_cache.get(branch_id)
-            if branch_policy is None:
-                branch_policy = _payroll_policy_override(org_key, branch_id=branch_id) or {}
-                branch_policy_cache[branch_id] = branch_policy
+            branch_policy = branch_policy_overrides.get(branch_id) or {}
             if branch_policy:
                 policy = {**policy, **branch_policy}
         if staff_id:
-            staff_policy = staff_policy_cache.get(staff_id)
-            if staff_policy is None:
-                staff_policy = _payroll_policy_override(org_key, staff_id=staff_id) or {}
-                staff_policy_cache[staff_id] = staff_policy
+            staff_policy = staff_policy_overrides.get(staff_id) or {}
             if staff_policy:
                 policy = {**policy, **staff_policy}
         return policy
@@ -5362,15 +5493,9 @@ def get_client_payroll_page(
         try:
             period_start_date = date.fromisoformat(period_start_text)
             period_end_date = date.fromisoformat(period_end_text)
-            paid_snapshot_breakdowns = get_paid_payroll_snapshot_breakdowns(
+            paid_staff_ids, paid_snapshot_breakdowns = get_paid_payroll_page_data(
                 org_key, period_start_text, period_end_text,
             )
-
-            distinct_branch_ids = sorted({
-                _payroll_text(staff.get('branch_id'))
-                for staff in staff_rows
-                if _payroll_text(staff.get('branch_id'))
-            })
 
             # [Fix-6] A CLOSED period (period_end already in the past) can't
             # have new attendance/leave/overtime logged against it, so its
@@ -5383,7 +5508,7 @@ def get_client_payroll_page(
             cached_breakdown = None
             if period_end_date < date.today():
                 cache_key = (
-                    f'{org_key}:{"|".join(distinct_branch_ids)}:'
+                    f'{org_key}:{"|".join(page_branch_ids)}:'
                     f'{period_start_text}:{period_end_text}:{"|".join(sorted(staff_ids))}:'
                     f'L{int(has_leave_module)}O{int(has_overtime_module)}'
                     f'T{int(has_income_tax_module)}'
@@ -5398,29 +5523,43 @@ def get_client_payroll_page(
                 overtime_by_staff: dict[str, float] = {}
                 local_node_overtime_by_staff: dict[str, float] = {}
 
-                attendance_by_staff = get_staff_attendance_for_payroll_period(
-                    org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
-                )
-                # Skip the queries entirely for modules the org hasn't bought
-                # (also saves 1-3 Supabase round-trips per page load).
+                period_jobs = {
+                    'attendance': lambda: get_staff_attendance_for_payroll_period(
+                        org_key, page_branch_ids, period_start_text, period_end_text,
+                        staff_ids=staff_ids,
+                    ),
+                }
+                # These period reads have independent filters and results.
+                # Fetch them together to avoid adding each Supabase round trip
+                # to the request latency; local-node overtime still needs the
+                # attendance result and is resolved immediately afterward.
                 if has_leave_module:
-                    leaves_by_staff = get_approved_leaves_for_payroll_period(
-                        org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
+                    period_jobs['leaves'] = lambda: get_approved_leaves_for_payroll_period(
+                        org_key, page_branch_ids, period_start_text, period_end_text,
+                        staff_ids=staff_ids,
                     )
                 if has_overtime_module:
-                    overtime_by_staff = get_approved_overtime_hours_for_payroll_period(
-                        org_key, distinct_branch_ids, period_start_text, period_end_text, staff_ids=staff_ids
+                    period_jobs['overtime'] = lambda: get_approved_overtime_hours_for_payroll_period(
+                        org_key, page_branch_ids, period_start_text, period_end_text,
+                        staff_ids=staff_ids,
                     )
+                period_data, _errors = gather_or_raise(
+                    period_jobs,
+                    essential=tuple(period_jobs),
+                    max_workers=len(period_jobs),
+                )
+                attendance_by_staff = period_data['attendance']
+                leaves_by_staff = period_data.get('leaves', {})
+                overtime_by_staff = period_data.get('overtime', {})
+                if has_overtime_module:
                     local_node_overtime_by_staff = get_local_node_overtime_hours_for_payroll_period(
                         org_key,
-                        distinct_branch_ids,
+                        page_branch_ids,
                         period_start_text,
                         period_end_text,
                         attendance_by_staff=attendance_by_staff,
                         staff_ids=staff_ids,
                     )
-
-                paid_staff_ids = get_paid_payroll_periods(org_key, period_start_text, period_end_text)
 
                 # resolve_policy/effective_ot_rate_by_staff are already
                 # computed above, unconditionally — reused here rather than
@@ -5521,6 +5660,15 @@ def get_client_payroll_page(
     page_total = sum(_payroll_float(row.get('netPay')) for row in rows)
     page_ot = sum(_payroll_float(row.get('overtimeAmount')) for row in rows)
 
+    logger.info(
+        'Payroll page completed for org=%s staff=%d rows=%d period=%s..%s duration_ms=%.1f',
+        org_key,
+        len(staff_rows),
+        len(rows),
+        period_start_text or '',
+        period_end_text or '',
+        (time.perf_counter() - page_started_at) * 1000,
+    )
     return {
         'rows': rows,
         'records': rows,

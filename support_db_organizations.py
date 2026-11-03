@@ -859,6 +859,14 @@ def permanently_delete_organization(
 
     results: list[dict] = []
 
+    # Visits reference client_staff directly and may also reference a planned
+    # stop. Visit plans reference client_staff; deleting a plan cascades its
+    # stops. Clear these dependencies before deleting any staff rows.
+    for table in ('visits', 'visit_plans'):
+        results.append(
+            _delete_rows_for_org(sb, table, org_key, ('org_id',))
+        )
+
     # Delete branch-owned rows first where tables commonly use branch_id more
     # reliably than org_id/organization_id.
     branch_scoped_tables = [
