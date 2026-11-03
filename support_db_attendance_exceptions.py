@@ -782,7 +782,8 @@ def notify_payroll_decision_pending(
     """Fired once, the moment a local-node row's day_status FIRST lands as
     one of the classified values (half_day/short_leave/late/overtime) --
     i.e. classification just happened on-device and this row now needs an
-    admin's include/exclude payroll call (see
+    admin's include/exclude payroll call (except late arrivals, which are
+    reviewed in Payroll; see
     list_local_node_payroll_pending/set_local_node_payroll_decision).
 
     Callers MUST only invoke this on the transition INTO a classified
@@ -797,6 +798,11 @@ def notify_payroll_decision_pending(
     the payroll-decision queue instead of the classification screen -- this
     row is already classified; only the payroll effect is still undecided.
     """
+    # Late-arrival decisions are reviewed by pay period in Payroll; keeping
+    # them out of notifications prevents the same decision appearing in two
+    # places. Other payroll exception decisions still use this queue.
+    if day_status == "late":
+        return
     if not _org_has_payroll_module(get_supabase(), org_id):
         return
     branch_name = get_branch_name_for_notification(org_id, branch_id)
@@ -1797,6 +1803,8 @@ def set_local_node_payroll_decision(
             raise
     if not result.data:
         raise RuntimeError("Failed to set payroll decision")
+    from support_db_payroll import _invalidate_payroll_breakdown_cache
+    _invalidate_payroll_breakdown_cache(org_key)
 
     if day_status == "overtime":
         # This is the call that actually gates payroll for an overtime day

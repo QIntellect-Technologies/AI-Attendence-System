@@ -292,6 +292,7 @@ class PayrollBreakdown:
     late_count: int
     late_deduction_days: float
     late_deduction_amount: float
+    pending_late_decisions: list[dict]
     half_day_attendance_count: int
     half_day_leave_count: float
     half_day_deduction_amount: float
@@ -303,6 +304,9 @@ class PayrollBreakdown:
     overtime_hours: float
     overtime_amount: float
     attendance_leave_conflict_days: float
+    scheduled_work_days: int
+    absent_days: float
+    absence_deduction_amount: float
     total_deductions: float
     total_additions: float
     net_pay: float
@@ -311,21 +315,85 @@ class PayrollBreakdown:
         return asdict(self)
 
 
+def _month_calendar(policy: dict, month_key: str) -> tuple[set[int], set[str]]:
+    calendars = policy.get('payrollCalendarsByMonth') or {}
+    if not isinstance(calendars, dict):
+        raise ValueError('payrollCalendarsByMonth must be an object')
+    config = calendars.get(month_key)
+    if config is not None and not isinstance(config, dict):
+        raise ValueError(f'Invalid payroll calendar configuration for {month_key}')
+    weekday_by_name = {
+        'monday': 0,
+        'tuesday': 1,
+        'wednesday': 2,
+        'thursday': 3,
+        'friday': 4,
+        'saturday': 5,
+        'sunday': 6,
+    }
+    recurring_effective_from = policy.get('payrollWeeklyOffDaysEffectiveFrom')
+    recurring_applies = (
+        policy.get('payrollWeeklyOffDays') is not None
+        and (
+            not recurring_effective_from
+            or month_key >= str(recurring_effective_from)
+        )
+    )
+    raw_weekly_off_days = (
+        policy.get('payrollWeeklyOffDays') if recurring_applies else None
+    )
+    if raw_weekly_off_days is None and config:
+        raw_weekly_off_days = config.get('weeklyOffDays')
+        if raw_weekly_off_days is None and config.get('weeklyOffDay'):
+            raw_weekly_off_days = [config['weeklyOffDay']]
+    if raw_weekly_off_days is None:
+        raw_weekly_off_days = ['sunday']
+    if not isinstance(raw_weekly_off_days, list) or not raw_weekly_off_days:
+        raise ValueError(f'At least one weekly off day is required for {month_key}')
+    weekly_off_days = {
+        weekday_by_name.get(str(day).strip().lower(), -1)
+        for day in raw_weekly_off_days
+    }
+    if -1 in weekly_off_days:
+        raise ValueError(f'Invalid weekly off day for payroll month {month_key}')
+    holidays = config.get('holidayDates', []) if config else []
+    if not isinstance(holidays, list):
+        raise ValueError(f'Payroll holidays for {month_key} must be a list')
+    normalized_holidays: set[str] = set()
+    for holiday in holidays:
+        try:
+            parsed = date.fromisoformat(str(holiday))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'Invalid payroll holiday date for {month_key}') from exc
+        if parsed.strftime('%Y-%m') != month_key:
+            raise ValueError(f'Payroll holiday date must belong to {month_key}')
+        normalized_holidays.add(parsed.isoformat())
+    return weekly_off_days, normalized_holidays
+
+
+def _scheduled_work_dates(period_start: date, period_end: date, policy: dict) -> set[str]:
+    scheduled_dates: set[str] = set()
+    month_configs: dict[str, tuple[set[int], set[str]]] = {}
+    current = period_start
+    while current <= period_end:
+        month_key = current.strftime('%Y-%m')
+        if month_key not in month_configs:
+            month_configs[month_key] = _month_calendar(policy, month_key)
+        weekly_off_weekdays, holidays = month_configs[month_key]
+        date_key = current.isoformat()
+        if current.weekday() not in weekly_off_weekdays and date_key not in holidays:
+            scheduled_dates.add(date_key)
+        current = date.fromordinal(current.toordinal() + 1)
+    return scheduled_dates
+
+
 def _per_day_rate(base_salary: float, policy: dict, period_start: date, period_end: date) -> float:
-    basis = policy.get('perDayRateBasis', 'calendar_days')
-    if basis == 'fixed_days':
-        days = max(1, int(policy.get('fixedWorkingDaysPerMonth', 26)))
-    elif basis == 'scheduled_days':
-        # Needs the staff's assigned shift's working-days-per-week
-        # (support_db_shifts doesn't currently model that — shifts define
-        # daily check-in/out times, not a weekly working pattern) to count
-        # actual scheduled days in-period. Falls back to calendar days
-        # until that field exists; flag this to Mia rather than silently
-        # guessing a 5- or 6-day week.
-        days = (period_end - period_start).days + 1
-    else:  # calendar_days
-        days = monthrange(period_start.year, period_start.month)[1]
-    return base_salary / days if days else 0.0
+    month_start = period_start.replace(day=1)
+    month_end = period_start.replace(day=monthrange(period_start.year, period_start.month)[1])
+    days = len(_scheduled_work_dates(month_start, month_end, policy))
+    if not days:
+        raise ValueError(f'Payroll calendar has no scheduled workdays in {period_start:%Y-%m}')
+    return base_salary / days
 
 
 def _late_deduction(late_count: int, per_day_rate: float, policy: dict) -> tuple[float, float]:
@@ -334,7 +402,7 @@ def _late_deduction(late_count: int, per_day_rate: float, policy: dict) -> tuple
 
     if mode == 'occurrence_threshold':
         threshold = max(1, int(late_policy.get('thresholdOccurrences', 3)))
-        deduction_days = (late_count // threshold) * 0.5
+        deduction_days = late_count // threshold
         return deduction_days, deduction_days * per_day_rate
 
     if mode == 'flat_per_occurrence':
@@ -358,6 +426,15 @@ def _decision_included(row: dict, key: str) -> bool:
     org's payroll the day it ships. Only an explicit 'exclude' removes a
     row from the count."""
     return row.get(key) != 'exclude'
+
+
+def _late_decision_key(row: dict) -> str:
+    """Use the column set_local_node_payroll_decision writes for each channel."""
+    return (
+        'checkOutPayrollDecision'
+        if row.get('captureChannel') == 'local_node'
+        else 'checkInPayrollDecision'
+    )
 
 
 def is_unpaid_leave_type(leave_type: str, leave_rules: dict) -> bool:
@@ -454,21 +531,41 @@ def compute_payroll_breakdown(
             f"is before period_start ({period_start.isoformat()})."
         )
 
+    scheduled_dates = _scheduled_work_dates(period_start, period_end, policy)
     per_day_rate = _per_day_rate(base_salary, policy, period_start, period_end)
-
-    late_count = sum(
-        1 for r in attendance_rows
-        if r.get('checkInStatus') == 'late'
-        and _decision_included(r, 'checkInPayrollDecision')
+    deduction_period_end = min(period_end, date.today())
+    deduction_scheduled_dates = (
+        _scheduled_work_dates(period_start, deduction_period_end, policy)
+        if deduction_period_end >= period_start
+        else set()
     )
+
+    late_rows = [
+        row for row in attendance_rows
+        if (row.get('checkInStatus') == 'late' or row.get('dayStatus') == 'late')
+        and row.get('date') in deduction_scheduled_dates
+    ]
+    late_count = sum(
+        1 for row in late_rows
+        if _decision_included(row, _late_decision_key(row))
+    )
+    pending_late_decisions = [
+        {'attendance_id': row.get('attendanceId'), 'date': row['date']}
+        for row in late_rows
+        if row.get('captureChannel') in ('local_node', 'mobile_app')
+        and row.get(_late_decision_key(row)) is None
+        and row.get('attendanceId')
+    ]
     half_day_attendance_count = sum(
         1 for r in attendance_rows
         if r.get('dayStatus') == 'half_day'
+        and r.get('date') in deduction_scheduled_dates
         and _decision_included(r, 'checkOutPayrollDecision')
     )
     short_leave_attendance_count = sum(
         1 for r in attendance_rows
         if r.get('dayStatus') == 'short_leave'
+        and r.get('date') in deduction_scheduled_dates
         and _decision_included(r, 'checkOutPayrollDecision')
     )
 
@@ -476,10 +573,45 @@ def compute_payroll_breakdown(
 
     # Every attendance row is a real check-in event for that date — present,
     # late, or half-day all count as "was here" for reconciliation purposes.
-    attendance_dates = {r['date'] for r in attendance_rows if r.get('date')}
+    attendance_dates = {
+        r['date'] for r in attendance_rows
+        if r.get('date') in deduction_scheduled_dates
+    }
+    scheduled_attendance_dates = attendance_dates & scheduled_dates
+    scheduled_leave_rows: list[dict] = []
+    covered_leave_dates: set[str] = set()
+    leave_days_without_dates = 0.0
+    for row in leave_rows:
+        dates = row.get('dates')
+        if not dates:
+            days = min(
+                float(row.get('days') or 0.0),
+                float(len(deduction_scheduled_dates)),
+            )
+            if days:
+                scheduled_leave_rows.append({**row, 'days': days})
+                leave_days_without_dates += days
+            continue
+        work_dates = [day for day in dates if day in deduction_scheduled_dates]
+        if not work_dates:
+            continue
+        per_date = float(row.get('days') or 0.0) / len(dates)
+        scheduled_leave_rows.append({
+            **row,
+            'days': per_date * len(work_dates),
+            'dates': work_dates,
+        })
+        covered_leave_dates.update(work_dates)
+    leave_rows = scheduled_leave_rows
     leave_rows, attendance_leave_conflict_days = reconcile_leave_against_attendance(
         leave_rows, attendance_dates
     )
+    absent_days = max(
+        0.0,
+        len(deduction_scheduled_dates - scheduled_attendance_dates - covered_leave_dates)
+        - leave_days_without_dates,
+    )
+    absence_deduction_amount = absent_days * per_day_rate
 
     leave_rules: dict = policy.get('leaveTypeRules') or {}
     half_day_leave_count = sum(r['days'] for r in leave_rows if r['leaveType'] == 'half_day')
@@ -509,7 +641,11 @@ def compute_payroll_breakdown(
     short_leave_hours_total = 0.0
     short_leave_deduction_amount = 0.0
     for r in attendance_rows:
-        if r.get('dayStatus') != 'short_leave' or not _decision_included(r, 'checkOutPayrollDecision'):
+        if (
+            r.get('dayStatus') != 'short_leave'
+            or r.get('date') not in deduction_scheduled_dates
+            or not _decision_included(r, 'checkOutPayrollDecision')
+        ):
             continue
         shift_hours = float(r.get('shiftScheduledHours') or 0.0)
         hours_short = float(r.get('shortLeaveHours') or 0.0)
@@ -526,7 +662,8 @@ def compute_payroll_breakdown(
     overtime_amount = ot_hours * ot_rate_per_hour
 
     total_deductions = (
-        late_deduction_amount
+        absence_deduction_amount
+        + late_deduction_amount
         + half_day_deduction_amount
         + short_leave_deduction_amount
         + unpaid_leave_deduction_amount
@@ -540,6 +677,7 @@ def compute_payroll_breakdown(
         late_count=late_count,
         late_deduction_days=late_deduction_days,
         late_deduction_amount=round(late_deduction_amount, 2),
+        pending_late_decisions=pending_late_decisions,
         half_day_attendance_count=half_day_attendance_count,
         half_day_leave_count=half_day_leave_count,
         half_day_deduction_amount=round(half_day_deduction_amount, 2),
@@ -551,6 +689,9 @@ def compute_payroll_breakdown(
         overtime_hours=ot_hours,
         overtime_amount=round(overtime_amount, 2),
         attendance_leave_conflict_days=round(attendance_leave_conflict_days, 2),
+        scheduled_work_days=len(scheduled_dates),
+        absent_days=round(absent_days, 2),
+        absence_deduction_amount=round(absence_deduction_amount, 2),
         total_deductions=round(total_deductions, 2),
         total_additions=round(total_additions, 2),
         net_pay=round(net_pay, 2),

@@ -9,7 +9,7 @@
  * frontend until the backend is connected.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ModernSelect, {
   ModernSelectOption,
@@ -67,12 +67,18 @@ import {
   toastSuccess,
   toastError,
 } from "../../utils/notifications";
+import { setPayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
+import type { PayrollDecision } from "../attendance_temp/api/attendanceExceptionsApi";
 import { formatDisplayDate } from "../../utils/formatDate";
 import {
   DEFAULT_PAYROLL_POLICY,
+  getPaidPayrollMonthlyTrends,
   getPayrollPolicy,
   type PayrollPolicy,
   type PayrollPolicyWrite,
+  type PaidPayrollMonthlyTrends,
+  type PayrollMonthCalendar,
+  type PayrollWeekday,
   type LateComingMode,
   type AllowanceMode,
   type AllowanceType,
@@ -86,6 +92,8 @@ import {
   SALARY_MAX,
 } from "../StaffManagement/utils/staffValidation";
 import { listBranchDepartments } from "../StaffManagement/api/attendanceSettingsApi";
+import GroupedBarChartCard from "../../components/ui/charts/GroupedBarChartCard";
+import LineChartCard from "../../components/ui/charts/LineChartCard";
 const T = {
   teal600: "#0d9488",
   teal200: "#99f6e4",
@@ -136,35 +144,17 @@ function withoutOvertimeRate(policy: PayrollPolicy): PayrollPolicyWrite {
   return policyWithoutOvertimeRate;
 }
 
-const PER_DAY_RATE_BASIS_OPTIONS: ModernSelectOption[] = [
-  {
-    value: "calendar_days",
-    label: "Calendar Days",
-    description: "Base Salary ÷ days in month",
-  },
-  {
-    value: "fixed_days",
-    label: "Fixed Working Days",
-    description: "Base Salary ÷ a fixed day count",
-  },
-  {
-    value: "scheduled_days",
-    label: "Scheduled Days",
-    description: "Base Salary ÷ staff's actual scheduled days",
-  },
-];
-
 const LATE_COMING_MODE_OPTIONS: ModernSelectOption[] = [
-  { value: "none", label: "No Automatic Deduction" },
+  { value: "none", label: "No deduction for late arrivals" },
   {
     value: "occurrence_threshold",
-    label: "Occurrence Threshold",
-    description: "N late arrivals = 1 half-day deduction",
+    label: "Deduct after repeated late arrivals",
+    description: "Deduct one day's pay each time the set number is reached",
   },
   {
     value: "flat_per_occurrence",
-    label: "Flat Per Occurrence",
-    description: "Fixed Rs. deducted per late arrival",
+    label: "Deduct for every late arrival",
+    description: "Deduct the same amount for each late arrival",
   },
 ];
 
@@ -310,134 +300,227 @@ const StatCard: React.FC<{
 const DepartmentSplitCard: React.FC<{
   data: { name: string; total: number }[];
 }> = ({ data }) => {
-  const max = Math.max(...data.map((row) => row.total), 1);
-
   return (
     <div style={cardStyle}>
       <h3 style={cardTitleStyle}>Department Payroll Split</h3>
       <p style={cardSubStyle}>Net pay distribution by department</p>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {data.length === 0 ? (
-          <EmptyState text="No department payroll data available." />
-        ) : (
-          data.map((row) => {
-            const width = Math.max(8, (row.total / max) * 100);
-            return (
-              <div key={row.name}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 10,
-                    marginBottom: 5,
-                    fontSize: 12,
-                    fontWeight: 800,
-                    color: T.textHeading,
-                  }}
-                >
-                  <span>{row.name}</span>
-                  <span>{fmtPKR(row.total)}</span>
-                </div>
-                <div
-                  style={{
-                    height: 7,
-                    background: T.teal50,
-                    borderRadius: 999,
-                    overflow: "hidden",
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "block",
-                      height: "100%",
-                      width: `${width}%`,
-                      background: `linear-gradient(90deg, ${T.teal600}, ${T.navy700})`,
-                      borderRadius: 999,
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+      {data.length === 0 ? (
+        <EmptyState text="No department payroll data available." />
+      ) : (
+        <GroupedBarChartCard
+          singleHeight={230}
+          data={data.map(({ name, total }) => ({ label: name, value: total }))}
+        />
+      )}
     </div>
   );
 };
 
-const BranchTrendCard: React.FC<{
+const PayrollCompositionCard: React.FC<{
   rows: PayrollRow[];
-  branches: { id: number; name: string }[];
-  selectedMonth: string;
-}> = ({ rows, branches, selectedMonth }) => {
-  const branchTotals = useMemo(() => {
-    return branches.map((branch) => ({
-      branch,
-      total: rows
-        .filter((row) => Number(row.branchId) === Number(branch.id))
-        .reduce((sum: number, row: PayrollRow) => sum + row.netPay, 0),
-    }));
-  }, [branches, rows]);
+  hasOvertime: boolean;
+}> = ({ rows, hasOvertime }) => {
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (result, row) => {
+          result.baseSalary += row.baseSalary;
+          result.allowances += row.allowances;
+          result.overtime += row.overtimeAmount;
+          result.deductions += row.deductions;
+          result.netPay += row.netPay;
+          return result;
+        },
+        {
+          baseSalary: 0,
+          allowances: 0,
+          overtime: 0,
+          deductions: 0,
+          netPay: 0,
+        },
+      ),
+    [rows],
+  );
+  const items = [
+    { label: "Base salary", amount: totals.baseSalary },
+    { label: "Allowances", amount: totals.allowances },
+    ...(hasOvertime
+      ? [{ label: "Overtime", amount: totals.overtime }]
+      : []),
+    { label: "Deductions", amount: totals.deductions },
+    { label: "Net pay", amount: totals.netPay },
+  ];
 
-  const max = Math.max(...branchTotals.map((item) => item.total), 1);
+  return (
+    <div style={cardStyle}>
+      <h3 style={cardTitleStyle}>Payroll Composition</h3>
+      <p style={cardSubStyle}>Earnings, deductions, and net pay for filtered records</p>
+      {rows.length === 0 ? (
+        <EmptyState text="No payroll data matches the selected filters." />
+      ) : (
+        <GroupedBarChartCard
+          singleHeight={230}
+          data={items.map(({ label, amount }) => ({ label, value: amount }))}
+        />
+      )}
+    </div>
+  );
+};
+
+type PayrollTrendBranch = { id: string; name: string };
+
+const PayrollMonthlyTrendCard: React.FC<{
+  organizationId: string | number | null;
+  anchorMonth: string;
+  branchId: string | null;
+  branches: PayrollTrendBranch[];
+  peopleType: string;
+  department: string;
+  search: string;
+  amountOperator: AmountOperator;
+  amountValue: string;
+  statusFilter: PayrollStatusFilter;
+}> = ({
+  organizationId,
+  anchorMonth,
+  branchId,
+  branches,
+  peopleType,
+  department,
+  search,
+  amountOperator,
+  amountValue,
+  statusFilter,
+}) => {
+  const [trend, setTrend] = useState<PaidPayrollMonthlyTrends | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!organizationId || statusFilter === "Pending") {
+      setTrend(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setError(null);
+    const timeout = window.setTimeout(() => {
+      setLoading(true);
+      getPaidPayrollMonthlyTrends({
+        organizationId,
+        anchorMonth,
+        branchId,
+        peopleType,
+        department: department === "all" ? null : department,
+        search,
+        amountOperator,
+        amountValue,
+      })
+        .then((response) => {
+          if (!cancelled) setTrend(response);
+        })
+        .catch((requestError: unknown) => {
+          if (!cancelled) {
+            setError(
+              requestError instanceof Error
+                ? requestError.message
+                : "Unable to load payroll trends.",
+            );
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    amountOperator,
+    amountValue,
+    anchorMonth,
+    branchId,
+    department,
+    organizationId,
+    peopleType,
+    search,
+    statusFilter,
+  ]);
+
+  const monthsWithPayroll = useMemo(() => {
+    if (!trend) return [];
+    const monthsWithRows = new Set(trend.rows.map((row) => row.month));
+    return trend.months.filter((month) => monthsWithRows.has(month));
+  }, [trend]);
+
+  const series = useMemo(() => {
+    if (!trend) return [];
+    const branchIds = Array.from(
+      new Set(trend.rows.map((row) => row.branch_id)),
+    );
+    return branchIds.map((id) => {
+      const branch = branches.find((item) => item.id === id);
+      return {
+        name: branch?.name ?? (id === "unknown" ? "Other" : `Branch ${id}`),
+        data: monthsWithPayroll.map((month) => ({
+          label: new Date(`${month}-01T00:00:00`).toLocaleDateString(
+            undefined,
+            { month: "short", year: "2-digit" },
+          ),
+          value:
+            trend.rows.find(
+              (row) => row.branch_id === id && row.month === month,
+            )?.payroll ?? 0,
+        })),
+      };
+    });
+  }, [branches, monthsWithPayroll, trend]);
+  const chartData = useMemo(
+    () => series[0]?.data ?? [],
+    [series],
+  );
 
   return (
     <div style={cardStyle}>
       <h3 style={cardTitleStyle}>
-        {branches.length === 1
-          ? "Branch Payroll Trend"
-          : "Branch Payroll Comparison"}
+        {branchId ? "Monthly Payroll Trend" : "Monthly Payroll by Branch"}
       </h3>
-      <p style={cardSubStyle}>{selectedMonth} · net pay per branch · PKR</p>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {branchTotals.length === 0 ? (
-          <EmptyState text="No branch payroll data available." />
-        ) : (
-          branchTotals.map(({ branch, total }) => {
-            const width = Math.max(6, (total / max) * 100);
-            return (
-              <div key={branch.id}>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "140px minmax(0, 1fr) 120px",
-                    alignItems: "center",
-                    gap: 12,
-                    fontSize: 12,
-                  }}
-                >
-                  <strong style={{ color: T.textHeading }}>
-                    {branch.name}
-                  </strong>
-                  <div
-                    style={{
-                      height: 28,
-                      background: T.slate50,
-                      border: `1px solid ${T.border}`,
-                      borderRadius: 8,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        height: "100%",
-                        width: `${width}%`,
-                        background: `linear-gradient(90deg, ${T.teal100}, ${T.teal600})`,
-                        borderRight: `6px solid ${T.navy700}`,
-                      }}
-                    />
-                  </div>
-                  <strong style={{ color: T.navy700, textAlign: "right" }}>
-                    {fmtPKR(total)}
-                  </strong>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+      <p style={cardSubStyle}>Paid payroll · processed months through {anchorMonth}</p>
+      {loading ? (
+        <div
+          role="status"
+          style={{ color: T.textMuted, fontSize: 12, padding: "24px 0" }}
+        >
+          Loading paid payroll history…
+        </div>
+      ) : error ? (
+        <div role="alert" style={{ color: T.red600, fontSize: 12 }}>
+          {error}
+        </div>
+      ) : statusFilter === "Pending" ? (
+        <EmptyState text="This trend shows paid payroll only. Select Paid or All to view history." />
+      ) : series.length === 0 ? (
+        <EmptyState text="No paid payroll snapshots match the selected filters." />
+      ) : (
+        <LineChartCard
+          data={series.length === 1 ? chartData : undefined}
+          series={series.length > 1 ? series : undefined}
+          height={260}
+          color={T.teal600}
+          formatY={(value) =>
+            value >= 1_000_000
+              ? `${(value / 1_000_000).toFixed(1)}M`
+              : value >= 1_000
+                ? `${Math.round(value / 1_000)}K`
+                : String(value)
+          }
+          formatTooltip={(value) => fmtPKR(value)}
+          showArea
+          showDots
+        />
+      )}
     </div>
   );
 };
@@ -617,23 +700,6 @@ const SalaryConfigTab: React.FC<{
                               flex: 1,
                             }}
                           >
-                            <div
-                              style={{
-                                width: 28,
-                                height: 28,
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                background: `linear-gradient(135deg,${T.teal600},#0EA5E9)`,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: 11,
-                                fontWeight: 700,
-                                color: "#fff",
-                              }}
-                            >
-                              {member.name.charAt(0)}
-                            </div>
                             <div style={{ minWidth: 0 }}>
                               <div
                                 style={{
@@ -650,13 +716,6 @@ const SalaryConfigTab: React.FC<{
                               <div style={{ fontSize: 10, color: T.textLight }}>
                                 {member.empId}
                               </div>
-                              {member.cnic && (
-                                <div
-                                  style={{ fontSize: 10, color: T.textLight }}
-                                >
-                                  {member.cnic}
-                                </div>
-                              )}
                             </div>
                           </div>
 
@@ -812,7 +871,6 @@ export default function PayrollModule() {
   const payrollDateFilter = useDateFilter("monthly");
 
   const otRatePerHour = cfg.payrollPolicy.otRatePerHour;
-  const defaultSalary = cfg.payrollPolicy.defaultSalary;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("records");
   const [selectedPeopleType, setSelectedPeopleType] = useState<string | null>(
@@ -828,6 +886,12 @@ export default function PayrollModule() {
 
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [lateDecisionRow, setLateDecisionRow] = useState<PayrollRow | null>(
+    null,
+  );
+  const [decidingAttendanceId, setDecidingAttendanceId] = useState<
+    string | null
+  >(null);
   const [editingRow, setEditingRow] = useState<PayrollRow | null>(null);
   const [draftSalary, setDraftSalary] = useState(0);
   // Per-staff OT rate override (salary_configs.ot_rate). Empty string means
@@ -846,6 +910,7 @@ export default function PayrollModule() {
   const [draftPolicy, setDraftPolicy] = useState<PayrollPolicy>(
     DEFAULT_PAYROLL_POLICY,
   );
+  const [holidayDateDraft, setHolidayDateDraft] = useState("");
   const [newLeaveTypeKey, setNewLeaveTypeKey] = useState("");
   const [newAllowanceTypeKey, setNewAllowanceTypeKey] = useState("");
   const allowanceNameError = useMemo(() => {
@@ -894,10 +959,6 @@ export default function PayrollModule() {
     if (["-", "+", "e", "E"].includes(event.key)) event.preventDefault();
   };
   const payrollRulesError = useMemo(() => {
-    if (draftPolicy.defaultSalary < PAYROLL_VALUE_MIN)
-      return "Default salary must be at least PKR 1.";
-    if (draftPolicy.defaultSalary > PAYROLL_VALUE_MAX)
-      return "Default salary cannot exceed PKR 100,000,000.";
     if (hasOvertime && draftPolicy.otRatePerHour < PAYROLL_VALUE_MIN)
       return "OT rate must be at least PKR 1.";
     if (hasOvertime && draftPolicy.otRatePerHour > PAYROLL_VALUE_MAX)
@@ -932,6 +993,65 @@ export default function PayrollModule() {
     () => payrollDateFilter.range.startDate.slice(0, 7),
     [payrollDateFilter.range.startDate],
   );
+  const monthCalendar: PayrollMonthCalendar =
+    draftPolicy.payrollCalendarsByMonth[periodMonth] ?? {};
+  const monthHolidayDates = Array.isArray(monthCalendar.holidayDates)
+    ? monthCalendar.holidayDates
+    : [];
+  const monthHolidaysConfirmed =
+    monthCalendar.holidaysConfirmed === true || monthHolidayDates.length > 0;
+  const selectedMonthWeeklyOffDays: PayrollWeekday[] =
+    periodMonth >= draftPolicy.payrollWeeklyOffDaysEffectiveFrom
+      ? draftPolicy.payrollWeeklyOffDays
+      : (monthCalendar.weeklyOffDays ??
+        (monthCalendar.weeklyOffDay ? [monthCalendar.weeklyOffDay] : ["sunday"]));
+  const monthEndDay = new Date(
+    Number(periodMonth.slice(0, 4)),
+    Number(periodMonth.slice(5, 7)),
+    0,
+  ).getDate();
+  const monthEndDate = `${periodMonth}-${String(monthEndDay).padStart(2, "0")}`;
+  const updateMonthCalendar = (changes: Partial<PayrollMonthCalendar>) =>
+    setDraftPolicy((current) => {
+      const currentCalendar = current.payrollCalendarsByMonth[periodMonth] ?? {
+        holidayDates: [],
+      };
+      return {
+        ...current,
+        payrollCalendarsByMonth: {
+          ...current.payrollCalendarsByMonth,
+          [periodMonth]: { ...currentCalendar, ...changes },
+        },
+      };
+    });
+  const updateWeeklyOffDays = (weeklyOffDays: PayrollWeekday[]) =>
+    setDraftPolicy((current) => ({
+      ...current,
+      payrollWeeklyOffDays: weeklyOffDays,
+      payrollWeeklyOffDaysEffectiveFrom: periodMonth,
+    }));
+  const currentDate = new Date();
+  const nextMonthDate = new Date(
+    currentDate.getFullYear(),
+    currentDate.getMonth() + 1,
+    1,
+  );
+  const currentMonthLastDate = new Date(
+    currentDate.getFullYear(),
+    currentDate.getMonth() + 1,
+    0,
+  ).getDate();
+  const nextCalendarMonth = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, "0")}`;
+  const nextCalendarMonthLabel = nextMonthDate.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  const showNextMonthCalendarReminder =
+    currentMonthLastDate - currentDate.getDate() <= 7 &&
+    policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidaysConfirmed !==
+      true &&
+    (policy.payrollCalendarsByMonth[nextCalendarMonth]?.holidayDates?.length ??
+      0) === 0;
 
   const effectiveBranchId = isGlobal
     ? branchSelector.selectedBranchId
@@ -991,7 +1111,6 @@ export default function PayrollModule() {
 
   const {
     rows,
-    deptSummary,
     modulePeopleTypes,
     peopleType,
     loading,
@@ -1005,6 +1124,53 @@ export default function PayrollModule() {
     month: periodMonth,
     peopleType: selectedPeopleType,
   });
+
+  const handleLateDecision = useCallback(
+    async (attendanceId: string, decision: PayrollDecision) => {
+      if (!organizationId || !lateDecisionRow?.breakdown) return;
+      setDecidingAttendanceId(attendanceId);
+      try {
+        await setPayrollDecision({
+          organizationId,
+          attendanceId,
+          decision,
+        });
+        setLateDecisionRow((current) =>
+          current?.breakdown
+            ? {
+                ...current,
+                breakdown: {
+                  ...current.breakdown,
+                  pendingLateDecisions:
+                    current.breakdown.pendingLateDecisions.filter(
+                      (item) => item.attendanceId !== attendanceId,
+                    ),
+                },
+              }
+            : current,
+        );
+        toastSuccess(
+          decision === "include"
+            ? "Late arrival included in payroll."
+            : "Late arrival excluded from payroll.",
+        );
+        await refresh({ force: true }).catch(() => {
+          toastError(
+            "The decision was saved, but payroll could not be refreshed. Refresh the page to see the updated totals.",
+          );
+        });
+      } catch (error) {
+        toastError(
+          error instanceof Error
+            ? error.message
+            : "Unable to save the late-arrival decision.",
+        );
+      } finally {
+        setDecidingAttendanceId(null);
+      }
+    },
+    [organizationId, lateDecisionRow, refresh],
+  );
 
   const peopleOptions = useMemo(
     () =>
@@ -1020,10 +1186,23 @@ export default function PayrollModule() {
     [cfg.branches],
   );
 
-  const trendBranches = useMemo(() => {
-    if (!effectiveBranchId) return branchOptions;
-    return branchOptions.filter((branch) => branch.id === effectiveBranchId);
-  }, [branchOptions, effectiveBranchId]);
+  const trendBranches = useMemo<PayrollTrendBranch[]>(
+    () =>
+      cfg.branches.map((branch) => ({
+        id: getBackendBranchId(branch) ?? String(branch.id),
+        name: branch.name,
+      })),
+    [cfg.branches],
+  );
+  const trendBranchId = useMemo(() => {
+    if (effectiveBranchId === undefined) return null;
+    const branch = cfg.branches.find(
+      (item) => Number(item.id) === Number(effectiveBranchId),
+    );
+    return branch
+      ? (getBackendBranchId(branch) ?? String(branch.id))
+      : String(effectiveBranchId);
+  }, [cfg.branches, effectiveBranchId]);
 
   const contextLabel = isGlobal
     ? branchSelector.selectedBranchId
@@ -1112,6 +1291,16 @@ export default function PayrollModule() {
       {
         header: "Present Days",
         accessor: (row: PayrollRow) => row.presentDays,
+        align: "right" as const,
+      },
+      {
+        header: "Working Days",
+        accessor: (row: PayrollRow) => row.totalWorkingDays,
+        align: "right" as const,
+      },
+      {
+        header: "Absent Days",
+        accessor: (row: PayrollRow) => row.absentDays,
         align: "right" as const,
       },
       {
@@ -1267,6 +1456,17 @@ export default function PayrollModule() {
     statusFilter,
   ]);
 
+  const filteredDepartmentSummary = useMemo(() => {
+    const totals = new Map<string, number>();
+    visibleRows.forEach((row) => {
+      const department = row.department?.trim() || "Unassigned";
+      totals.set(department, (totals.get(department) ?? 0) + row.netPay);
+    });
+    return Array.from(totals, ([name, total]) => ({ name, total })).sort(
+      (left, right) => right.total - left.total,
+    );
+  }, [visibleRows]);
+
   const resetListFilters = useCallback(() => {
     setSearchQuery("");
     setAmountOperator("all");
@@ -1284,7 +1484,7 @@ export default function PayrollModule() {
       {
         id: "branch",
         type: "custom",
-        hidden: !isGlobal,
+        hidden: !isGlobal || !branchSelector.hasMultipleBranches,
         render: (
           <BranchSelector
             branches={branchSelector.selectorBranches}
@@ -1485,6 +1685,8 @@ export default function PayrollModule() {
         { key: "base", label: "Base Salary" },
         { key: "allowances", label: "Allowances" },
         { key: "present", label: "Present" },
+        { key: "workingDays", label: "Working Days" },
+        { key: "absent", label: "Absent" },
         { key: "otHrs", label: "OT Hrs", requires: "overtime" },
         { key: "otRate", label: "OT Rate/hr", requires: "overtime" },
         { key: "otPay", label: "OT Pay", requires: "overtime" },
@@ -1506,7 +1708,12 @@ export default function PayrollModule() {
   );
   const showCol = (key: string) => visibleColumnKeys.has(key);
 
+  const orgAllowanceTypesRef = useRef(cfg.payrollPolicy.allowanceTypes);
+  orgAllowanceTypesRef.current = cfg.payrollPolicy.allowanceTypes;
+
   const openEditModal = useCallback((row: PayrollRow) => {
+    setEditingRowAllowanceTypes({});
+    setEditingRowAllowanceTypesLoading(true);
     setEditingRow(row);
     setDraftSalary(row.baseSalary);
     // Prefill from the raw override (0 = none set), not the effective rate,
@@ -1535,12 +1742,16 @@ export default function PayrollModule() {
     useState(false);
   React.useEffect(() => {
     let cancelled = false;
-    if (!isEditModalOpen || !editingRow || !organizationId) {
+    if (!isEditModalOpen) return undefined;
+    if (!editingRow || !organizationId) {
       setEditingRowAllowanceTypes({});
+      setEditingRowAllowanceTypesLoading(false);
       return undefined;
     }
-    setEditingRowAllowanceTypesLoading(true);
-    getPayrollPolicy(organizationId, { staffId: editingRow.staffId })
+    getPayrollPolicy(organizationId, {
+      branchId: editingRow.backendBranchId,
+      staffId: editingRow.staffId,
+    })
       .then((effectivePolicy) => {
         if (!cancelled)
           setEditingRowAllowanceTypes(effectivePolicy.allowanceTypes ?? {});
@@ -1549,7 +1760,7 @@ export default function PayrollModule() {
         // Fall back to the org-wide default rather than showing nothing —
         // still better than blocking the modal on a transient fetch error.
         if (!cancelled)
-          setEditingRowAllowanceTypes(cfg.payrollPolicy.allowanceTypes ?? {});
+          setEditingRowAllowanceTypes(orgAllowanceTypesRef.current ?? {});
       })
       .finally(() => {
         if (!cancelled) setEditingRowAllowanceTypesLoading(false);
@@ -1559,9 +1770,9 @@ export default function PayrollModule() {
     };
   }, [
     isEditModalOpen,
-    editingRow,
+    editingRow?.staffId,
+    editingRow?.backendBranchId,
     organizationId,
-    cfg.payrollPolicy.allowanceTypes,
   ]);
   const [payrollPageSize, setPayrollPageSize] = useState(25);
   const payrollPager = useStatefulPagination({
@@ -1585,6 +1796,18 @@ export default function PayrollModule() {
         if (row.status === "Paid") {
           await markPending(row.staffId);
         } else {
+          const pendingCount =
+            row.breakdown?.pendingLateDecisions.length ?? 0;
+          if (pendingCount > 0) {
+            const confirmation = await confirmDialog({
+              title: "Late-arrival decisions are pending",
+              text: `${pendingCount} late-arrival ${
+                pendingCount === 1 ? "decision is" : "decisions are"
+              } still pending for ${row.name}. Resolve them first. If you continue, all undecided late arrivals will be included in payroll.`,
+              confirmButtonText: "Continue and mark paid",
+            });
+            if (!confirmation.isConfirmed) return;
+          }
           await markPaid(row.staffId);
         }
       } finally {
@@ -1615,12 +1838,24 @@ export default function PayrollModule() {
   ) => {
     if (processingPayroll || rowsToProcess.length === 0) return;
     const isMarkingPaid = targetStatus === "Paid";
+    const peopleWithPendingDecisions = isMarkingPaid
+      ? rowsToProcess.filter(
+          (row) => (row.breakdown?.pendingLateDecisions.length ?? 0) > 0,
+        ).length
+      : 0;
+    const pendingWarning = !peopleWithPendingDecisions
+      ? ""
+      : peopleWithPendingDecisions === rowsToProcess.length
+        ? rowsToProcess.length === 1
+          ? " This person has pending late-arrival decisions. Resolve them first; if you continue, all undecided late arrivals will be included in payroll."
+          : ` All ${rowsToProcess.length} selected people have pending late-arrival decisions. Resolve them first; if you continue, all undecided late arrivals will be included in payroll.`
+        : ` ${peopleWithPendingDecisions} of ${rowsToProcess.length} selected people have pending late-arrival decisions. Resolve them first; if you continue, all undecided late arrivals will be included in payroll.`;
 
     const confirmation = await confirmDialog({
       title: isMarkingPaid ? "Process payroll?" : "Mark as pending?",
       text: `Mark ${rowsToProcess.length} selected ${
         rowsToProcess.length === 1 ? "person" : "people"
-      } as ${targetStatus.toLowerCase()} for ${payrollDateFilter.label}?`,
+      } as ${targetStatus.toLowerCase()} for ${payrollDateFilter.label}?${pendingWarning}`,
       confirmButtonText: isMarkingPaid ? "Process Payroll" : "Mark Pending",
     });
     if (!confirmation.isConfirmed) return;
@@ -1956,6 +2191,58 @@ export default function PayrollModule() {
         </div>
       </div>
 
+      {!policyLoading && showNextMonthCalendarReminder && (
+        <div
+          role="status"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 14,
+            flexWrap: "wrap",
+            padding: "14px 18px",
+            marginBottom: 18,
+            border: `1px solid ${T.amber100}`,
+            borderRadius: 14,
+            background: "#fffbeb",
+            boxShadow: T.shadowCard,
+          }}
+        >
+          <div>
+            <div style={{ color: T.textHeading, fontSize: 13, fontWeight: 800 }}>
+              Prepare {nextCalendarMonthLabel}’s payroll calendar
+            </div>
+            <div
+              style={{
+                marginTop: 4,
+                color: T.textMuted,
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              Weekly days off carry forward automatically. Confirm next month’s
+              holidays before the month begins.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              payrollDateFilter.setMode("monthly");
+              payrollDateFilter.setSelectedMonth(nextCalendarMonth);
+              openRulesModal();
+            }}
+            style={{
+              ...primaryButtonStyle,
+              whiteSpace: "nowrap",
+              padding: "9px 14px",
+            }}
+          >
+            Configure{" "}
+            {nextMonthDate.toLocaleDateString("en-US", { month: "short" })}
+          </button>
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
@@ -2217,6 +2504,7 @@ export default function PayrollModule() {
                         padding: "12px 20px",
                         textAlign: [
                           "present",
+                          "absent",
                           "otHrs",
                           "lateComings",
                           "unpaidLeaves",
@@ -2282,6 +2570,19 @@ export default function PayrollModule() {
                     <td style={{ ...tableCellStyle, textAlign: "center" }}>
                       {row.presentDays}
                     </td>
+                    {showCol("workingDays") && (
+                      <td
+                        style={{ ...tableCellStyle, textAlign: "center" }}
+                        title="Scheduled workdays this month, excluding weekly days off and holidays"
+                      >
+                        {row.totalWorkingDays}
+                      </td>
+                    )}
+                    {showCol("absent") && (
+                      <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                        {row.absentDays}
+                      </td>
+                    )}
                     {showCol("otHrs") && (
                       <td style={{ ...tableCellStyle, textAlign: "center" }}>
                         {row.otHours}h
@@ -2322,7 +2623,37 @@ export default function PayrollModule() {
                         fontWeight: 800,
                       }}
                     >
-                      {row.lateCount}
+                      <div
+                        style={{
+                          display: "grid",
+                          justifyItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        <span>{row.lateCount}</span>
+                        {(row.breakdown?.pendingLateDecisions.length ?? 0) >
+                          0 && (
+                          <button
+                            type="button"
+                            onClick={() => setLateDecisionRow(row)}
+                            style={{
+                              border: 0,
+                              padding: 0,
+                              background: "transparent",
+                              color: T.amber600,
+                              cursor: "pointer",
+                              font: "inherit",
+                              fontSize: 10,
+                              textDecoration: "underline",
+                            }}
+                          >
+                            {row.breakdown!.pendingLateDecisions.length}{" "}
+                            {row.breakdown!.pendingLateDecisions.length === 1
+                              ? "decision pending"
+                              : "decisions pending"}
+                          </button>
+                        )}
+                      </div>
                     </td>
                     {showCol("unpaidLeaves") && (
                       <td
@@ -2350,6 +2681,9 @@ export default function PayrollModule() {
                         lines={
                           row.breakdown
                             ? [
+                                row.breakdown.absentDays > 0
+                                  ? `Absent scheduled days: ${row.breakdown.absentDays} → ${fmtPKR(row.breakdown.absenceDeductionAmount)}`
+                                  : "",
                                 row.breakdown.lateCount > 0
                                   ? `Late arrivals: ${row.breakdown.lateCount} → ${fmtPKR(row.breakdown.lateDeductionAmount)}`
                                   : "",
@@ -2488,11 +2822,19 @@ export default function PayrollModule() {
 
       {activeTab === "trend" && (
         <div className="payroll-trend-grid">
-          <DepartmentSplitCard data={deptSummary} />
-          <BranchTrendCard
-            rows={visibleRows}
+          <DepartmentSplitCard data={filteredDepartmentSummary} />
+          <PayrollCompositionCard rows={visibleRows} hasOvertime={hasOvertime} />
+          <PayrollMonthlyTrendCard
+            organizationId={organizationId}
+            anchorMonth={periodMonth}
+            branchId={trendBranchId}
             branches={trendBranches}
-            selectedMonth={selectedMonth}
+            peopleType={peopleType}
+            department={departmentFilter}
+            search={searchQuery}
+            amountOperator={amountOperator}
+            amountValue={amountValue}
+            statusFilter={statusFilter}
           />
         </div>
       )}
@@ -2504,6 +2846,106 @@ export default function PayrollModule() {
           selectedBranchId={effectiveBranchId}
           onEditRow={openEditModal}
         />
+      )}
+
+      {lateDecisionRow?.breakdown && (
+        <Modal
+          scrollable
+          onClose={() =>
+            decidingAttendanceId === null && setLateDecisionRow(null)
+          }
+        >
+          <h2 style={modalTitleStyle}>Late-arrival decisions</h2>
+          <p style={modalSubStyle}>
+            {lateDecisionRow.name} · {payrollDateFilter.label}
+          </p>
+          <p
+            style={{
+              margin: "0 0 16px",
+              color: T.textMuted,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            Choose whether each late arrival should count toward this person’s
+            payroll deduction.
+          </p>
+          <div style={{ display: "grid", gap: 10 }}>
+            {lateDecisionRow.breakdown.pendingLateDecisions
+              .slice()
+              .sort((left, right) => left.date.localeCompare(right.date))
+              .map(({ attendanceId, date }) => (
+                <div
+                  key={attendanceId}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    padding: "10px 12px",
+                    border: `1px solid ${T.border}`,
+                    borderRadius: 10,
+                  }}
+                >
+                  <span
+                    style={{
+                      color: T.textBody,
+                      fontSize: 13,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {formatDisplayDate(parseLocalDate(date))}
+                  </span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {(["include", "exclude"] as const).map((decision) => (
+                      <button
+                        key={decision}
+                        type="button"
+                        disabled={decidingAttendanceId !== null}
+                        onClick={() =>
+                          void handleLateDecision(attendanceId, decision)
+                        }
+                        style={{
+                          ...(decision === "include"
+                            ? primaryButtonStyle
+                            : secondaryButtonStyle),
+                          padding: "7px 10px",
+                          fontSize: 11,
+                          opacity: decidingAttendanceId !== null ? 0.65 : 1,
+                        }}
+                      >
+                        {decidingAttendanceId === attendanceId
+                          ? "Saving…"
+                          : decision === "include"
+                            ? "Include"
+                            : "Exclude"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            {lateDecisionRow.breakdown.pendingLateDecisions.length === 0 && (
+              <p
+                style={{
+                  margin: "0 0 16px",
+                  color: T.green600,
+                  fontSize: 13,
+                  fontWeight: 700,
+                }}
+              >
+                All late-arrival decisions for this period are resolved.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setLateDecisionRow(null)}
+            disabled={decidingAttendanceId !== null}
+            style={{ ...secondaryButtonStyle, width: "100%", marginTop: 18 }}
+          >
+            Done
+          </button>
+        </Modal>
       )}
 
       {isRulesModalOpen && (
@@ -2518,35 +2960,15 @@ export default function PayrollModule() {
           </h2>
           <p style={modalSubStyle}>{rulesScopeSummary}</p>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: hasOvertime ? "1fr 1fr" : "1fr",
-              gap: 16,
-              marginBottom: 20,
-            }}
-          >
-            <Field label="Default Base Salary">
-              <input
-                type="number"
-                min={0}
-                max={PAYROLL_VALUE_MAX}
-                step="any"
-                onKeyDown={blockInvalidNumberKeys}
-                value={draftPolicy.defaultSalary}
-                onChange={(event) =>
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    defaultSalary: Math.min(
-                      PAYROLL_VALUE_MAX,
-                      Number(event.target.value),
-                    ),
-                  }))
-                }
-                style={inputStyle}
-              />
-            </Field>
-            {hasOvertime && (
+          {hasOvertime && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: 16,
+                marginBottom: 20,
+              }}
+            >
               <Field label="OT Rate / Hour">
                 <input
                   type="number"
@@ -2585,51 +3007,306 @@ export default function PayrollModule() {
                   </p>
                 )}
               </Field>
-            )}
-          </div>
-
-          {/* Per-day rate also prices late / half-day (attendance) deductions,
-              so it stays even without the Leave module — only the label changes. */}
-          <Field
-            label={`Per-Day Rate Basis (for ${hasLeave ? "leave/half-day" : "late/half-day"} deductions)`}
-          >
-            <ModernSelect
-              value={draftPolicy.perDayRateBasis}
-              onChange={(value) =>
-                setDraftPolicy((p) => ({
-                  ...p,
-                  perDayRateBasis: value as PayrollPolicy["perDayRateBasis"],
-                }))
-              }
-              ariaLabel="Per-day rate basis"
-              width="100%"
-              options={PER_DAY_RATE_BASIS_OPTIONS}
-            />
-          </Field>
-
-          {draftPolicy.perDayRateBasis === "fixed_days" && (
-            <Field label="Fixed Working Days / Month">
-              <input
-                type="number"
-                min={1}
-                max={31}
-                value={draftPolicy.fixedWorkingDaysPerMonth}
-                onChange={(event) =>
-                  setDraftPolicy((p) => ({
-                    ...p,
-                    fixedWorkingDaysPerMonth: Math.min(
-                      31,
-                      Math.max(1, Number(event.target.value) || 1),
-                    ),
-                  }))
-                }
-                style={{ ...inputStyle, marginTop: 10 }}
-              />
-            </Field>
+            </div>
           )}
 
+          <div
+            style={{
+              padding: 18,
+              marginBottom: 20,
+              border: `1px solid ${T.border}`,
+              borderRadius: 14,
+              background: T.bgCard,
+              boxShadow: T.shadowCard,
+            }}
+          >
+            <span
+              style={{
+                display: "block",
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: T.textMuted,
+                marginBottom: 8,
+              }}
+            >
+              Payroll Calendar · {selectedMonth} {selectedYear}
+            </span>
+            <p
+              style={{
+                margin: "0 0 12px",
+                color: T.textMuted,
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              Weekly days off repeat from the selected month onward. Holidays are
+              specific to each month and must be confirmed separately. You can
+              change these settings later.
+            </p>
+            <div style={{ display: "grid", gap: 12 }}>
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: T.textMuted,
+                    marginBottom: 6,
+                  }}
+                >
+                  Weekly days off
+                </label>
+                <details
+                  style={{
+                    position: "relative",
+                    fontFamily: "'DM Sans','Inter','Segoe UI',sans-serif",
+                  }}
+                >
+                  <summary
+                    style={{
+                      ...inputStyle,
+                      minHeight: 38,
+                      boxSizing: "border-box",
+                      display: "flex",
+                      alignItems: "center",
+                      cursor: "pointer",
+                      listStyle: "none",
+                      color: T.textHeading,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {selectedMonthWeeklyOffDays
+                      .map((day) => day[0].toUpperCase() + day.slice(1))
+                      .join(", ") || "Select weekly days off"}
+                  </summary>
+                  <div
+                    style={{
+                      position: "relative",
+                      marginTop: 6,
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "2px 8px",
+                      padding: 10,
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 12,
+                      background: T.bgCard,
+                      boxShadow: T.shadowCard,
+                    }}
+                  >
+                    {(
+                      [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday",
+                      ] as PayrollWeekday[]
+                    ).map((day) => (
+                      <label
+                        key={day}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "7px 6px",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: T.textHeading,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedMonthWeeklyOffDays.includes(day)}
+                          disabled={
+                            selectedMonthWeeklyOffDays.length === 1 &&
+                            selectedMonthWeeklyOffDays.includes(day)
+                          }
+                          onChange={(event) => {
+                            const days = new Set(selectedMonthWeeklyOffDays);
+                            if (event.target.checked) days.add(day);
+                            else days.delete(day);
+                            updateWeeklyOffDays([...days]);
+                          }}
+                        />
+                        {day[0].toUpperCase() + day.slice(1)}
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              </div>
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: T.textMuted,
+                    marginBottom: 6,
+                  }}
+                >
+                  Holidays (excluded from scheduled days)
+                </label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="date"
+                    min={`${periodMonth}-01`}
+                    max={monthEndDate}
+                    value={holidayDateDraft}
+                    onChange={(event) => setHolidayDateDraft(event.target.value)}
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      !holidayDateDraft ||
+                      monthHolidayDates.includes(holidayDateDraft)
+                    }
+                    onClick={() => {
+                      updateMonthCalendar({
+                        holidayDates: [...monthHolidayDates, holidayDateDraft].sort(),
+                        holidaysConfirmed: true,
+                      });
+                      setHolidayDateDraft("");
+                    }}
+                    style={{
+                      ...primaryButtonStyle,
+                      padding: "8px 14px",
+                      opacity:
+                        !holidayDateDraft ||
+                        monthHolidayDates.includes(holidayDateDraft)
+                          ? 0.55
+                          : 1,
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+                {monthHolidayDates.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                    {monthHolidayDates.map((holiday) => (
+                      <span
+                        key={holiday}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "5px 8px",
+                          borderRadius: 8,
+                          background: T.teal50,
+                          color: T.textHeading,
+                          fontSize: 12,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {formatReportDate(holiday)}
+                        <button
+                          type="button"
+                          aria-label={`Remove holiday ${holiday}`}
+                          onClick={() =>
+                            updateMonthCalendar({
+                              holidayDates: monthHolidayDates.filter(
+                                (dateValue) => dateValue !== holiday,
+                              ),
+                            })
+                          }
+                          style={{
+                            border: 0,
+                            background: "transparent",
+                            color: T.red600,
+                            cursor: "pointer",
+                            padding: 0,
+                            fontWeight: 800,
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {monthHolidayDates.length === 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      flexWrap: "wrap",
+                      marginTop: 10,
+                    }}
+                  >
+                    <span style={{ color: T.textMuted, fontSize: 11 }}>
+                      {monthHolidaysConfirmed
+                        ? "No holidays recorded for this month."
+                        : "If this month has no holidays, confirm that here."}
+                    </span>
+                    {monthHolidaysConfirmed ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraftPolicy((current) => {
+                            const calendars = { ...current.payrollCalendarsByMonth };
+                            const savedCalendar = calendars[periodMonth];
+                            if (
+                              savedCalendar &&
+                              (savedCalendar.weeklyOffDays ||
+                                savedCalendar.weeklyOffDay)
+                            ) {
+                              const {
+                                holidayDates: _holidayDates,
+                                holidaysConfirmed: _holidaysConfirmed,
+                                ...legacyWeeklySchedule
+                              } = savedCalendar;
+                              calendars[periodMonth] = legacyWeeklySchedule;
+                            } else {
+                              delete calendars[periodMonth];
+                            }
+                            return { ...current, payrollCalendarsByMonth: calendars };
+                          })
+                        }
+                        style={{
+                          border: 0,
+                          background: "transparent",
+                          color: T.textMuted,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Clear confirmation
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateMonthCalendar({
+                            holidayDates: [],
+                            holidaysConfirmed: true,
+                          })
+                        }
+                        style={{
+                          ...primaryButtonStyle,
+                          padding: "7px 10px",
+                          fontSize: 11,
+                        }}
+                      >
+                        Confirm no holidays
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div style={{ marginTop: 20 }}>
-            <Field label="Late-Coming Policy">
+            <Field label="Late Arrival Deduction">
               <ModernSelect
                 value={draftPolicy.lateComingPolicy.mode}
                 onChange={(value) =>
@@ -2648,51 +3325,57 @@ export default function PayrollModule() {
             </Field>
 
             {draftPolicy.lateComingPolicy.mode === "occurrence_threshold" && (
-              <Field label="Late Arrivals per Half-Day Deduction">
-                <input
-                  type="number"
-                  min={1}
-                  value={draftPolicy.lateComingPolicy.thresholdOccurrences ?? 3}
-                  onChange={(event) =>
-                    setDraftPolicy((p) => ({
-                      ...p,
-                      lateComingPolicy: {
-                        ...p.lateComingPolicy,
-                        thresholdOccurrences: Math.max(
-                          1,
-                          Number(event.target.value) || 1,
-                        ),
-                      },
-                    }))
-                  }
-                  style={{ ...inputStyle, marginTop: 10 }}
-                />
-              </Field>
+              <div style={{ marginTop: 16 }}>
+                <Field label="Number of late arrivals for one day's pay deduction">
+                  <input
+                    type="number"
+                    min={1}
+                    value={
+                      draftPolicy.lateComingPolicy.thresholdOccurrences ?? 3
+                    }
+                    onChange={(event) =>
+                      setDraftPolicy((p) => ({
+                        ...p,
+                        lateComingPolicy: {
+                          ...p.lateComingPolicy,
+                          thresholdOccurrences: Math.max(
+                            1,
+                            Number(event.target.value) || 1,
+                          ),
+                        },
+                      }))
+                    }
+                    style={{ ...inputStyle, marginTop: 10 }}
+                  />
+                </Field>
+              </div>
             )}
 
             {draftPolicy.lateComingPolicy.mode === "flat_per_occurrence" && (
-              <Field label="Rs. Deducted per Late Occurrence">
-                <input
-                  type="number"
-                  min={0}
-                  value={
-                    draftPolicy.lateComingPolicy.flatAmountPerOccurrence ?? 0
-                  }
-                  onChange={(event) =>
-                    setDraftPolicy((p) => ({
-                      ...p,
-                      lateComingPolicy: {
-                        ...p.lateComingPolicy,
-                        flatAmountPerOccurrence: Math.max(
-                          0,
-                          Number(event.target.value) || 0,
-                        ),
-                      },
-                    }))
-                  }
-                  style={{ ...inputStyle, marginTop: 10 }}
-                />
-              </Field>
+              <div style={{ marginTop: 16 }}>
+                <Field label="Amount to deduct for each late arrival (Rs.)">
+                  <input
+                    type="number"
+                    min={0}
+                    value={
+                      draftPolicy.lateComingPolicy.flatAmountPerOccurrence ?? 0
+                    }
+                    onChange={(event) =>
+                      setDraftPolicy((p) => ({
+                        ...p,
+                        lateComingPolicy: {
+                          ...p.lateComingPolicy,
+                          flatAmountPerOccurrence: Math.max(
+                            0,
+                            Number(event.target.value) || 0,
+                          ),
+                        },
+                      }))
+                    }
+                    style={{ ...inputStyle, marginTop: 10 }}
+                  />
+                </Field>
+              </div>
             )}
           </div>
 
@@ -3390,6 +4073,7 @@ export default function PayrollModule() {
               onClick={handleSaveEdit}
               disabled={
                 savingEdit ||
+                editingRowAllowanceTypesLoading ||
                 Boolean(salaryConfigError) ||
                 Boolean(otRateConfigError)
               }
@@ -3575,7 +4259,8 @@ const Modal: React.FC<{
           style={{
             maxHeight: "calc(min(75vh, calc(100vh - 32px)) - 64px)",
             overflowY: "auto",
-            marginRight: -30,
+            marginRight: -32,
+            paddingRight: 26,
             scrollbarGutter: "stable",
             scrollbarWidth: "auto",
             scrollbarColor: `${T.slate200} transparent`,

@@ -18,7 +18,6 @@ def test_allowance_labels_must_be_unique_case_insensitively():
             }
         )
 
-
 def test_distinct_allowance_labels_are_valid():
     _validate_payroll_policy(
         {

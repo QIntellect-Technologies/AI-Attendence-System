@@ -79,7 +79,24 @@ export type LateComingMode =
   | "occurrence_threshold"
   | "flat_per_occurrence"
   | "per_minute";
-export type PerDayRateBasis = "calendar_days" | "fixed_days" | "scheduled_days";
+export type PerDayRateBasis = "scheduled_days";
+
+export type PayrollWeekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+export interface PayrollMonthCalendar {
+  weeklyOffDays?: PayrollWeekday[];
+  /** Legacy single-day value, normalized to weeklyOffDays when loaded. */
+  weeklyOffDay?: PayrollWeekday;
+  holidayDates?: string[];
+  holidaysConfirmed?: boolean;
+}
 
 export interface LateComingPolicy {
   mode: LateComingMode;
@@ -90,9 +107,11 @@ export interface LateComingPolicy {
 
 export interface PayrollPolicy {
   otRatePerHour: number;
-  defaultSalary: number;
   perDayRateBasis: PerDayRateBasis;
   fixedWorkingDaysPerMonth: number;
+  payrollWeeklyOffDays: PayrollWeekday[];
+  payrollWeeklyOffDaysEffectiveFrom: string;
+  payrollCalendarsByMonth: Record<string, PayrollMonthCalendar>;
   lateComingPolicy: LateComingPolicy;
   leaveTypeRules: Record<string, LeavePayStatus>;
   /**
@@ -113,23 +132,79 @@ export type PayrollPolicyWrite = Omit<PayrollPolicy, "otRatePerHour"> &
 
 export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   otRatePerHour: 0,
-  defaultSalary: 0,
-  perDayRateBasis: "calendar_days",
+  perDayRateBasis: "scheduled_days",
   fixedWorkingDaysPerMonth: 26,
+  payrollWeeklyOffDays: ["sunday"],
+  payrollWeeklyOffDaysEffectiveFrom: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`,
+  payrollCalendarsByMonth: {},
   lateComingPolicy: { mode: "occurrence_threshold", thresholdOccurrences: 3 },
   leaveTypeRules: {},
   leaveTypeQuotas: {},
   allowanceTypes: {},
 };
 
+function normalizePayrollPolicy(
+  policy: Partial<PayrollPolicy> | undefined,
+): PayrollPolicy {
+  const { defaultSalary: _legacyDefaultSalary, ...currentPolicy } = policy ?? {};
+  const merged = { ...DEFAULT_PAYROLL_POLICY, ...currentPolicy };
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const legacyCalendars = merged.payrollCalendarsByMonth ?? {};
+  const legacyWeeklyOffDays =
+    legacyCalendars[currentMonth]?.weeklyOffDays ??
+    (legacyCalendars[currentMonth]?.weeklyOffDay
+      ? [legacyCalendars[currentMonth].weeklyOffDay]
+      : undefined) ??
+    Object.entries(legacyCalendars)
+      .sort(([monthA], [monthB]) => monthB.localeCompare(monthA))
+      .map(
+        ([, calendar]) =>
+          calendar.weeklyOffDays ??
+          (calendar.weeklyOffDay ? [calendar.weeklyOffDay] : undefined),
+      )
+      .find(Boolean);
+  const configuredWeeklyOffDays = currentPolicy.payrollWeeklyOffDays;
+  const calendars = Object.fromEntries(
+    Object.entries(merged.payrollCalendarsByMonth ?? {}).map(
+      ([month, calendar]) => [
+        month,
+        {
+          ...calendar,
+          ...(Array.isArray(calendar.holidayDates)
+            ? { holidayDates: calendar.holidayDates }
+            : {}),
+        },
+      ],
+    ),
+  );
+  return {
+    ...merged,
+    perDayRateBasis: "scheduled_days",
+    payrollWeeklyOffDays:
+      configuredWeeklyOffDays?.length
+        ? configuredWeeklyOffDays
+        : legacyWeeklyOffDays?.length
+          ? legacyWeeklyOffDays
+          : ["sunday"],
+    payrollWeeklyOffDaysEffectiveFrom:
+      currentPolicy.payrollWeeklyOffDaysEffectiveFrom ?? currentMonth,
+    payrollCalendarsByMonth: calendars,
+  };
+}
+
 // Mirrors payroll_engine.PayrollBreakdown.to_dict() on the backend — keep
 // these two shapes in lockstep; this is the itemized view the UI renders.
 export interface PayrollBreakdown {
   baseSalary: number;
   perDayRate: number;
+  scheduledWorkDays: number;
+  absentDays: number;
+  absenceDeductionAmount: number;
   lateCount: number;
   lateDeductionDays: number;
   lateDeductionAmount: number;
+  pendingLateDecisions: { attendanceId: string; date: string }[];
   halfDayAttendanceCount: number;
   halfDayLeaveCount: number;
   halfDayDeductionAmount: number;
@@ -193,9 +268,13 @@ export interface PayrollSalaryConfig {
 export interface RawPayrollBreakdown {
   base_salary?: number;
   per_day_rate?: number;
+  scheduled_work_days?: number;
+  absent_days?: number;
+  absence_deduction_amount?: number;
   late_count?: number;
   late_deduction_days?: number;
   late_deduction_amount?: number;
+  pending_late_decisions?: { attendance_id?: string; date?: string }[];
   half_day_attendance_count?: number;
   half_day_leave_count?: number;
   half_day_deduction_amount?: number;
@@ -259,9 +338,18 @@ export function mapBreakdown(
   return {
     baseSalary: Number(raw.base_salary ?? 0),
     perDayRate: Number(raw.per_day_rate ?? 0),
+    scheduledWorkDays: Number(raw.scheduled_work_days ?? 0),
+    absentDays: Number(raw.absent_days ?? 0),
+    absenceDeductionAmount: Number(raw.absence_deduction_amount ?? 0),
     lateCount: Number(raw.late_count ?? 0),
     lateDeductionDays: Number(raw.late_deduction_days ?? 0),
     lateDeductionAmount: Number(raw.late_deduction_amount ?? 0),
+    pendingLateDecisions: (raw.pending_late_decisions ?? [])
+      .filter((item) => item.attendance_id && item.date)
+      .map((item) => ({
+        attendanceId: item.attendance_id!,
+        date: item.date!,
+      })),
     halfDayAttendanceCount: Number(raw.half_day_attendance_count ?? 0),
     halfDayLeaveCount: Number(raw.half_day_leave_count ?? 0),
     halfDayDeductionAmount: Number(raw.half_day_deduction_amount ?? 0),
@@ -276,6 +364,50 @@ export function mapBreakdown(
     totalAdditions: Number(raw.total_additions ?? 0),
     netPay: Number(raw.net_pay ?? 0),
   };
+}
+
+export interface PaidPayrollTrendRow {
+  month: string;
+  branch_id: string;
+  payroll: number;
+}
+
+export interface PaidPayrollMonthlyTrends {
+  months: string[];
+  rows: PaidPayrollTrendRow[];
+}
+
+export async function getPaidPayrollMonthlyTrends(params: {
+  organizationId: PayrollId;
+  anchorMonth: string;
+  branchId?: string | null;
+  peopleType?: string | null;
+  department?: string | null;
+  search?: string;
+  amountOperator?: string;
+  amountValue?: string;
+}): Promise<PaidPayrollMonthlyTrends> {
+  const query = new URLSearchParams({
+    organization_id: String(params.organizationId),
+    anchor_month: params.anchorMonth,
+  });
+  if (params.branchId) query.set("branch_id", params.branchId);
+  if (params.peopleType) query.set("people_type", params.peopleType);
+  if (params.department) query.set("department", params.department);
+  if (params.search?.trim()) query.set("search", params.search.trim());
+  if (params.amountOperator && params.amountOperator !== "all") {
+    query.set("amount_operator", params.amountOperator);
+    if (
+      params.amountValue?.trim() &&
+      Number.isFinite(Number(params.amountValue))
+    ) {
+      query.set("amount_value", params.amountValue.trim());
+    }
+  }
+
+  return requestJson<PaidPayrollMonthlyTrends>(
+    `/payroll/monthly-trends?${query.toString()}`,
+  );
 }
 
 export interface SaveSalaryConfigPayload {
@@ -494,9 +626,8 @@ export async function getSalaryConfigForStaff(
 
 export interface PayrollPolicyScope {
   // Neither set -> org-wide default. branchId -> branch override. staffId
-  // -> individual override (also folds in that staff member's effective
-  // branch override, if any — see backend get_payroll_policy precedence:
-  // individual > branch > org default).
+  // -> individual override. Pass both branchId and staffId to resolve the
+  // full effective policy for a staff member (individual > branch > org).
   branchId?: PayrollId | null;
   staffId?: PayrollId | null;
 }
@@ -516,7 +647,7 @@ export async function getPayrollPolicy(
   const data = await requestJson<{ policy: Partial<PayrollPolicy> }>(
     `/payroll/policy?${query.toString()}`,
   );
-  return { ...DEFAULT_PAYROLL_POLICY, ...data.policy };
+  return normalizePayrollPolicy(data.policy);
 }
 
 export async function savePayrollPolicy(
@@ -535,7 +666,7 @@ export async function savePayrollPolicy(
       staff_id: staffId !== null ? String(staffId) : undefined,
     }),
   });
-  return { ...DEFAULT_PAYROLL_POLICY, ...data.policy };
+  return normalizePayrollPolicy(data.policy);
 }
 
 export async function markPayrollPaid(

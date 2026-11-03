@@ -5494,10 +5494,56 @@ def _compute_staff_payroll_breakdown(org_id: str, staff_id: str, period_start: s
             attendance_rows=attendance.get(staff_id, []),
             leave_rows=leaves.get(staff_id, []),
         )
-        return breakdown.to_dict()
+        snapshot = breakdown.to_dict()
+        snapshot['snapshot_branch_id'] = branch_id
+        return snapshot
     except Exception:
         logger.exception('Breakdown snapshot failed for staff=%s period=%s..%s', staff_id, period_start, period_end)
         return None
+
+
+@app.route('/api/payroll/monthly-trends', methods=['GET'])
+@require_client_dashboard_admin
+def api_paid_payroll_monthly_trends():
+    org_id = _clean_id_text(g.dashboard_user.get('org_id'))
+    anchor_month = _clean_id_text(request.args.get('anchor_month'))
+    if not org_id:
+        return jsonify({'success': False, 'message': 'organization_id is required'}), 400
+    try:
+        parsed_month = datetime.strptime(anchor_month or '', '%Y-%m')
+        if parsed_month.strftime('%Y-%m') != anchor_month:
+            raise ValueError
+    except ValueError:
+        return jsonify({'success': False, 'message': 'anchor_month must use YYYY-MM format'}), 400
+
+    raw_amount = _clean_id_text(request.args.get('amount_value'))
+    amount_value = None
+    amount_operator = _clean_id_text(request.args.get('amount_operator')) or 'all'
+    if amount_operator not in {'all', 'lt', 'lte', 'eq', 'gte', 'gt'}:
+        return jsonify({'success': False, 'message': 'amount_operator is invalid'}), 400
+    if raw_amount:
+        try:
+            amount_value = float(raw_amount)
+            if not np.isfinite(amount_value):
+                raise ValueError
+        except ValueError:
+            return jsonify({'success': False, 'message': 'amount_value must be a valid number'}), 400
+
+    try:
+        trends = support_db_payroll.get_paid_payroll_monthly_trends(
+            org_id,
+            anchor_month,
+            branch_id=_clean_id_text(request.args.get('branch_id')) or None,
+            people_type=_clean_id_text(request.args.get('people_type')) or None,
+            department=_clean_id_text(request.args.get('department')) or None,
+            search=_clean_id_text(request.args.get('search')) or '',
+            amount_operator=amount_operator,
+            amount_value=amount_value,
+        )
+        return jsonify({'success': True, **trends}), 200
+    except Exception as exc:
+        logger.exception('Paid payroll monthly trends failed for org=%s', org_id)
+        return jsonify({'success': False, 'message': str(exc)}), 500
 
 
 @app.route('/api/payroll/mark-paid', methods=['POST'])

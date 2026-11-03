@@ -2659,7 +2659,9 @@ import {
 } from "../api/attendanceSettingsApi";
 import { normalizePeopleType, peopleCodeModel } from "../types/types";
 import {
+  getPayrollPolicy,
   getSalaryConfigForStaff,
+  type AllowanceType,
   type PayrollSalaryConfig,
 } from "../../../pages/Payroll/api/payrollApi";
 import {
@@ -2901,6 +2903,17 @@ export const StaffModal: FC<{
     useState<PayrollSalaryConfig | null>(null);
   const [staffSalaryConfigLoading, setStaffSalaryConfigLoading] =
     useState(false);
+  const [staffAllowanceTypes, setStaffAllowanceTypes] = useState<
+    Record<string, AllowanceType>
+  >({});
+  const [staffAllowanceTypesLoading, setStaffAllowanceTypesLoading] =
+    useState(false);
+  const [staffAllowanceTypesError, setStaffAllowanceTypesError] = useState<
+    string | null
+  >(null);
+  const staffBackendBranchId = initial
+    ? resolveApiBranchId(organizationId, initial.branchId, cfg.branches)
+    : null;
   useEffect(() => {
     let cancelled = false;
     if (!showAllowancesField || !organizationId || !initial) {
@@ -2924,6 +2937,55 @@ export const StaffModal: FC<{
   }, [showAllowancesField, initial, organizationId]);
 
   const staffAllowanceItems = staffSalaryConfig?.allowancesBreakdown ?? [];
+  useEffect(() => {
+    let cancelled = false;
+    if (!showAllowancesField || !organizationId || !initial) {
+      setStaffAllowanceTypes({});
+      return undefined;
+    }
+    setStaffAllowanceTypesLoading(true);
+    setStaffAllowanceTypesError(null);
+    getPayrollPolicy(organizationId, {
+      branchId: staffBackendBranchId,
+      staffId: initial.id,
+    })
+      .then((policy) => {
+        if (!cancelled) setStaffAllowanceTypes(policy.allowanceTypes ?? {});
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setStaffAllowanceTypes({});
+          setStaffAllowanceTypesError(
+            error instanceof Error
+              ? error.message
+              : "Could not load configured allowances.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setStaffAllowanceTypesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showAllowancesField,
+    initial,
+    organizationId,
+    staffBackendBranchId,
+  ]);
+
+  const appliedAllowanceByKey = new Map(
+    staffAllowanceItems.map((item) => [item.key, item]),
+  );
+  const visibleAllowanceEntries = new Map<string, AllowanceType | null>(
+    Object.entries(staffAllowanceTypes),
+  );
+  staffAllowanceItems.forEach((item) => {
+    if (!visibleAllowanceEntries.has(item.key)) {
+      visibleAllowanceEntries.set(item.key, null);
+    }
+  });
 
   // Typed setter — no `unknown` escape hatch needed
   function set<K extends keyof StaffFormData>(key: K, val: StaffFormData[K]) {
@@ -4265,8 +4327,8 @@ export const StaffModal: FC<{
 
 
 
-          {/* Allowances — read-only. Configured org-wide in Payroll →
-              Payroll Rules, applied per-person from Payroll → Edit Payroll,
+          {/* Allowances — read-only. Configured in Payroll → Payroll Rules,
+              applied per-person from Payroll → Edit Payroll,
               so there's nothing to edit here; this just surfaces what's
               already applied so it isn't only visible in the profile drawer. */}
           {showAllowancesField && (
@@ -4282,9 +4344,9 @@ export const StaffModal: FC<{
                   background: T.teal50,
                 }}
               >
-                {staffSalaryConfigLoading ? (
+                {staffSalaryConfigLoading || staffAllowanceTypesLoading ? (
                   <span style={{ color: T.muted }}>Loading…</span>
-                ) : staffAllowanceItems.length ? (
+                ) : visibleAllowanceEntries.size ? (
                   <div
                     style={{
                       display: "flex",
@@ -4292,23 +4354,36 @@ export const StaffModal: FC<{
                       gap: 8,
                     }}
                   >
-                    {staffAllowanceItems.map((item) => (
-                      <span
-                        key={item.key}
-                        style={{
-                          border: `1px solid ${T.teal200}`,
-                          borderRadius: 20,
-                          padding: "4px 10px",
-                          fontWeight: 700,
-                          color: T.teal700,
-                          background: T.card,
-                        }}
-                      >
-                        {item.mode === "percent"
-                          ? `${item.label} (${item.value}%: PKR ${item.amount.toLocaleString()})`
-                          : `${item.label} (PKR ${item.amount.toLocaleString()})`}
-                      </span>
-                    ))}
+                    {[...visibleAllowanceEntries].map(([key, type]) => {
+                      const applied = appliedAllowanceByKey.get(key);
+                      const label = type?.label ?? applied?.label ?? key;
+                      const detail = applied
+                        ? applied.mode === "percent"
+                          ? `${applied.value}%: PKR ${applied.amount.toLocaleString()}`
+                          : applied.mode === "none"
+                            ? "Applied"
+                            : `PKR ${applied.amount.toLocaleString()}`
+                        : type?.mode === "percent"
+                          ? `${type.value}% of base salary · not applied`
+                          : type?.mode === "fixed"
+                            ? `PKR ${type.value.toLocaleString()} default · not applied`
+                            : "Not applied";
+                      return (
+                        <span
+                          key={key}
+                          style={{
+                            border: `1px solid ${T.teal200}`,
+                            borderRadius: 20,
+                            padding: "4px 10px",
+                            fontWeight: 700,
+                            color: T.teal700,
+                            background: T.card,
+                          }}
+                        >
+                          {label} ({detail})
+                        </span>
+                      );
+                    })}
                   </div>
                 ) : (
                   <span style={{ color: T.muted }}>
@@ -4316,9 +4391,18 @@ export const StaffModal: FC<{
                   </span>
                 )}
               </div>
+              {staffAllowanceTypesError && (
+                <div
+                  role="alert"
+                  style={{ fontSize: 10, color: T.red, marginTop: 6 }}
+                >
+                  Configured allowance types could not be loaded:{" "}
+                  {staffAllowanceTypesError}
+                </div>
+              )}
               <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>
-                Configured org-wide from Payroll → Payroll Rules, and applied
-                per person from Payroll → Edit Payroll — not editable here.
+                Configured in Payroll → Payroll Rules and applied per person
+                from Payroll → Edit Payroll — not editable here.
               </div>
             </div>
           )}

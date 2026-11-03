@@ -2514,6 +2514,7 @@ from logger_config import get_logger
 
 logger = get_logger(__name__)
 from support_db_core import _execute_supabase, build_or_ilike_filter
+from payroll_trends import aggregate_paid_payroll_monthly_trends
 from support_invite_message import build_client_invite_message
 from support_db_attendance_gate import (
     resolve_timing_source,
@@ -2585,8 +2586,7 @@ def _invalidate_payroll_breakdown_cache(org_id: str) -> None:
 
 _DEFAULT_PAYROLL_POLICY = {
     'otRatePerHour': 0,
-    'defaultSalary': 0,
-    'perDayRateBasis': 'calendar_days',
+    'perDayRateBasis': 'scheduled_days',
     'fixedWorkingDaysPerMonth': 26,
     'lateComingPolicy': {'mode': 'occurrence_threshold', 'thresholdOccurrences': 3},
     'shortLeavePolicy': {'dayFraction': 0.5},
@@ -2605,6 +2605,7 @@ _DEFAULT_PAYROLL_POLICY = {
     # catalog of what allowance types exist and their default math, mirroring
     # leaveTypeRules' shape/precedence exactly (see get_payroll_policy).
     'allowanceTypes': {},
+    'payrollCalendarsByMonth': {},
 }
 
 # payroll_policy_overrides stores one row per (org, branch) or (org, staff)
@@ -2915,7 +2916,7 @@ _PAYROLL_VALUE_MIN = 1.0
 _PAYROLL_VALUE_MAX = 100_000_000.0
 _PAYROLL_PERCENT_MAX = 100.0
 
-_PAYROLL_NON_NEGATIVE_FIELDS = ('otRatePerHour', 'defaultSalary')
+_PAYROLL_NON_NEGATIVE_FIELDS = ('otRatePerHour',)
 
 # Nested policy fields that also feed directly into pay math, but that
 # were missing from _PAYROLL_NON_NEGATIVE_FIELDS above -- so a direct API
@@ -2967,6 +2968,70 @@ def _validate_payroll_policy(policy: dict) -> None:
             raise ValueError(f'{field} must be at least {int(_PAYROLL_VALUE_MIN)}')
         if value > _PAYROLL_VALUE_MAX:
             raise ValueError(f'{field} cannot exceed {int(_PAYROLL_VALUE_MAX)}')
+
+    calendars = policy.get('payrollCalendarsByMonth')
+    if calendars is not None:
+        if not isinstance(calendars, dict):
+            raise ValueError('payrollCalendarsByMonth must be an object')
+        for month_key, config in calendars.items():
+            try:
+                month_start = date.fromisoformat(f'{month_key}-01')
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'Invalid payroll calendar month: {month_key}') from exc
+            if month_start.strftime('%Y-%m') != month_key or not isinstance(config, dict):
+                raise ValueError(f'Invalid payroll calendar configuration for {month_key}')
+            weekdays = {
+                'monday', 'tuesday', 'wednesday', 'thursday',
+                'friday', 'saturday', 'sunday',
+            }
+            holiday_dates = config.get('holidayDates')
+            if holiday_dates is not None and not isinstance(holiday_dates, list):
+                raise ValueError(f'holidayDates for {month_key} must be a list')
+            if (
+                'holidaysConfirmed' in config
+                and not isinstance(config.get('holidaysConfirmed'), bool)
+            ):
+                raise ValueError(f'holidaysConfirmed for {month_key} must be a boolean')
+            weekly_off_days = config.get('weeklyOffDays')
+            if weekly_off_days is None and config.get('weeklyOffDay'):
+                weekly_off_days = [config['weeklyOffDay']]
+            if weekly_off_days is not None and (
+                not isinstance(weekly_off_days, list)
+                or not weekly_off_days
+                or any(str(day).strip().lower() not in weekdays for day in weekly_off_days)
+            ):
+                raise ValueError(f'weeklyOffDays for {month_key} must contain valid weekdays')
+            holiday_dates = config.get('holidayDates')
+            if not isinstance(holiday_dates, list):
+                raise ValueError(f'holidayDates for {month_key} must be a list')
+            for holiday in holiday_dates or []:
+                try:
+                    holiday_date = date.fromisoformat(str(holiday))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f'Invalid holiday date for {month_key}') from exc
+                if holiday_date.strftime('%Y-%m') != month_key:
+                    raise ValueError(f'Holiday date must belong to {month_key}')
+
+    weekly_off_days = policy.get('payrollWeeklyOffDays')
+    if weekly_off_days is not None:
+        valid_weekdays = {
+            'monday', 'tuesday', 'wednesday', 'thursday',
+            'friday', 'saturday', 'sunday',
+        }
+        if (
+            not isinstance(weekly_off_days, list)
+            or not weekly_off_days
+            or any(str(day).strip().lower() not in valid_weekdays for day in weekly_off_days)
+        ):
+            raise ValueError('payrollWeeklyOffDays must contain at least one valid weekday')
+    effective_from = policy.get('payrollWeeklyOffDaysEffectiveFrom')
+    if effective_from is not None:
+        try:
+            effective_month = date.fromisoformat(f'{effective_from}-01')
+        except (TypeError, ValueError) as exc:
+            raise ValueError('payrollWeeklyOffDaysEffectiveFrom must be YYYY-MM') from exc
+        if effective_month.strftime('%Y-%m') != effective_from:
+            raise ValueError('payrollWeeklyOffDaysEffectiveFrom must be YYYY-MM')
 
     if 'fixedWorkingDaysPerMonth' in policy:
         raw = policy.get('fixedWorkingDaysPerMonth')
@@ -3198,13 +3263,94 @@ def mark_payroll_pending(org_id: str, staff_id: str, period_start: str, period_e
         raise
     _invalidate_payroll_breakdown_cache(org_key)
 
+
+def get_paid_payroll_monthly_trends(
+    org_id: str,
+    anchor_month: str,
+    *,
+    branch_id: str | None = None,
+    people_type: str | None = None,
+    department: str | None = None,
+    search: str = '',
+    amount_operator: str = 'all',
+    amount_value: float | None = None,
+) -> dict:
+    """Return the last 12 completed/selected monthly paid payroll snapshots."""
+    from calendar import monthrange
+    from datetime import date
+
+    year, month = (int(part) for part in anchor_month.split('-'))
+    month_keys = []
+    for offset in range(11, -1, -1):
+        absolute_month = year * 12 + month - 1 - offset
+        point_year, point_month = divmod(absolute_month, 12)
+        month_keys.append(f'{point_year:04d}-{point_month + 1:02d}')
+    first_year, first_month = (int(part) for part in month_keys[0].split('-'))
+    first_date = date(first_year, first_month, 1).isoformat()
+    last_year, last_month = year, month
+    last_date = date(
+        last_year, last_month, monthrange(last_year, last_month)[1]
+    ).isoformat()
+
+    sb = get_supabase()
+    payments: list[dict] = []
+    query = (
+        sb.table('payroll_payments')
+        .select('staff_id, period_start, breakdown')
+        .eq('org_id', str(org_id))
+        .gte('period_start', first_date)
+        .lte('period_start', last_date)
+    )
+    for page_index in range(100):
+        page = _execute_supabase(
+            'paid_payroll_monthly_trends',
+            lambda offset=page_index * 1000: query.range(offset, offset + 999),
+        ).data or []
+        payments.extend(page)
+        if len(page) < 1000:
+            break
+    else:
+        raise RuntimeError('Paid payroll trend query exceeded 100,000 records.')
+
+    staff_ids = sorted({
+        _payroll_text(payment.get('staff_id'))
+        for payment in payments
+        if _payroll_text(payment.get('staff_id'))
+    })
+    staff_rows: list[dict] = []
+    for start in range(0, len(staff_ids), 500):
+        batch = staff_ids[start:start + 500]
+        result = _execute_supabase(
+            'paid_payroll_monthly_trends_staff',
+            lambda ids=batch: (
+                sb.table('client_staff')
+                .select('*')
+                .eq('org_id', str(org_id))
+                .in_('id', ids)
+            ),
+        )
+        staff_rows.extend(result.data or [])
+
+    rows = aggregate_paid_payroll_monthly_trends(
+        payments,
+        staff_rows,
+        month_keys=month_keys,
+        branch_id=branch_id,
+        people_type=people_type,
+        department=department,
+        search=search,
+        amount_operator=amount_operator,
+        amount_value=amount_value,
+    )
+    return {'months': month_keys, 'rows': rows}
+
 _PAYROLL_ATTENDANCE_COLUMNS_BASE = (
-    'staff_id, timestamp, status, day_status, branch_id, check_out_timestamp, capture_channel'
+    'id, staff_id, timestamp, status, day_status, branch_id, check_out_timestamp, capture_channel'
 )
 
 _PAYROLL_ATTENDANCE_COLUMNS_WITH_DECISION = (
     _PAYROLL_ATTENDANCE_COLUMNS_BASE
-    + ', branch_id, check_out_status, check_in_payroll_decision, check_out_payroll_decision'
+    + ', check_out_status, check_in_payroll_decision, check_out_payroll_decision'
 )
 
 def get_staff_attendance_for_payroll_period(
@@ -3309,6 +3455,7 @@ def get_staff_attendance_for_payroll_period(
         day_status = row.get('day_status') or 'present'
         checkout_ts = row.get('check_out_timestamp')
         entry = {
+            'attendanceId': row.get('id'),
             'date': _attendance_exceptions.local_date_str_iso(ts, zone),
             'branch_id': row.get('branch_id'),
             'branchId': row.get('branch_id'),
@@ -4727,6 +4874,8 @@ def _payroll_page_row(
         'overtimeAmount': overtime_amount,
         'present_days': resolved_present_days,
         'presentDays': resolved_present_days,
+        'absent_days': _payroll_float((breakdown or {}).get('absent_days')),
+        'absentDays': _payroll_float((breakdown or {}).get('absent_days')),
         'net_pay': net_pay,
         'netPay': net_pay,
         'status': normalized_status,

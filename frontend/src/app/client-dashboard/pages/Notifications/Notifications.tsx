@@ -57,6 +57,15 @@ function isPayrollDecisionNotification(
   return notification.event_type === PAYROLL_DECISION_EVENT_TYPE;
 }
 
+function isLatePayrollDecisionNotification(
+  notification: DashboardNotification,
+): boolean {
+  return (
+    isPayrollDecisionNotification(notification) &&
+    String(notification.metadata?.day_status ?? "").toLowerCase() === "late"
+  );
+}
+
 type AuthUser = {
   id?: number | string;
   organizationId?: number | string | null;
@@ -257,12 +266,14 @@ export default function NotificationsPage() {
       // Merge incoming notifications with any locally-recorded payroll
       // decisions so UI immediately reflects includes/excludes even if
       // the server-side notifications table doesn't store that flag.
+      const visibleNotifications = response.notifications.filter(
+        (notification) =>
+          !isLatePayrollDecisionNotification(notification) &&
+          (payrollModuleEnabled ||
+            !isPayrollDecisionNotification(notification)),
+      );
       setItems((prev) =>
-        response.notifications
-          .filter(
-            (n) => payrollModuleEnabled || !isPayrollDecisionNotification(n),
-          )
-          .map((n) => {
+        visibleNotifications.map((n) => {
           try {
             const prevMatch = prev.find((p) => {
               const a = String(
@@ -300,8 +311,18 @@ export default function NotificationsPage() {
           return n;
         }),
       );
-      setUnreadCount(response.unread_count);
-      const liveIds = new Set(response.notifications.map((n) => n.id));
+      setUnreadCount(
+        Math.max(
+          0,
+          response.unread_count -
+            response.notifications.filter(
+              (notification) =>
+                isLatePayrollDecisionNotification(notification) &&
+                !notification.is_read,
+            ).length,
+        ),
+      );
+      const liveIds = new Set(visibleNotifications.map((n) => n.id));
       setSelectedIds((current) => {
         const next = new Set([...current].filter((id) => liveIds.has(id)));
         return next.size === current.size ? current : next;

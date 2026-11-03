@@ -20,6 +20,7 @@ import { useOrg } from "../../contexts/OrgConfigContext";
 import { getEnabledModules } from "../../config/moduleRegistry";
 import { resolvePeopleRenderingModel } from "../../utils/templateRendering";
 import { getFirstPaintModuleKeys, isStaffUser } from "../../utils/moduleAccess";
+import { useHasMultipleBranches } from "../../hooks/useHasMultipleBranches";
 
 export interface DashboardTabDef {
   id: string;
@@ -162,6 +163,7 @@ function LoadingModuleHint() {
 export const DashboardTabBar: React.FC = () => {
   const location = useLocation();
   const { cfg, isOrgReady, selectedPeopleType } = useOrg();
+  const hasMultipleBranches = useHasMultipleBranches();
   const { user: rawUser } = useAuth() as { user?: AuthUser | null };
 
   const user = rawUser ?? null;
@@ -259,12 +261,16 @@ export const DashboardTabBar: React.FC = () => {
           Icon: LayoutGrid,
           to: "/admin",
         },
-        {
-          id: "branches",
-          label: "Branches",
-          Icon: Building2,
-          to: "/admin/branches",
-        },
+        ...(isOrgReady && hasMultipleBranches
+          ? [
+              {
+                id: "branches",
+                label: "Branches",
+                Icon: Building2,
+                to: "/admin/branches",
+              },
+            ]
+          : []),
         ...moduleTabs,
       ];
     }
@@ -303,6 +309,8 @@ export const DashboardTabBar: React.FC = () => {
     ];
   }, [
     cfg.bizType,
+    hasMultipleBranches,
+    isOrgReady,
     isStaffDashboard,
     ownBranchId,
     routeBranchId,

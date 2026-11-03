@@ -101,6 +101,8 @@ export interface PayrollRow {
   otRateOverride: number;
   overtimeAmount: number;
   presentDays: number;
+  totalWorkingDays: number;
+  absentDays: number;
   netPay: number;
   effectiveFrom?: string | null;
   updatedAt?: string | null;
@@ -462,6 +464,10 @@ function normalizePayrollRow(
     otRateOverride,
     overtimeAmount,
     presentDays: numberValue(merged.presentDays ?? merged.present_days),
+    totalWorkingDays: numberValue(breakdown?.scheduledWorkDays),
+    absentDays: numberValue(
+      breakdown?.absentDays ?? merged.absentDays ?? merged.absent_days,
+    ),
     netPay,
     unpaidLeaveDays: numberValue(
       breakdown?.unpaidLeaveDays ??

@@ -714,7 +714,7 @@ export default function LeaveManagement() {
 
   const toolbarSections = useMemo<DynamicFilterSection[]>(
     () => [
-      ...(isGlobal && branch.selectorBranches.length > 1
+      ...(isGlobal && branch.hasMultipleBranches
         ? [
             {
               id: "branch",

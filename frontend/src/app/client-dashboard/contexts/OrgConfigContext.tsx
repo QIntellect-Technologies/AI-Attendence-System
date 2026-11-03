@@ -1834,12 +1834,6 @@ export interface PayrollPolicy {
   otRatePerHour: number;
 
   /**
-   * Fallback base salary used when a staff record has no salary configured.
-   * Default: 50_000. Validated by normalizePayrollPolicy — always a positive number.
-   */
-  defaultSalary: number;
-
-  /**
    * Org-wide catalog of named allowance types (Transport, Housing, ...),
    * keyed by lowercase slug. Read-only here — the Payroll Rules modal in
    * PayrollModule.tsx is the only editor; OrgConfigContext just carries
@@ -2079,7 +2073,6 @@ const DEFAULT_ORG_CONFIG: OrgConfig = {
   employeeProfiles: {},
   payrollPolicy: {
     otRatePerHour: 500,
-    defaultSalary: 50_000,
     allowanceTypes: {},
   },
 };
@@ -2603,15 +2596,9 @@ function normalizePayrollPolicy(value: unknown): PayrollPolicy {
   const raw = isRecord(value) ? value : {};
 
   const otRatePerHour = Number(raw.otRatePerHour);
-  const defaultSalary = Number(raw.defaultSalary);
-
   return {
     otRatePerHour:
       Number.isFinite(otRatePerHour) && otRatePerHour > 0 ? otRatePerHour : 500,
-    defaultSalary:
-      Number.isFinite(defaultSalary) && defaultSalary > 0
-        ? defaultSalary
-        : 50_000,
     allowanceTypes: normalizeAllowanceTypes(raw.allowanceTypes),
   };
 }
