@@ -558,6 +558,7 @@ export function usePayrollData(
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadedPayrollKey, setLoadedPayrollKey] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   const scope = useMemo(() => {
@@ -634,6 +635,23 @@ export function usePayrollData(
   // result nobody would ever read.
   const abortRef = useRef<AbortController | null>(null);
 
+  const currentPayrollKey = useMemo(() => {
+    if (!scope?.organizationId) return null;
+    const { periodStart, periodEnd } = monthToPeriod(options.month);
+    return payrollCacheKey(
+      scope.organizationId,
+      scope.apiBranchId,
+      periodStart,
+      periodEnd,
+      resolvedPeopleType,
+    );
+  }, [
+    options.month,
+    resolvedPeopleType,
+    scope?.apiBranchId,
+    scope?.organizationId,
+  ]);
+
   const fetchPayrollPage = useCallback(
     async (
       periodStart: string | undefined,
@@ -697,16 +715,19 @@ export function usePayrollData(
 
   const refresh = useCallback(
     async (refreshOptions: { force?: boolean } = {}) => {
+      // Supersede any prior request even when the scope is being cleared.
+      abortRef.current?.abort();
+      const requestId = ++requestIdRef.current;
+
       if (!scope?.organizationId) {
         setSalaryRows([]);
         setStaffRows([]);
+        setLoadedPayrollKey(null);
         setLoading(false);
+        setRefreshing(false);
         return;
       }
 
-      // Cancel whatever this instance's previous request was still doing —
-      // its result is about to be superseded either way.
-      abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -714,19 +735,12 @@ export function usePayrollData(
       // effect, or a mark-paid/pending refresh racing an earlier in-flight
       // refresh). Only the most recently *started* request may write state —
       // an older response arriving late must never overwrite a newer one.
-      const requestId = ++requestIdRef.current;
-
       try {
         setRefreshing(true);
         setError(null);
         const { periodStart, periodEnd } = monthToPeriod(options.month);
-        const key = payrollCacheKey(
-          scope.organizationId,
-          scope.apiBranchId,
-          periodStart,
-          periodEnd,
-          resolvedPeopleType,
-        );
+        const key = currentPayrollKey;
+        if (!key) return;
         const rows = await loadPayrollPageCached(
           key,
           () =>
@@ -742,6 +756,7 @@ export function usePayrollData(
         if (!mountedRef.current || requestId !== requestIdRef.current) return;
         setSalaryRows(rows);
         setStaffRows(rows);
+        setLoadedPayrollKey(key);
       } catch (err) {
         // Superseded by a newer request from this same instance — not a
         // real failure, so don't surface an error or clear good data.
@@ -752,14 +767,16 @@ export function usePayrollData(
         );
         setSalaryRows([]);
         setStaffRows([]);
+        setLoadedPayrollKey(currentPayrollKey);
       } finally {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || requestId !== requestIdRef.current) return;
         setLoading(false);
         setRefreshing(false);
       }
     },
     [
       fetchPayrollPage,
+      currentPayrollKey,
       options.month,
       resolvedPeopleType,
       scope?.apiBranchId,
@@ -807,6 +824,8 @@ export function usePayrollData(
   const orgDefaultOtRate = numberValue(cfg.payrollPolicy?.otRatePerHour);
 
   const rows = useMemo<PayrollRow[]>(() => {
+    if (loadedPayrollKey !== currentPayrollKey) return [];
+
     const staffById = new Map<string, AnyRecord>();
     staffRows.forEach((staff) => {
       const id = staffIdentity(staff);
@@ -845,6 +864,8 @@ export function usePayrollData(
     );
   }, [
     cfg.branches,
+    currentPayrollKey,
+    loadedPayrollKey,
     modulePeopleTypes,
     orgDefaultOtRate,
     resolvedPeopleType,
@@ -1021,7 +1042,7 @@ export function usePayrollData(
     deptSummary,
     modulePeopleTypes,
     peopleType: resolvedPeopleType,
-    loading,
+    loading: loading || loadedPayrollKey !== currentPayrollKey,
     refreshing,
     error,
     refresh,

@@ -40,10 +40,7 @@ function addImage(doc: jsPDF, dataUrl: string, x: number, y: number) {
   doc.addImage(dataUrl, format, x, y, 52, 52);
 }
 
-function buildPayslip(
-  props: PayslipData,
-  logoDataUrl: string | null,
-): jsPDF {
+function buildPayslip(props: PayslipData, logoDataUrl: string | null): jsPDF {
   const {
     row,
     companyName,
@@ -104,7 +101,12 @@ function buildPayslip(
         row.status,
       ],
     ],
-    styles: { font: "helvetica", fontSize: 9, cellPadding: 8, textColor: SLATE },
+    styles: {
+      font: "helvetica",
+      fontSize: 9,
+      cellPadding: 8,
+      textColor: SLATE,
+    },
     columnStyles: {
       0: { fontStyle: "bold", textColor: NAVY, cellWidth: 100 },
       1: { cellWidth: 160 },
@@ -124,10 +126,10 @@ function buildPayslip(
   );
   if (allowanceLines.length > 0) {
     earnings.push(
-      ...allowanceLines.map(({ label, amount }) => [
-        label,
-        formatCurrency(amount),
-      ] as [string, string]),
+      ...allowanceLines.map(
+        ({ label, amount }) =>
+          [label, formatCurrency(amount)] as [string, string],
+      ),
     );
     const namedAllowanceTotal = allowanceLines.reduce(
       (total, { amount }) => total + amount,
@@ -166,7 +168,10 @@ function buildPayslip(
     if (breakdown.incomeTaxAmount > 0)
       deductions.push(["Income tax", breakdown.incomeTaxAmount]);
   }
-  const itemizedDeductions = deductions.reduce((total, [, amount]) => total + amount, 0);
+  const itemizedDeductions = deductions.reduce(
+    (total, [, amount]) => total + amount,
+    0,
+  );
   const otherDeductions = Math.max(0, row.deductions - itemizedDeductions);
   if (otherDeductions > 0 || deductions.length === 0)
     deductions.push(["Other deductions", otherDeductions || row.deductions]);
@@ -184,7 +189,7 @@ function buildPayslip(
   );
   const totalEarnings = row.baseSalary + row.allowances + row.overtimeAmount;
   bodyRows.push([
-    "Total Earnings",
+    "Total Salary",
     formatCurrency(totalEarnings),
     "Total Deductions",
     formatCurrency(row.deductions),
@@ -197,8 +202,17 @@ function buildPayslip(
     head: [["EARNINGS", "AMOUNT", "DEDUCTIONS", "AMOUNT"]],
     body: bodyRows,
     theme: "grid",
-    styles: { font: "helvetica", fontSize: 9, cellPadding: 8, textColor: SLATE },
-    headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: "bold" },
+    styles: {
+      font: "helvetica",
+      fontSize: 9,
+      cellPadding: 8,
+      textColor: SLATE,
+    },
+    headStyles: {
+      fillColor: NAVY,
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+    },
     columnStyles: {
       0: { cellWidth: 164 },
       1: { cellWidth: 88, halign: "right" },
@@ -217,8 +231,9 @@ function buildPayslip(
     },
   });
 
-  const finalY = (doc as jsPDF & { lastAutoTable?: { finalY: number } })
-    .lastAutoTable?.finalY ?? financialStartY + 80;
+  const finalY =
+    (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable
+      ?.finalY ?? financialStartY + 80;
   const netY = finalY + 38;
   doc.setFillColor(...TEAL);
   doc.roundedRect(PAGE_MARGIN, netY, contentWidth, 46, 7, 7, "F");
@@ -227,9 +242,14 @@ function buildPayslip(
   doc.setFontSize(12);
   doc.text("NET PAYABLE", PAGE_MARGIN + 16, netY + 28);
   doc.setFontSize(16);
-  doc.text(formatCurrency(row.netPay), pageWidth - PAGE_MARGIN - 16, netY + 29, {
-    align: "right",
-  });
+  doc.text(
+    formatCurrency(row.netPay),
+    pageWidth - PAGE_MARGIN - 16,
+    netY + 29,
+    {
+      align: "right",
+    },
+  );
 
   doc.setTextColor(...SLATE);
   doc.setFont("helvetica", "normal");
@@ -287,7 +307,9 @@ export default function PayrollPayslipDialog(props: PayrollPayslipDialogProps) {
       .catch((cause: unknown) => {
         if (!cancelled)
           setError(
-            cause instanceof Error ? cause.message : "Could not generate payslip.",
+            cause instanceof Error
+              ? cause.message
+              : "Could not generate payslip.",
           );
       });
     return () => {
@@ -398,7 +420,9 @@ export default function PayrollPayslipDialog(props: PayrollPayslipDialogProps) {
             style={{ flex: 1, width: "100%", border: 0 }}
           />
         ) : (
-          <div style={{ padding: 24, color: "#64748b" }}>Preparing payslip…</div>
+          <div style={{ padding: 24, color: "#64748b" }}>
+            Preparing payslip…
+          </div>
         )}
       </section>
     </div>
