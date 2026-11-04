@@ -14,11 +14,15 @@ import { staffSalary } from "../utils/staffMember";
 // ─── Stat bar ─────────────────────────────────────────────────────────────────
 
 export const StaffStats: FC<{
-  /** Rows currently loaded (ONE page) - only used for the salary average and
-   * as a fallback while `counts` has not loaded yet. */
+  /** Current-page rows used as a fallback while `counts` has not loaded yet. */
   staff: StaffMember[];
   /** Directory-wide headcounts from the server (all pages). */
-  counts?: { total: number; active: number; inactiveOrPending: number } | null;
+  counts?: {
+    total: number;
+    active: number;
+    inactiveOrPending: number;
+    averageSalary: number;
+  } | null;
   peopleModel: PeopleRenderingModel;
   purchasedModules: string[];
 }> = ({ staff, counts, peopleModel, purchasedModules }) => {
@@ -47,12 +51,14 @@ export const StaffStats: FC<{
   ];
 
   if (showPayrollStats) {
-    const avgSal = staff.length
-      ? Math.round(
-        staff.reduce((acc, member) => acc + staffSalary(member), 0) /
-        staff.length,
-      )
-      : 0;
+    const avgSal = Math.round(
+      counts
+        ? counts.averageSalary
+        : staff.length
+          ? staff.reduce((acc, member) => acc + staffSalary(member), 0) /
+            staff.length
+          : 0,
+    );
     cards.push({
       label: "Avg Salary",
       val: `${Math.round(avgSal / 1000)}K`,

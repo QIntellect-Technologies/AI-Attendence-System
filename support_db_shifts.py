@@ -455,6 +455,78 @@ def assign_staff_shift(
     return staff
 
 
+def assign_staff_shifts(
+    org_id: str,
+    branch_id: str,
+    staff_ids: object,
+    shift_id: str | None,
+) -> list[dict]:
+    """Assign one shift to multiple staff in a branch with one database write."""
+    if not isinstance(staff_ids, list):
+        raise ValueError("staff_ids must be a non-empty list")
+
+    ids = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in staff_ids
+            if str(value or "").strip()
+        )
+    )
+    if not ids:
+        raise ValueError("Select at least one staff member")
+    if len(ids) > 1000:
+        raise ValueError("A maximum of 1000 staff members can be updated at once")
+
+    branch_key = _require_specific_branch(branch_id, "Assigning shifts")
+    _get_branch_owned_by_org(org_id, branch_key)
+    sb = get_supabase()
+
+    assigned_shift = None
+    if shift_id:
+        assigned_shift = _get_shift_owned_by_org(org_id, shift_id)
+        if str(assigned_shift.get("branch_id") or "") != str(branch_key):
+            raise ValueError("The selected shift belongs to a different branch")
+        if assigned_shift.get("is_active") is False:
+            raise ValueError(
+                f'"{assigned_shift.get("name")}" is deactivated and can\'t be '
+                "assigned. Reactivate it under Shift Timings first."
+            )
+
+    selected = (
+        sb.table("client_staff")
+        .select("id, org_id, branch_id")
+        .eq("org_id", str(org_id))
+        .in_("id", ids)
+        .execute()
+    )
+    staff_rows = selected.data or []
+    if {str(row.get("id")) for row in staff_rows} != set(ids):
+        raise ValueError("One or more staff members were not found in this organization")
+    if any(str(row.get("branch_id") or "") != str(branch_key) for row in staff_rows):
+        raise ValueError("All selected staff members must belong to the selected branch")
+
+    update: dict[str, Any] = {
+        "shift_id_ref": str(shift_id) if shift_id else None,
+        "check_in_grace_override": None,
+        "check_out_grace_override": None,
+        "updated_at": _now_iso(),
+    }
+    result = (
+        sb.table("client_staff")
+        .update(update)
+        .eq("org_id", str(org_id))
+        .eq("branch_id", str(branch_key))
+        .in_("id", ids)
+        .execute()
+    )
+    updated_rows = result.data or []
+    if {str(row.get("id")) for row in updated_rows} != set(ids):
+        raise RuntimeError(
+            f"Shift update affected {len(updated_rows)} of {len(ids)} selected staff members"
+        )
+    return updated_rows
+
+
 def _load_shift_quietly(org_id: str, shift_id: str) -> dict | None:
     """The shift a person is being moved OFF. Best-effort by design: it may
     have been deleted since it was assigned, and a stale reference must not

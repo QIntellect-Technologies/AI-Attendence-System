@@ -17,7 +17,7 @@ export const staffAvatarUrl = (member: StaffMember): string | undefined =>
 export const staffInitial = (member: StaffMember): string =>
   member.name.trim().charAt(0).toUpperCase() || "?";
 
-export const staffSalary = (member: StaffMember): number =>
+export const staffSalary = (member: { salary?: number | null }): number =>
   Number(member.salary || 0);
 
 export const staffModules = (member: StaffMember): string[] =>

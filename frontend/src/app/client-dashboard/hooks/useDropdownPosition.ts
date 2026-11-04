@@ -49,27 +49,21 @@ export interface UseDropdownPositionOptions {
   matchTriggerWidth?: boolean;
   /** Passed straight through to the returned position for convenience (BranchSelector's minWidth: 220). */
   minWidth?: number;
-  /**
-   * "bottom": always open below the trigger (default, previous behaviour).
-   * "top": always open above the trigger.
-   * "auto": open below, but flip above when there is not enough room below
-   *         the trigger (e.g. a pagination select at the bottom of the page).
-   */
-  placement?: "bottom" | "top" | "auto";
-  /** Approximate panel height in px, used by placement "auto". Default 280. */
-  estimatedHeight?: number;
+  /** Flip the panel above the trigger when there is not enough room below it. */
+  flip?: boolean;
+  /** Expected panel height used to choose the side with more usable space. */
+  maxPanelHeight?: number;
 }
 
 export interface DropdownPosition {
   /** Not used when `bottom` is set (panel opens upward). */
   top: number;
-  /** Set when the panel opens above the trigger; anchor with CSS `bottom`. */
-  bottom?: number;
-  openUp?: boolean;
   left?: number;
   right?: number;
   width?: number;
   minWidth?: number;
+  maxHeight?: number;
+  placement?: "above" | "below";
 }
 
 export function useDropdownPosition<T extends HTMLElement>(
@@ -80,8 +74,8 @@ export function useDropdownPosition<T extends HTMLElement>(
     gap = 8,
     matchTriggerWidth = false,
     minWidth,
-    placement = "bottom",
-    estimatedHeight = 280,
+    flip = false,
+    maxPanelHeight = 280,
   }: UseDropdownPositionOptions = {},
 ): DropdownPosition | null {
   const [position, setPosition] = useState<DropdownPosition | null>(null);
@@ -93,33 +87,34 @@ export function useDropdownPosition<T extends HTMLElement>(
 
     const rect = el.getBoundingClientRect();
     const top = rect.bottom + gap;
-
-    const spaceBelow = window.innerHeight - rect.bottom - gap;
-    const spaceAbove = rect.top - gap;
-    const openUp =
-      placement === "top" ||
-      (placement === "auto" &&
-        spaceBelow < estimatedHeight &&
-        spaceAbove > spaceBelow);
-    const bottom = openUp ? window.innerHeight - rect.top + gap : undefined;
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap);
+    const spaceAbove = Math.max(0, rect.top - gap);
+    const placement =
+      flip && spaceBelow < maxPanelHeight && spaceAbove > spaceBelow
+        ? "above"
+        : "below";
+    const availableHeight = placement === "above" ? spaceAbove : spaceBelow;
 
     setPosition(
-      align === "start"
-        ? {
-          top,
-          bottom,
-          openUp,
-          left: rect.left,
-          width: matchTriggerWidth ? rect.width : undefined,
-          minWidth,
-        }
-        : {
-          top,
-          bottom,
-          openUp,
-          right: window.innerWidth - rect.right,
-          minWidth,
-        },
+      {
+        ...(placement === "above"
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : {}),
+        maxHeight: Math.min(maxPanelHeight, availableHeight),
+        placement,
+        ...(align === "start"
+          ? {
+              top,
+              left: rect.left,
+              width: matchTriggerWidth ? rect.width : undefined,
+              minWidth,
+            }
+          : {
+              top,
+              right: window.innerWidth - rect.right,
+              minWidth,
+            }),
+      },
     );
   }, [
     triggerRef,
@@ -127,8 +122,8 @@ export function useDropdownPosition<T extends HTMLElement>(
     gap,
     matchTriggerWidth,
     minWidth,
-    placement,
-    estimatedHeight,
+    flip,
+    maxPanelHeight,
   ]);
 
   useLayoutEffect(() => {

@@ -26,7 +26,12 @@ def _install_stub(name: str, **attrs):
 # test, so the stub's get_supabase must always return the SAME mock object
 # for a given test -- tests patch this via the `sb` fixture below.
 _current_sb = MagicMock()
-_install_stub("supabase_client", get_supabase=lambda: _current_sb)
+# support_db_core imports the reset hook even when tests only patch get_supabase.
+_install_stub(
+    "supabase_client",
+    get_supabase=lambda: _current_sb,
+    reset_supabase_client=MagicMock(),
+)
 _install_stub("support_db_hierarchy", resolve_notification_target=MagicMock(return_value=None))
 _install_stub("support_db_notifications", create_notification=MagicMock())
 

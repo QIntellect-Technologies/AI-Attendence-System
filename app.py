@@ -3709,13 +3709,13 @@ def api_restore_client_staff_member(staff_id):
         restored = support_cp_db.restore_client_staff(
             staff_id=str(staff_id),
             restored_by=str(data.get('restored_by') or '') or None,
+            _prefetched=current,
         )
-        user = support_cp_db.get_client_staff_member(str(staff_id))
         return jsonify({
             'success': True,
-            'message': 'Employee restored. Biometric training is required again.',
+            'message': restored.get('message') or 'Employee restored. Biometric training is required again.',
             'restore': restored,
-            'user': user,
+            'user': restored.get('user'),
         }), 200
     except Exception as e:
         logger.exception(f'Failed to restore Supabase staff {staff_id}')

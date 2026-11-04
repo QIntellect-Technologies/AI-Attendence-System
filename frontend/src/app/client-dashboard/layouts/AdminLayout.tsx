@@ -376,44 +376,6 @@ const IdentityChip: React.FC<IdentityChipProps> = ({
   );
 };
 
-/** Vendor mark for the sidebar; falls back to the default tile if the file is missing. */
-const PlatformLogo: React.FC = () => {
-  const [failed, setFailed] = useState(false);
-  if (PLATFORM_BRAND.logoSrc && !failed) {
-    return (
-      <img
-        src={PLATFORM_BRAND.logoSrc}
-        alt={PLATFORM_BRAND.name}
-        onError={() => setFailed(true)}
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          objectFit: "contain",
-          background: "#fff",
-          flexShrink: 0,
-        }}
-      />
-    );
-  }
-  return (
-    <div
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 8,
-        background: `linear-gradient(135deg, ${T.teal600}, ${T.teal700})`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <Fingerprint size={18} color="#fff" />
-    </div>
-  );
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTIFICATION BELL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -658,11 +620,16 @@ export default function AdminLayout() {
     "";
   const brandName = cfg.orgName || "OrgFlow ERP";
   const brandLogo = cfg.logo || user?.companyLogo || null;
+  const headerIdentityName =
+    activeBranchId === null
+      ? brandName
+      : cfg.branches.find((branch) => branch.id === activeBranchId)?.name ||
+        brandName;
   const orgChip = (
     <IdentityChip
       variant="logo"
-      title={brandName}
-      subtitle={cfg.orgEmail || ""}
+      title={headerIdentityName}
+      subtitle={activeBranchId === null ? cfg.orgEmail || "" : brandName}
       image={brandLogo}
     />
   );
@@ -727,8 +694,17 @@ export default function AdminLayout() {
       {/* ── REUSABLE SIDEBAR ── */}
       <Sidebar
         groups={sidebarGroups}
-        logo={<PlatformLogo />}
-        brandName={PLATFORM_BRAND.name}
+        logo={
+          <Avatar
+            src={brandLogo}
+            label={brandName}
+            size={36}
+            shape="rounded"
+            fit="contain"
+            fallback={<Fingerprint size={18} color={T.teal600} />}
+          />
+        }
+        brandName={brandName}
         brandSubtext={isStaffDashboard ? "Staff Panel" : "Admin Panel"}
         onLogout={handleLogout}
         mobileOpen={mobileSidebarOpen}
@@ -797,7 +773,7 @@ export default function AdminLayout() {
                   letterSpacing: "-0.4px",
                 }}
               >
-                {currentLabel}
+                {brandName}
               </h1>
               <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>
                 {isStaffDashboard
@@ -894,6 +870,8 @@ export default function AdminLayout() {
             minWidth: 0,
             flex: "1 1 auto",
             boxSizing: "border-box",
+            display: "flex",
+            flexDirection: "column",
             overflowX: "hidden",
             overflowY: "auto",
             padding: 22,
@@ -901,6 +879,34 @@ export default function AdminLayout() {
         >
           <DashboardTabBar />
           <Outlet />
+          <footer
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 7,
+              marginTop: "auto",
+              padding: "12px 0 4px",
+              borderTop: `1px solid ${T.border}`,
+              color: T.muted,
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            {PLATFORM_BRAND.logoSrc && (
+              <img
+                src={PLATFORM_BRAND.logoSrc}
+                alt=""
+                aria-hidden="true"
+                style={{
+                  width: 20,
+                  height: 20,
+                  objectFit: "contain",
+                }}
+              />
+            )}
+            <span>Powered by {PLATFORM_BRAND.name}</span>
+          </footer>
         </main>
       </div>
 

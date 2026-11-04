@@ -1574,7 +1574,10 @@ export async function restoreStaffRecord(
   return staffJson<{
     success: boolean;
     message: string;
-    restore?: unknown;
+    restore?: {
+      person_code?: string;
+      person_code_changed?: boolean;
+    };
     user?: User;
   }>(`/api/staff/${encodeURIComponent(String(userId))}/restore`, {
     method: "POST",

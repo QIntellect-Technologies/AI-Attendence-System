@@ -39,12 +39,11 @@ verify_dataset() and the --verify flag):
      (the person worked), which is itself a nice thing to show on camera.
      An approved HALF-day leave produces a genuine half-length attendance row.
 
-  3. LEAVE TYPES <-> QUOTA <-> PAID/UNPAID. Every leave type carries an annual
-     quota and a paid/unpaid flag (LEAVE_POLICY below). Balances are tracked
-     per employee as leave is approved. When an employee's paid balance for a
-     type is exhausted, the request is issued as UNPAID leave instead -- which
-     is exactly what then shows up as a payroll deduction. Remaining balances
-     are written out so a "Leave Balance" report reconciles to the day count.
+  3. LEAVE TYPES <-> QUOTA. Every generated leave type is paid and carries an
+     annual quota (LEAVE_POLICY below). Balances are tracked per employee as
+     leave is approved. Requests are only generated when the employee has
+     enough remaining balance, so the demo has no unpaid leave or payroll
+     deduction data.
 
   4. ATTENDANCE <-> OVERTIME. Overtime requests are not invented. Each one is
      generated FROM an attendance row whose checkout ran past the shift end by
@@ -58,17 +57,16 @@ verify_dataset() and the --verify flag):
         per_day_rate   = basic_salary / scheduled_working_days_in_period
         gross          = basic + allowances + overtime_pay
         overtime_pay   = approved_OT_hours * ot_rate   (ot_rate from salary_configs)
-        deductions     = unpaid_leave_days * per_day_rate
-                       + absent_days       * per_day_rate
+        deductions     = absent_days       * per_day_rate
                        + late_penalty      (policy: LATE_GRACE_PER_MONTH free,
                                             then LATE_PENALTY_DAY_FRACTION/day)
                        + provident_fund    (PF_RATE of basic)
                        + income_tax        (simplified salaried slabs)
         net_pay        = gross - deductions
 
-     `unpaid_leave_days` and `late_count` on payroll_payments are the REAL
-     counts from attendance, and the jsonb `breakdown` carries every input and
-     every line item so a client can reconcile the payslip by hand.
+     `late_count` on payroll_payments is the REAL count from attendance. The
+     jsonb `breakdown` carries present days, late comings, income tax, and
+     every other payroll line item so a client can reconcile the payslip.
 
   6. IT PROVES ITSELF. verify_dataset() re-derives payroll from the generated
      attendance / leave / overtime rows -- the same way a report query would --
@@ -89,7 +87,8 @@ USAGE
         python -m scripts.seed_demo_org --cleanup-all            # delete all demo orgs
         python -m scripts.seed_demo_org --verify <org_id>        # re-check a live org
 
-    Load-test data is isolated in a new organization and never runs demo cleanup:
+    Load-test data is isolated in a new organization; rerunning it removes only
+    organizations previously created by the load-test profile:
 
         python seed_demo_org.py --load-test --dry-run
         python seed_demo_org.py --load-test --months 2026-09 2026-10
@@ -105,8 +104,8 @@ SCOPE (per spec)
     - 90 days of attendance, aligned back to a month boundary so pay periods
       are whole months (see ALIGN_WINDOW_TO_MONTH_START)
     - 3 finalized monthly payroll runs + 1 in-progress current month
-    - Leave with quotas/balances, overtime tied to attendance, notifications,
-      subscription + invoices, module entitlements, onboarding config
+    - Paid leave with quotas/balances, present/late attendance, income-tax
+      payslip data, overtime, notifications, billing, and onboarding config
 
 Everything is driven by the CONFIG block below -- change counts/dates/policy
 there, not in the function bodies.
@@ -204,7 +203,7 @@ MONTHLY_SALARY = {
 }
 
 MODULES = ["attendance", "employees", "leave", "payroll", "overtime", "reports"]
-LOAD_TEST_MODULES = ["attendance", "employees", "payroll", "reports"]
+LOAD_TEST_MODULES = ["attendance", "employees", "leave", "payroll", "reports"]
 
 # ── Shifts ───────────────────────────────────────────────────────────────
 # check_in_time / check_out_time here are the ONLY source of truth for what
@@ -230,29 +229,20 @@ SHIFT_TEMPLATES = [
 # ── Leave policy: type -> paid/unpaid + annual quota (days) ──────────────
 # `paid=False` types are the ones that actually cut the payslip. Quotas are
 # per calendar year and are consumed only when a request is APPROVED. When a
-# paid type has no balance left, the request is re-issued as "Leave Without
-# Pay", which is how unpaid days -- and therefore payroll deductions -- come
-# to exist in this dataset. Nothing is deducted at random.
+# Leave is only generated when an employee has enough balance in a paid type;
+# unpaid leave is deliberately absent from this demo dataset.
 LEAVE_POLICY: dict[str, dict[str, Any]] = {
     "Annual":              {"code": "AL", "paid": True,  "annual_quota": 14, "weight": 26},
     "Casual":              {"code": "CL", "paid": True,  "annual_quota": 10, "weight": 24},
     "Sick":                {"code": "SL", "paid": True,  "annual_quota": 8,  "weight": 22},
     "Emergency":           {"code": "EL", "paid": True,  "annual_quota": 3,  "weight": 10},
     "Compensatory":        {"code": "CO", "paid": True,  "annual_quota": 5,  "weight": 8},
-    "Leave Without Pay":   {"code": "LWP", "paid": False, "annual_quota": 0,  "weight": 10},
 }
-UNPAID_LEAVE_TYPE = "Leave Without Pay"
 
 # How much of each employee's annual quota is already spent BEFORE the seeded
 # window opens (they didn't join the company on day one of this demo). Stored
 # explicitly on the balance record so remaining = quota - opening_used - used.
 OPENING_USED_FRACTION = (0.30, 0.85)  # random per employee per type, of quota
-# Chance a request is filed as unpaid leave outright (employee knows they have
-# no balance, or wants to keep their annual days). Unpaid leave otherwise only
-# appears when a paid quota runs out, which on a 3-month window is too rare to
-# demo the payroll deduction path reliably.
-DIRECT_UNPAID_CHANCE = 0.12
-
 # ── Payroll policy ───────────────────────────────────────────────────────
 ALLOWANCE_RATES = {"medical_allowance": 0.05, "transport_allowance": 0.05}  # of basic
 PF_RATE = 0.05                    # provident fund, employee contribution, of basic
@@ -686,7 +676,7 @@ def build_roles(ds: Dataset) -> None:
 
 def organization_modules(ds: Dataset) -> list[str]:
     modules = list(LOAD_TEST_MODULES if ds.load_test_mode else MODULES)
-    if ds.load_test_mode and ENABLE_INCOME_TAX and "income_tax" not in modules:
+    if ENABLE_INCOME_TAX and "income_tax" not in modules:
         modules.append("income_tax")
     return modules
 
@@ -939,14 +929,12 @@ def _next_workdays(start: date, count: int, end_limit: date, holidays: dict[date
 
 def build_leave(ds: Dataset) -> dict[str, dict[str, dict[str, float]]]:
     """
-    Generates leave episodes per employee, consuming a real per-type balance.
+    Generates paid leave episodes per employee, consuming a real per-type
+    balance. Requests are skipped when no paid type has enough balance.
 
     Balance rule: quota is annual; OPENING_USED_FRACTION of it is treated as
     already spent before the window opened. A request is only allowed against
-    a paid type if the remaining balance covers the whole episode. If it
-    doesn't, the SAME episode is re-issued as unpaid "Leave Without Pay" (with
-    a reason saying so) -- which is the only way unpaid days enter this
-    dataset, and therefore the only source of leave-driven payroll deductions.
+    a paid type if the remaining balance covers the whole episode.
 
     Only APPROVED leave consumes balance and blocks attendance. Pending and
     rejected requests leave the ledger untouched: those employees worked that
@@ -958,7 +946,6 @@ def build_leave(ds: Dataset) -> dict[str, dict[str, dict[str, float]]]:
     balances: dict[str, dict[str, dict[str, float]]] = {}
 
     paid_types = [t for t, p in LEAVE_POLICY.items() if p["paid"]]
-    paid_weights = [LEAVE_POLICY[t]["weight"] for t in paid_types]
     approver = "Ayesha Malik"
 
     for staff in ds.staff:
@@ -1009,40 +996,30 @@ def build_leave(ds: Dataset) -> dict[str, dict[str, dict[str, float]]]:
                 status = rng.choices(["approved", "rejected"], weights=[88, 12])[0]
 
             cost = 0.5 if is_half else float(span)
-            fallback_from = None
-            if rng.random() < DIRECT_UNPAID_CHANCE:
-                requested_type = ltype = UNPAID_LEAVE_TYPE
-            else:
-                requested_type = ltype = rng.choices(paid_types, weights=paid_weights)[0]
-                # Quota check happens against the balance as it stands right
-                # now; only approved leave has consumed anything so far.
-                if bal[requested_type]["remaining"] < cost:
-                    ltype = UNPAID_LEAVE_TYPE
-                    fallback_from = requested_type
-
-            paid = LEAVE_POLICY[ltype]["paid"]
+            available_types = [
+                leave_type for leave_type in paid_types
+                if bal[leave_type]["remaining"] >= cost
+            ]
+            if not available_types:
+                continue
+            available_weights = [LEAVE_POLICY[t]["weight"] for t in available_types]
+            ltype = rng.choices(available_types, weights=available_weights)[0]
+            paid = True
             if status == "approved":
-                if paid:
-                    bal[ltype]["used"] += cost
-                    bal[ltype]["remaining"] = bal[ltype]["quota"] - bal[ltype]["opening_used"] - bal[ltype]["used"]
-                else:
-                    bal[ltype]["used"] += cost
-                    bal[ltype]["remaining"] = 0.0
+                bal[ltype]["used"] += cost
+                bal[ltype]["remaining"] = (
+                    bal[ltype]["quota"] - bal[ltype]["opening_used"] - bal[ltype]["used"]
+                )
                 taken_days.update(workdays)
 
             half_period = rng.choice(["first_half", "second_half"]) if is_half else None
-            reason = (
-                f"{fallback_from} balance exhausted - taken as leave without pay"
-                if fallback_from else
-                {
-                    "Annual": "Family vacation",
-                    "Casual": "Personal errand",
-                    "Sick": "Fever / medical rest",
-                    "Emergency": "Family emergency",
-                    "Compensatory": "Comp-off against approved overtime",
-                    UNPAID_LEAVE_TYPE: "Personal - no paid balance available",
-                }[ltype]
-            )
+            reason = {
+                "Annual": "Family vacation",
+                "Casual": "Personal errand",
+                "Sick": "Fever / medical rest",
+                "Emergency": "Family emergency",
+                "Compensatory": "Comp-off against approved overtime",
+            }[ltype]
 
             shift = staff["_shift"]
             shift_in = time.fromisoformat(shift["check_in_time"])
@@ -1092,8 +1069,6 @@ def build_leave(ds: Dataset) -> dict[str, dict[str, dict[str, float]]]:
     # Leave balance snapshot rows (for a "Leave Balance" report / optional table).
     for staff in ds.staff:
         for ltype, b in balances[staff["id"]].items():
-            if not LEAVE_POLICY[ltype]["paid"] and b["used"] == 0:
-                continue  # don't clutter with empty LWP rows
             ds.leave_balances.append({
                 "id": new_id(),
                 "org_id": ds.org_id,
@@ -1144,7 +1119,8 @@ def build_ledger_and_attendance(
         for d in lr["_workdays"]:
             approved_by_staff_day[(lr["staff_id"], d)] = lr
 
-    for staff in ds.staff:
+    attendance_end = max(ds.window_end, date.today()) if ds.load_test_mode else ds.window_end
+    for staff_index, staff in enumerate(ds.staff):
         sid = staff["id"]
         shift = staff["_shift"]
         shift_in = time.fromisoformat(shift["check_in_time"])
@@ -1153,7 +1129,7 @@ def build_ledger_and_attendance(
         shift_minutes = minutes_between(shift_in, shift_out)
         days: dict[date, DayRecord] = {}
 
-        for day in daterange(ds.window_start, ds.window_end):
+        for day in daterange(ds.window_start, attendance_end):
             if not is_weekday(day):
                 days[day] = DayRecord(day=day, category="weekend")
                 continue
@@ -1193,7 +1169,13 @@ def build_ledger_and_attendance(
             weights = day_weights or (
                 TODAY_WEIGHTS if day == ds.window_end else DAY_WEIGHTS
             )
-            outcome = weighted_pick(rng, weights)
+            if ds.load_test_mode and day == date.today():
+                # Ensure the default daily attendance view has both present
+                # and absent staff rather than only historical test records.
+                today_outcomes = ("absent", "late", "early_leave") + ("on_time",) * 7
+                outcome = today_outcomes[staff_index % len(today_outcomes)]
+            else:
+                outcome = weighted_pick(rng, weights)
 
             if outcome == "absent":
                 # Unauthorised absence: no attendance row, full day deducted.
@@ -1399,8 +1381,7 @@ def compute_payslip(
 
         per_day_rate = basic / scheduled_working_days_in_month
         gross        = basic + allowances + (approved_ot_hours * ot_rate)
-        deductions   = unpaid_leave_days * per_day_rate
-                     + absent_days       * per_day_rate
+        deductions   = absent_days       * per_day_rate
                      + max(0, late_count - LATE_GRACE_PER_MONTH)
                        * LATE_PENALTY_DAY_FRACTION * per_day_rate
                      + provident_fund (PF_RATE of basic)
@@ -1430,10 +1411,12 @@ def compute_payslip(
     missing_checkout_days = sum(1 for r in in_period if r.check_in is not None and not r.has_checkout)
     paid_leave_days = sum((0.5 if r.is_half_day else 1.0) for r in in_period if r.category == "leave_paid")
     unpaid_leave_days = sum((0.5 if r.is_half_day else 1.0) for r in in_period if r.category == "leave_unpaid")
+    if unpaid_leave_days:
+        raise ValueError("Demo payroll cannot include unpaid leave.")
     absent_days = sum(1 for r in in_period if r.category == "absent")
     holiday_days = sum(1 for r in in_period if r.category == "holiday")
     elapsed_working_days = sum(1 for r in in_period if r.is_scheduled_workday)
-    payable_days = working_days - unpaid_leave_days - absent_days
+    payable_days = working_days - absent_days
 
     # ── earnings ──
     # Hours actually WORKED past shift end vs hours APPROVED for payment. They
@@ -1446,7 +1429,6 @@ def compute_payslip(
     gross = money(basic + allowances + overtime_pay)
 
     # ── deductions ──
-    unpaid_leave_deduction = money(unpaid_leave_days * per_day)
     absence_deduction = money(absent_days * per_day)
     penalised_lates = max(0, late_count - LATE_GRACE_PER_MONTH)
     late_deduction = money(penalised_lates * LATE_PENALTY_DAY_FRACTION * per_day)
@@ -1454,8 +1436,7 @@ def compute_payslip(
     monthly_taxable = gross if income_tax_slabs is not None else basic + allowances
     income_tax = money(annual_income_tax(monthly_taxable * 12, income_tax_slabs) / 12)
     total_deductions = money(
-        unpaid_leave_deduction + absence_deduction + late_deduction
-        + provident_fund + income_tax
+        absence_deduction + late_deduction + provident_fund + income_tax
     )
     net_pay = money(gross - total_deductions)
 
@@ -1465,8 +1446,6 @@ def compute_payslip(
             "In-progress period: projected from attendance recorded to date "
             f"({elapsed_working_days} of {working_days} working days elapsed)."
         )
-    if unpaid_leave_days:
-        notes.append(f"{unpaid_leave_days:g} unpaid leave day(s) deducted at the daily rate.")
     if absent_days:
         notes.append(f"{absent_days} unauthorised absence day(s) deducted at the daily rate.")
     if penalised_lates:
@@ -1502,7 +1481,6 @@ def compute_payslip(
             "overtime_days": overtime_days,
             "missing_checkout_days": missing_checkout_days,
             "paid_leave_days": paid_leave_days,
-            "unpaid_leave_days": unpaid_leave_days,
             "absent_days": absent_days,
             "public_holidays": holiday_days,
         },
@@ -1518,7 +1496,6 @@ def compute_payslip(
             "gross_earnings": gross,
         },
         "deductions": {
-            "unpaid_leave": unpaid_leave_deduction,
             "absence": absence_deduction,
             "late_penalty": late_deduction,
             "provident_fund": provident_fund,
@@ -1553,7 +1530,6 @@ def build_payroll(ds: Dataset, approved_ot: dict[tuple[str, int, int], float]) -
                 "medical_allowance": breakdown["earnings"]["medical_allowance"],
                 "transport_allowance": breakdown["earnings"]["transport_allowance"],
                 "allowances_total": breakdown["earnings"]["allowances_total"],
-                "unpaid_leave_days": breakdown["attendance"]["unpaid_leave_days"],
                 "late_count": breakdown["attendance"]["late_days"],
                 "breakdown": breakdown,
             })
@@ -1957,7 +1933,7 @@ def verify_dataset(ds: Dataset) -> list[str]:
         if abs(money(e["basic_salary"] + e["allowances_total"] + e["overtime_pay"])
                - e["gross_earnings"]) > 0.011:
             errors.append(f"payroll {s['name']} {row['period_start']}: gross does not sum")
-        parts = money(d_["unpaid_leave"] + d_["absence"] + d_["late_penalty"]
+        parts = money(d_["absence"] + d_["late_penalty"]
                       + d_["provident_fund"] + d_["income_tax"])
         if abs(parts - d_["total_deductions"]) > 0.011:
             errors.append(f"payroll {s['name']} {row['period_start']}: deductions do not sum")
@@ -1965,11 +1941,29 @@ def verify_dataset(ds: Dataset) -> list[str]:
             errors.append(f"payroll {s['name']} {row['period_start']}: net != gross - deductions")
         if abs(e["overtime_pay"] - money(e["overtime_hours"] * e["overtime_rate"])) > 0.011:
             errors.append(f"payroll {s['name']} {row['period_start']}: OT pay != hours * rate")
-        # The denormalised columns must agree with the breakdown
-        if abs(float(row["unpaid_leave_days"]) - got["attendance"]["unpaid_leave_days"]) > 0.001:
-            errors.append(f"payroll {s['name']}: unpaid_leave_days column != breakdown")
+        if (
+            "unpaid_leave_days" in row
+            or "unpaid_leave_days" in got["attendance"]
+            or "unpaid_leave" in got["deductions"]
+        ):
+            errors.append(f"payroll {s['name']}: unpaid leave data must not be seeded")
         if int(row["late_count"]) != got["attendance"]["late_days"]:
             errors.append(f"payroll {s['name']}: late_count column != breakdown")
+
+    if ENABLE_INCOME_TAX:
+        if not any(row["breakdown"]["attendance"]["present_days"] > 0 for row in ds.payroll):
+            errors.append("demo payroll must include present days")
+        if not any(row["breakdown"]["attendance"]["late_days"] > 0 for row in ds.payroll):
+            errors.append("demo payroll must include late comings")
+        if not any(row["breakdown"]["deductions"]["income_tax"] > 0 for row in ds.payroll):
+            errors.append("demo payroll must include income-tax deductions")
+        if "income_tax" not in {row["module_name"] for row in ds.modules}:
+            errors.append("demo income-tax module entitlement is missing")
+
+    if any(not LEAVE_POLICY[lr["leave_type"]]["paid"] for lr in ds.leave_requests):
+        errors.append("demo leave requests must all be paid")
+    if any(not balance["is_paid"] for balance in ds.leave_balances):
+        errors.append("demo leave balances must all be paid")
 
     if ds.load_test_mode:
         if len(ds.staff) != ds.expected_staff_count:
@@ -1978,6 +1972,32 @@ def verify_dataset(ds: Dataset) -> list[str]:
             )
         if ds.leave_requests or ds.leave_balances:
             errors.append("load test must not generate leave requests or balances")
+        if not any(row["breakdown"]["attendance"]["present_days"] > 0 for row in ds.payroll):
+            errors.append("load test payroll must include present days")
+        if not any(row["breakdown"]["attendance"]["absent_days"] > 0 for row in ds.payroll):
+            errors.append("load test payroll must include absent days")
+        if not any(row["breakdown"]["attendance"]["late_days"] > 0 for row in ds.payroll):
+            errors.append("load test payroll must include late days")
+        if not any(row["breakdown"]["deductions"]["absence"] > 0 for row in ds.payroll):
+            errors.append("load test payroll must include absence deductions")
+        if not any(
+            datetime.fromisoformat(row["timestamp"]).date() == date.today()
+            for row in ds.attendance
+        ) and is_weekday(date.today()):
+            errors.append("load test must include attendance rows for today")
+        today_staff_ids = {
+            row["staff_id"] for row in ds.attendance
+            if datetime.fromisoformat(row["timestamp"]).date() == date.today()
+        }
+        today_present_ids = {
+            row["staff_id"] for row in ds.attendance
+            if datetime.fromisoformat(row["timestamp"]).date() == date.today()
+            and row["day_status"] in {"present", "late", "short_leave"}
+        }
+        if is_weekday(date.today()) and not today_present_ids:
+            errors.append("load test today must include at least one present staff member")
+        if is_weekday(date.today()) and len(today_staff_ids) >= len(ds.staff):
+            errors.append("load test today must include at least one absent staff member")
         if ds.overtime_requests or any(
             a["day_status"] == "overtime" for a in ds.attendance
         ):
@@ -2003,6 +2023,18 @@ def verify_dataset(ds: Dataset) -> list[str]:
             row["breakdown"]["deductions"]["income_tax"] > 0 for row in ds.payroll
         ):
             errors.append("load test payroll does not exercise configured income tax")
+        for row in ds.payroll:
+            basic = float(row["breakdown"]["earnings"]["basic_salary"])
+            allowances = float(row["breakdown"]["earnings"]["allowances_total"])
+            overtime_pay = float(row["breakdown"]["earnings"]["overtime_pay"])
+            annual_taxable = (basic + allowances + overtime_pay) * 12
+            expected_tax = money(annual_income_tax(annual_taxable, ds.income_tax_slabs) / 12)
+            actual_tax = float(row["breakdown"]["deductions"]["income_tax"])
+            if abs(actual_tax - expected_tax) > 0.011:
+                errors.append(
+                    f"load test tax for staff {row['staff_id']} {row['period_start']} "
+                    f"is {actual_tax}, expected {expected_tax} from configured slabs"
+                )
         expected_weekly_off = {
             name for weekday, name in enumerate(
                 ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -2032,8 +2064,10 @@ def verify_dataset(ds: Dataset) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────
 
 LOAD_TEST_DAY_WEIGHTS = [
-    ("on_time", 0.94),
-    ("absent", 0.05),
+    ("on_time", 0.72),
+    ("late", 0.08),
+    ("early_leave", 0.04),
+    ("absent", 0.15),
     ("missing_checkout", 0.01),
 ]
 
@@ -2133,11 +2167,25 @@ def summarize(ds: Dataset) -> dict:
             "period": f"{ps.isoformat()} .. {pe.isoformat()}",
             "status": "paid" if finalized else "in_progress",
             "payslips": len(rows),
+            "present_days": sum(
+                int(r["breakdown"]["attendance"]["present_days"]) for r in rows
+            ),
+            "absent_days": sum(
+                int(r["breakdown"]["attendance"]["absent_days"]) for r in rows
+            ),
+            "late_days": sum(
+                int(r["breakdown"]["attendance"]["late_days"]) for r in rows
+            ),
             "gross": money(sum(r["breakdown"]["earnings"]["gross_earnings"] for r in rows)),
             "overtime_pay": money(sum(r["breakdown"]["earnings"]["overtime_pay"] for r in rows)),
             "deductions": money(sum(r["breakdown"]["deductions"]["total_deductions"] for r in rows)),
+            "income_tax": money(sum(
+                r["breakdown"]["deductions"]["income_tax"] for r in rows
+            )),
+            "taxed_payslips": sum(
+                1 for row in rows if row["breakdown"]["deductions"]["income_tax"] > 0
+            ),
             "net": money(sum(r["breakdown"]["net_pay"] for r in rows)),
-            "unpaid_leave_days": round(sum(float(r["unpaid_leave_days"]) for r in rows), 2),
             "late_count": sum(int(r["late_count"]) for r in rows),
         })
 
@@ -2169,17 +2217,20 @@ def summarize(ds: Dataset) -> dict:
         "payroll_periods": periods,
     }
     if ds.load_test_mode:
-        for period, (period_start, _, _) in zip(periods, ds.periods):
-            rows = [p for p in ds.payroll if p["period_start"] == period_start.isoformat()]
-            period["income_tax"] = money(sum(
-                r["breakdown"]["deductions"]["income_tax"] for r in rows
-            ))
         summary["load_test"] = {
             "staff_count": len(ds.staff),
             "income_tax_enabled": ENABLE_INCOME_TAX,
             "income_tax_slabs": ds.income_tax_slabs,
             "working_weekdays": sorted(WORKDAYS),
-            "leave_and_overtime_generated": False,
+            "leave_generated": bool(ds.leave_requests),
+            "overtime_generated": bool(ds.overtime_requests),
+            "current_day": {
+                "date": date.today().isoformat(),
+                "attendance_rows": sum(
+                    1 for row in ds.attendance
+                    if datetime.fromisoformat(row["timestamp"]).date() == date.today()
+                ),
+            },
         }
     return summary
 
@@ -2396,10 +2447,13 @@ def _delete_by_org(sb, table: str, org_id: str) -> tuple[bool, str]:
     return False, f"no usable tenant column ({last_exc})"
 
 
-def cleanup_demo_org(sb, org_id: str) -> None:
+def cleanup_demo_org(sb, org_id: str, *, strict: bool = False) -> None:
     print(f"Deleting demo org {org_id} and all child rows...")
     skipped: list[str] = []
+    failures: list[str] = []
     for table in CLEANUP_TABLE_ORDER:
+        if strict and table == "organizations" and failures:
+            break
         ok, note = _delete_by_org(sb, table, org_id)
         if ok:
             suffix = "" if note in DEFAULT_ORG_COLUMNS[:1] else f" (via {note})"
@@ -2408,9 +2462,15 @@ def cleanup_demo_org(sb, org_id: str) -> None:
             skipped.append(table)
         else:
             print(f"  ! {table}: {note}")
+            failures.append(f"{table}: {note}")
     if skipped:
         print(f"  . skipped {len(skipped)} table(s) not in this schema: "
               f"{', '.join(skipped)}")
+    if strict and failures:
+        raise RuntimeError(
+            f"Could not completely clean organization {org_id}; "
+            f"refusing to continue seeding: {'; '.join(failures)}"
+        )
     print("Cleanup complete.")
 
 
@@ -2499,6 +2559,44 @@ def cleanup_all_demo_orgs(sb) -> int:
     return len(orgs)
 
 
+def find_load_test_orgs(sb) -> list[dict]:
+    """Find only organizations whose name, email domain, and UUID token all
+    match the load-test generator's identity format."""
+    try:
+        result = (
+            sb.table("organizations")
+            .select("id,name,contact_email")
+            .ilike("name", "AI Attendance Load Test %")
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not find previous load-test organizations: {exc}") from exc
+
+    matches = []
+    for row in result.data or []:
+        org_id = str(row.get("id") or "")
+        token = org_id.split("-", 1)[0]
+        expected_name = f"AI Attendance Load Test {token}"
+        expected_email = f"admin@loadtest-{token}.qintellect.io"
+        if token and row.get("name") == expected_name and row.get("contact_email") == expected_email:
+            matches.append(row)
+    return matches
+
+
+def cleanup_previous_load_test_orgs(sb) -> int:
+    orgs = find_load_test_orgs(sb)
+    if not orgs:
+        print("No previous load-test organizations found -- nothing to clean up.")
+        return 0
+
+    print(f"Found {len(orgs)} previous load-test organization(s) to remove:")
+    for org in orgs:
+        print(f"  - {org['id']}  {org.get('name')}")
+    for org in orgs:
+        cleanup_demo_org(sb, org["id"], strict=True)
+    return len(orgs)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────
@@ -2538,17 +2636,14 @@ def _print_summary(ds: Dataset, summary: dict) -> None:
           f"{summary['overtime']['approved_hours']:g}h approved "
           f"({summary['overtime']['pending_hours']:g}h pending)")
     print("\nPayroll periods")
-    if ds.load_test_mode:
-        print(f"  {'period':<26} {'status':<12} {'gross':>14} {'tax':>12} "
-              f"{'deductions':>13} {'net':>14}")
-        for p in summary["payroll_periods"]:
-            print(f"  {p['period']:<26} {p['status']:<12} {p['gross']:>14,.0f} "
-                  f"{p['income_tax']:>12,.0f} {p['deductions']:>13,.0f} {p['net']:>14,.0f}")
-    else:
-        print(f"  {'period':<26} {'status':<12} {'gross':>14} {'deductions':>13} {'net':>14}")
-        for p in summary["payroll_periods"]:
-            print(f"  {p['period']:<26} {p['status']:<12} {p['gross']:>14,.0f} "
-                  f"{p['deductions']:>13,.0f} {p['net']:>14,.0f}")
+    print(f"  {'period':<26} {'status':<12} {'present':>8} {'absent':>8} "
+          f"{'late':>7} {'gross':>14} {'tax':>12} "
+          f"{'deductions':>13} {'net':>14}")
+    for p in summary["payroll_periods"]:
+        print(f"  {p['period']:<26} {p['status']:<12} "
+              f"{p['present_days']:>8} {p['absent_days']:>8} {p['late_days']:>7} "
+              f"{p['gross']:>14,.0f} {p['income_tax']:>12,.0f} "
+              f"{p['deductions']:>13,.0f} {p['net']:>14,.0f}")
     print("=" * 72)
 
 
@@ -2640,9 +2735,10 @@ def run_load_test(
 
     try:
         sb = get_client()
+        cleanup_previous_load_test_orgs(sb)
         push_dataset(sb, ds)
     except Exception as exc:
-        print(f"Load-test database insert failed for org {ds.org_id}: {exc}")
+        print(f"Load-test cleanup/insert failed for org {ds.org_id}: {exc}")
         print(f"If any rows were inserted, delete this isolated org with --cleanup {ds.org_id}.")
         return 1
 

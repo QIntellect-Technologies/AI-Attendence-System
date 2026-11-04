@@ -1480,12 +1480,70 @@ def archive_client_staff(staff_id: str, reason: str = 'Archived from Staff Manag
         'retention_until': None,
     }
 
-def restore_client_staff(staff_id: str, restored_by: str | None = None) -> dict:
+def restore_client_staff(
+    staff_id: str,
+    restored_by: str | None = None,
+    *,
+    _prefetched: dict | None = None,
+) -> dict:
+    from support_db_client_users import _assert_unique_client_staff_person_code
+
     sb = get_supabase()
+    current = _prefetched or get_client_staff_member(str(staff_id))
+    org_id = str(current.get('organization_id') or current.get('org_id') or '')
+    branch_id = str(
+        current.get('backend_branch_id')
+        or current.get('branch_uuid')
+        or current.get('branch_id')
+        or ''
+    )
+    people_type = _normalize_people_type(current.get('people_type') or current.get('person_type'))
+    person_code = str(
+        current.get('person_code')
+        or current.get('personCode')
+        or current.get('employee_id')
+        or ''
+    ).strip()
+    code_updates = {}
+    code_changed = False
+    if person_code:
+        try:
+            _assert_unique_client_staff_person_code(
+                org_id=org_id,
+                branch_id=branch_id,
+                people_type=people_type,
+                person_code=person_code,
+                exclude_staff_id=str(staff_id),
+            )
+        except ValueError:
+            for _ in range(5):
+                next_person_code = f'{person_code[:18]}-R{uuid.uuid4().hex[:10]}'
+                try:
+                    _assert_unique_client_staff_person_code(
+                        org_id=org_id,
+                        branch_id=branch_id,
+                        people_type=people_type,
+                        person_code=next_person_code,
+                        exclude_staff_id=str(staff_id),
+                    )
+                except ValueError:
+                    continue
+                person_code = next_person_code
+                code_changed = True
+                code_updates = {
+                    'person_code': person_code,
+                    'employee_id': person_code,
+                    'registration_number': person_code if people_type == 'student' else None,
+                }
+                break
+            else:
+                raise RuntimeError('Unable to generate a unique staff ID for this employee')
+
     now = datetime.now(timezone.utc).isoformat()
     result = (
         sb.table('client_staff')
         .update({
+            **code_updates,
             'is_archived': False,
             'status': 'active',
             'archived_at': None,
@@ -1509,7 +1567,15 @@ def restore_client_staff(staff_id: str, restored_by: str | None = None) -> dict:
         'branch_id': row.get('backend_branch_id'),
         'restored_by': restored_by,
         'requires_training': True,
-        'message': 'Employee restored. Biometric training is required again.',
+        'user': row,
+        'person_code': person_code,
+        'person_code_changed': code_changed,
+        'message': (
+            f'Employee restored with new Staff ID {person_code}. '
+            'Biometric training is required again.'
+            if code_changed
+            else 'Employee restored. Biometric training is required again.'
+        ),
     }
 
 def delete_client_staff(staff_id: str) -> dict:

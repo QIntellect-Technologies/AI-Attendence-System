@@ -1,6 +1,6 @@
 {
-  "org_id": "90e79a6a-bb6c-4d0a-8eae-3959196d1942",
-  "org_name": "AI Attendance Load Test 90e79a6a",
+  "org_id": "e6ae8b7a-48a1-418e-b405-99cd2b5e2a4a",
+  "org_name": "AI Attendance Load Test e6ae8b7a",
   "window": {
     "start": "2026-09-01",
     "end": "2026-10-31",
@@ -13,13 +13,13 @@
   "public_holidays": {},
   "row_counts": {
     "staff": 120,
-    "attendance": 4996,
+    "attendance": 4655,
     "leave_requests": 0,
     "leave_balances": 0,
     "overtime_requests": 0,
     "payroll_payments": 240,
     "salary_configs": 120,
-    "notifications": 1
+    "notifications": 2
   },
   "leave": {
     "approved_days_by_type": {},
@@ -36,25 +36,31 @@
       "period": "2026-09-01 .. 2026-09-30",
       "status": "paid",
       "payslips": 120,
+      "present_days": 2218,
+      "absent_days": 422,
+      "late_days": 204,
       "gross": 10015500.0,
       "overtime_pay": 0.0,
-      "deductions": 1070382.62,
-      "net": 8945117.38,
-      "unpaid_leave_days": 0.0,
-      "late_count": 0,
-      "income_tax": 116041.67
+      "deductions": 2058678.11,
+      "income_tax": 116041.67,
+      "taxed_payslips": 110,
+      "net": 7956821.89,
+      "late_count": 204
     },
     {
       "period": "2026-10-01 .. 2026-10-31",
       "status": "paid",
       "payslips": 120,
+      "present_days": 2227,
+      "absent_days": 413,
+      "late_days": 224,
       "gross": 10015500.0,
       "overtime_pay": 0.0,
-      "deductions": 1052200.9,
-      "net": 8963299.1,
-      "unpaid_leave_days": 0.0,
-      "late_count": 0,
-      "income_tax": 116041.67
+      "deductions": 2015837.23,
+      "income_tax": 116041.67,
+      "taxed_payslips": 110,
+      "net": 7999662.77,
+      "late_count": 224
     }
   ],
   "load_test": {
@@ -117,6 +123,11 @@
       3,
       4
     ],
-    "leave_and_overtime_generated": false
+    "leave_generated": false,
+    "overtime_generated": false,
+    "current_day": {
+      "date": "2026-11-03",
+      "attendance_rows": 108
+    }
   }
 }

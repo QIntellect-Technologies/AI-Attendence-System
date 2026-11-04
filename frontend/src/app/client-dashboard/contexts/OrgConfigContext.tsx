@@ -2741,7 +2741,14 @@ export function normalizeOrgConfig(input: unknown): OrgConfig {
         ? raw.terminology_overrides
         : {},
     orgName: typeof raw.orgName === "string" ? raw.orgName : "",
-    orgEmail: typeof raw.orgEmail === "string" ? raw.orgEmail : "",
+    orgEmail:
+      typeof raw.orgEmail === "string"
+        ? raw.orgEmail
+        : typeof raw.org_email === "string"
+          ? raw.org_email
+          : typeof raw.contact_email === "string"
+            ? raw.contact_email
+            : "",
     tagline: typeof raw.tagline === "string" ? raw.tagline : "",
     address: typeof raw.address === "string" ? raw.address : "",
     size: typeof raw.size === "string" ? raw.size : "",
@@ -3106,6 +3113,11 @@ export function OrgConfigProvider({ children }: { children: React.ReactNode }) {
           departments: orgLevel.departments ?? cfgSource.departments,
           roles: orgLevel.roles ?? cfgSource.roles,
           cameras: orgLevel.cameras ?? cfgSource.cameras,
+          orgEmail:
+            orgLevel.contact_email ??
+            orgLevel.org_email ??
+            cfgSource.orgEmail ??
+            cfgSource.org_email,
           maxBranches:
             orgLevel.max_branches ??
             orgLevel.maxBranches ??

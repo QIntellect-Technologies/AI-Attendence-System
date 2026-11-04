@@ -116,3 +116,23 @@ def assign_staff_shift(staff_id):
         })
 
     return _handle(_run)
+
+
+@client_shifts_bp.route("/staff/shifts/bulk", methods=["POST"])
+@require_client_dashboard_auth
+def assign_staff_shifts():
+    def _run():
+        payload = _payload()
+        org_id = _dashboard_org_id()
+        staff = shifts_db.assign_staff_shifts(
+            org_id,
+            payload.get("branch_id"),
+            payload.get("staff_ids"),
+            payload.get("shift_id"),
+        )
+        return _ok({
+            "assigned_count": len(staff),
+            "staff_ids": [str(row["id"]) for row in staff],
+        })
+
+    return _handle(_run)

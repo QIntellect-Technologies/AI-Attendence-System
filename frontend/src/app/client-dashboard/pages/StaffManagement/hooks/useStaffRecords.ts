@@ -43,9 +43,11 @@ import {
   type StaffPayload,
 } from "../api/staffApi";
 import { apiUserToStaffMember } from "../api/staffMappers";
+import { staffSalary } from "../utils/staffMember";
 import {
   assignStaffDepartment as assignStaffDepartmentApi,
   assignStaffShift as assignStaffShiftApi,
+  assignStaffShifts as assignStaffShiftsApi,
 } from "../api/attendanceSettingsApi";
 
 export interface StaffMediaFiles {
@@ -100,6 +102,7 @@ export interface StaffCounts {
   total: number;
   active: number;
   inactiveOrPending: number;
+  averageSalary: number;
   loaded: boolean;
 }
 
@@ -107,6 +110,7 @@ const EMPTY_STAFF_COUNTS: StaffCounts = {
   total: 0,
   active: 0,
   inactiveOrPending: 0,
+  averageSalary: 0,
   loaded: false,
 };
 
@@ -313,11 +317,16 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
 
   const [archivedStaff, setArchivedStaff] = useState<StaffMember[]>([]);
   const [isLoadingStaff, setIsLoadingStaff] = useState(false);
+  const [isLoadingArchivedStaff, setIsLoadingArchivedStaff] = useState(false);
+  const [hasLoadedArchivedStaff, setHasLoadedArchivedStaff] = useState(false);
   const [isSavingStaff, setIsSavingStaff] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
   const [staffTotal, setStaffTotal] = useState(0);
   const [staffCounts, setStaffCounts] =
     useState<StaffCounts>(EMPTY_STAFF_COUNTS);
+  const [staffDirectoryRecords, setStaffDirectoryRecords] = useState<
+    StaffMember[]
+  >([]);
   const [countsVersion, setCountsVersion] = useState(0);
   const [staffPage, setStaffPage] = useState(() =>
     Math.max(1, Number(options.page || 1)),
@@ -503,9 +512,12 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   const refreshArchivedStaff = useCallback(async () => {
     if (!organizationId) {
       setArchivedStaff([]);
+      setIsLoadingArchivedStaff(false);
+      setHasLoadedArchivedStaff(false);
       return [];
     }
 
+    setIsLoadingArchivedStaff(true);
     try {
       setStaffError(null);
 
@@ -524,6 +536,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         withBackendBenefits(apiUserToStaffMember(user), user),
       );
       setArchivedStaff(mappedRows);
+      setHasLoadedArchivedStaff(true);
 
       return mappedRows;
     } catch (error) {
@@ -533,6 +546,8 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
           : "Failed to load archived employees.";
       setStaffError(message);
       throw error;
+    } finally {
+      setIsLoadingArchivedStaff(false);
     }
   }, [
     organizationId,
@@ -575,15 +590,21 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     currentUserId,
     isOrgReady,
     organizationId,
-    options.loadArchived,
-    refreshArchivedStaff,
     refreshStaff,
   ]);
 
+  useEffect(() => {
+    if (options.loadArchived === false) return;
+
+    refreshArchivedStaff().catch(() => {
+      // refreshArchivedStaff already records the error in staffError.
+    });
+  }, [options.loadArchived, refreshArchivedStaff]);
+
   // ── Directory-wide headcounts for the stat cards ──────────────────────────
-  // The page request only returns one page of rows, so counting rows on screen
-  // gives the page size (e.g. 50), not the real headcount. Ask the server for
-  // the totals instead (pageSize 1 -> only the `total` field matters).
+  // Directory stats use the full organization/branch roster, not the current
+  // page or table filters. The page API supplies exact totals; salary rows are
+  // paged through the same API to calculate the directory-wide average.
   const countsPeopleType =
     options.peopleType ??
     options.people_type ??
@@ -594,6 +615,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
   useEffect(() => {
     if (!organizationId) {
       setStaffCounts(EMPTY_STAFF_COUNTS);
+      setStaffDirectoryRecords([]);
       return;
     }
 
@@ -606,23 +628,38 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
       userId: currentUserId,
       branchId: requestedBranchId ?? undefined,
       page: 1,
-      pageSize: 1,
+      pageSize: 250,
     };
 
     async function loadCounts() {
       try {
-        const [all, active] = await Promise.all([
-          listStaffPage(base),
-          listStaffPage({ ...base, status: "active" }),
-        ]);
+        const all = await listStaffPage(base);
+        const pageCount = Math.ceil(all.total / base.pageSize);
+        const remainingPages = await Promise.all(
+          Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) =>
+            listStaffPage({ ...base, page: index + 2 }),
+          ),
+        );
         if (cancelled) return;
 
         const total = Number(all.total || 0);
-        const activeCount = Math.min(total, Number(active.total || 0));
+        const directoryRecords = [all, ...remainingPages]
+          .flatMap((page) => page.rows)
+          .map((row) => withBackendBenefits(apiUserToStaffMember(row), row));
+        const { active: activeCount, salaryTotal } = directoryRecords.reduce(
+            (counts, member) => ({
+              active:
+                counts.active + (member.status === "active" ? 1 : 0),
+              salaryTotal: counts.salaryTotal + staffSalary(member),
+            }),
+            { active: 0, salaryTotal: 0 },
+          );
+        setStaffDirectoryRecords(directoryRecords);
         setStaffCounts({
           total,
           active: activeCount,
           inactiveOrPending: Math.max(0, total - activeCount),
+          averageSalary: total ? salaryTotal / total : 0,
           loaded: true,
         });
       } catch {
@@ -860,6 +897,28 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     [organizationId, replaceStaffRecord],
   );
 
+  const assignShifts = useCallback(
+    async (userIds: Array<number | string>, branchId: string, shiftId: string) => {
+      if (!organizationId) {
+        throw new Error(
+          "Organization is not loaded yet. Refresh after login and try again.",
+        );
+      }
+      const assignedCount = await assignStaffShiftsApi(
+        userIds,
+        branchId,
+        shiftId,
+      );
+      window.dispatchEvent(new Event("orgDataChanged"));
+      return assignedCount;
+    },
+    [organizationId],
+  );
+
+  const refreshStaffDirectoryRecords = useCallback(() => {
+    setCountsVersion((version) => version + 1);
+  }, []);
+
   /**
    * Assigns a staff member to a real `departments` row via
    * PATCH /api/client/staff/<id>/department. Additive: only writes the
@@ -929,9 +988,8 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
         restoredBy: payload?.restoredBy ?? currentUserId,
       });
 
-      await refreshStaff();
+      await Promise.all([refreshStaff(), refreshArchivedStaff()]);
       setCountsVersion((version) => version + 1);
-      await refreshArchivedStaff();
 
       return result;
     },
@@ -985,10 +1043,14 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     archivedStaff,
 
     isLoadingStaff,
+    isLoadingArchivedStaff,
+    hasLoadedArchivedStaff,
     isSavingStaff,
     staffError,
     staffTotal,
     staffCounts,
+    staffDirectoryRecords,
+    refreshStaffDirectoryRecords,
     staffPage,
     staffPageSize,
     setStaffPage,
@@ -1000,6 +1062,7 @@ export function useStaffRecords(options: UseStaffRecordsOptions = {}) {
     createStaff,
     updateStaff,
     assignShift,
+    assignShifts,
     assignDepartment,
     archiveStaff,
     restoreStaff,

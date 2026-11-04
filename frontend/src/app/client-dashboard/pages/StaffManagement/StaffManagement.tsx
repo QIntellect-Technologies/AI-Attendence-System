@@ -52,6 +52,7 @@ import { useAuth } from "../../contexts/useAuth";
 import { type OrgUserRecord, useOrg } from "../../contexts/OrgConfigContext";
 import { EmptyState, ModuleShell } from "../engine/ModuleShell";
 import RefreshButton from "../../components/ui/RefreshButton";
+import Spinner from "../../components/ui/Spinner";
 import { T } from "../../components/ui/theme";
 import DynamicFilterToolbar, {
   type DynamicFilterSection,
@@ -458,6 +459,7 @@ const StaffDirectory: FC = () => {
     createStaff,
     updateStaff,
     assignShift,
+    assignShifts,
     assignDepartment,
     archiveStaff,
     restoreStaff,
@@ -466,7 +468,12 @@ const StaffDirectory: FC = () => {
     refreshStaff,
     refreshArchivedStaff,
     isLoadingStaff,
+    isLoadingArchivedStaff,
+    hasLoadedArchivedStaff,
     staffTotal,
+    staffCounts,
+    staffDirectoryRecords,
+    refreshStaffDirectoryRecords,
     staffPage,
     staffPageSize,
     setStaffPage,
@@ -560,6 +567,7 @@ const StaffDirectory: FC = () => {
   // openEditModal below) — used to disable that row's button and avoid a
   // double-fetch, not to block the rest of the UI.
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
+  const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
   const [pendingCredentialsId, setPendingCredentialsId] = useState<
     string | null
   >(null);
@@ -593,6 +601,11 @@ const StaffDirectory: FC = () => {
 
     return allStaffItems;
   }, [effectiveBranchId, isBranchDashboard, staff.items]);
+
+  const completeStaffDirectory = useMemo(
+    () => staffDirectoryRecords.map(toStaffMember),
+    [staffDirectoryRecords],
+  );
 
   const archivedStaffItems = useMemo<StaffMember[]>(() => {
     const allArchived = archivedStaff.map(toStaffMember);
@@ -1045,15 +1058,6 @@ const StaffDirectory: FC = () => {
     }),
     [organizationName, cfg.orgName, cfg.logo],
   );
-
-  const exportReportPeriod = useMemo(() => {
-    const now = new Date();
-    return `Period: ${now.toLocaleDateString(undefined, {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    })}`;
-  }, []);
 
   const exportFilters = useMemo(
     () => ({
@@ -1719,27 +1723,28 @@ const StaffDirectory: FC = () => {
 
     if (!confirmed.isConfirmed) return;
 
+    setPendingRestoreId(member.id);
     try {
-      await restoreStaff(userId, {
+      const result = await restoreStaff(userId, {
         organizationId,
         restoredBy: currentUserId,
       });
 
-      await refreshStaff?.();
-      await refreshArchivedStaff?.();
       setSelectedArchived((previous) => {
         const next = new Set(previous);
         next.delete(member.id);
         return next;
       });
 
-      toastSuccess("Record restored successfully.");
+      toastSuccess(result.message || "Record restored successfully.");
     } catch (error) {
       toastError(
         error instanceof Error
           ? error.message
           : "Failed to restore archived employee.",
       );
+    } finally {
+      setPendingRestoreId(null);
     }
   };
 
@@ -1869,11 +1874,12 @@ const StaffDirectory: FC = () => {
     async (target: {
       scope: "branch" | "department" | "individual";
       branchId: number;
+      apiBranchId: string;
       department?: string;
       staffId?: string;
       shiftId: string;
     }) => {
-      const targetMembers = scopedStaffItems.filter((member) => {
+      const targetMembers = completeStaffDirectory.filter((member) => {
         if (member.branchId !== target.branchId) return false;
         if (target.scope === "individual") return member.id === target.staffId;
         if (target.scope === "department") {
@@ -1882,34 +1888,26 @@ const StaffDirectory: FC = () => {
         return isGlobalDashboard;
       });
 
-      if (targetMembers.length === 0) return;
-
-      // Each assignment is a real PATCH /api/client/staff/:id/shift against
-      // the shifts table (see support_db_shifts.assign_staff_shift) — no
-      // local-only mutation. assignShift already patches the ModuleContext
-      // record on success, so a re-render reflects it without a page
-      // refresh, and — unlike the old staff.update() path — a page refresh
-      // reflects it too, because it was actually persisted.
-      const results = await Promise.allSettled(
-        targetMembers.map((member) =>
-          assignShift(member.userId, target.shiftId || null),
-        ),
-      );
-
-      const failures = results.filter(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
-      );
-
-      if (failures.length > 0) {
-        throw new Error(
-          failures.length === targetMembers.length
-            ? `Failed to assign shift for all ${targetMembers.length} staff member(s).`
-            : `Assigned shift for ${targetMembers.length - failures.length} of ${targetMembers.length} staff member(s); ${failures.length} failed.`,
-        );
+      if (targetMembers.length === 0) {
+        throw new Error("No staff members match the selected branch and department.");
       }
+
+      const assignedCount = await assignShifts(
+        targetMembers.map((member) => member.userId),
+        target.apiBranchId,
+        target.shiftId,
+      );
+      await refreshStaff();
+      refreshStaffDirectoryRecords();
+      return assignedCount;
     },
-    [isGlobalDashboard, scopedStaffItems, assignShift],
+    [
+      isGlobalDashboard,
+      completeStaffDirectory,
+      assignShifts,
+      refreshStaff,
+      refreshStaffDirectoryRecords,
+    ],
   );
 
   const SortIcon = ({ k }: { k: keyof StaffMember }) =>
@@ -1980,6 +1978,7 @@ const StaffDirectory: FC = () => {
         stats={
           <StaffStats
             staff={scopedStaffItems}
+            counts={staffCounts}
             peopleModel={peopleModel}
             purchasedModules={cfg.modules}
           />
@@ -2001,7 +2000,6 @@ const StaffDirectory: FC = () => {
                 }}
                 pdf={{
                   title: `${peopleModel.exportModuleLabel} Report`,
-                  reportPeriod: exportReportPeriod,
                   columns: exportColumns,
                 }}
                 emptyMessage={peopleModel.exportEmptyMessage}
@@ -2119,22 +2117,33 @@ const StaffDirectory: FC = () => {
               }}
             />
 
-            {filtered.length === 0 ? (
+            {isLoadingStaff && filtered.length === 0 ? (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  minHeight: 260,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  background: T.card,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 16,
+                  color: T.muted,
+                  fontSize: 13,
+                }}
+              >
+                <Spinner size={16} />
+                Loading {peopleModel.isStudent ? "students" : "staff"}…
+              </div>
+            ) : filtered.length === 0 ? (
               <EmptyState
                 Icon={Users}
-                title={peopleModel.emptyTitle}
-                sub={
-                  query
-                    ? "Try adjusting your search or filters"
-                    : peopleModel.emptySubtitle
-                }
-                action={
-                  can("add")
-                    ? {
-                      label: peopleModel.addRecordLabel,
-                      onClick: () => setEditMember("new"),
-                    }
-                    : undefined
+                title={
+                  peopleModel.isStudent
+                    ? "No student found"
+                    : "No staff member found"
                 }
               />
             ) : (
@@ -2262,7 +2271,7 @@ const StaffDirectory: FC = () => {
         {peopleModel.showShiftAllocation && activeTab === "shifts" && (
           <Suspense fallback={<TabFallback />}>
             <ShiftAllocationTab
-              staffRows={scopedStaffItems}
+              staffRows={completeStaffDirectory}
               visibleBranches={visibleBranches}
               departmentsByBranch={cfg.departments}
               organizationId={organizationId}
@@ -2408,7 +2417,7 @@ const StaffDirectory: FC = () => {
                 <RefreshButton
                   variant="ghost"
                   size="md"
-                  loading={false}
+                  loading={isLoadingArchivedStaff}
                   onClick={async () => {
                     await refreshArchivedStaff?.();
                   }}
@@ -2417,7 +2426,24 @@ const StaffDirectory: FC = () => {
               </div>
             </div>
 
-            {archivedStaffItems.length === 0 ? (
+            {isLoadingArchivedStaff && !hasLoadedArchivedStaff ? (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  minHeight: 220,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  color: T.muted,
+                  fontSize: 13,
+                }}
+              >
+                <Spinner size={16} />
+                Loading archived employees…
+              </div>
+            ) : archivedStaffItems.length === 0 ? (
               <EmptyState
                 Icon={ArchiveRestore}
                 title="No archived employees"
@@ -2473,6 +2499,7 @@ const StaffDirectory: FC = () => {
 
                 {archivedStaffItems.map((member) => {
                   const isSelected = selectedArchived.has(member.id);
+                  const isRestoring = pendingRestoreId === member.id;
 
                   return (
                     <div
@@ -2553,19 +2580,39 @@ const StaffDirectory: FC = () => {
                         <button
                           type="button"
                           onClick={() => handleRestore(member)}
+                          disabled={pendingRestoreId !== null}
+                          aria-busy={isRestoring}
                           style={{
                             border: `1px solid ${T.teal200}`,
-                            background: T.teal50,
+                            background: isRestoring ? "#fff" : T.teal50,
                             color: T.teal700,
                             borderRadius: 8,
                             padding: "7px 10px",
-                            cursor: "pointer",
+                            cursor:
+                              pendingRestoreId !== null
+                                ? "not-allowed"
+                                : "pointer",
                             fontSize: 12,
                             fontWeight: 900,
                             fontFamily: "inherit",
+                            opacity:
+                              pendingRestoreId !== null && !isRestoring
+                                ? 0.6
+                                : 1,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 6,
                           }}
                         >
-                          Restore
+                          {isRestoring ? (
+                            <>
+                              <Spinner size={13} color={T.teal700} />
+                              Restoring…
+                            </>
+                          ) : (
+                            "Restore"
+                          )}
                         </button>
 
                         <button

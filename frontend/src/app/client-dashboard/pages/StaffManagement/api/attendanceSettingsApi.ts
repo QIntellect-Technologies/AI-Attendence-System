@@ -534,6 +534,7 @@ export interface AssignedShiftSummary {
  * deleted. They ride on the staff row itself, so this stays a `User` and
  * every existing caller keeps working unchanged. */
 export type StaffWithShiftSwap = User & {
+  shift_id_ref?: string | null;
   assigned_shift?: AssignedShiftSummary | null;
   previous_shift?: AssignedShiftSummary | null;
 };
@@ -553,7 +554,43 @@ export async function assignStaffShift(
       }),
     },
   );
+  if (String(res.staff.shift_id_ref ?? "") !== String(shiftId ?? "")) {
+    throw new Error("The server did not confirm the requested shift assignment.");
+  }
   return res.staff;
+}
+
+export async function assignStaffShifts(
+  staffIds: Array<number | string>,
+  branchId: string,
+  shiftId: string,
+): Promise<number> {
+  const ids = [...new Set(staffIds.map((id) => String(id)))];
+  if (ids.length === 0) {
+    throw new Error("Select at least one staff member.");
+  }
+
+  const res = await clientJson<{
+    assigned_count: number;
+    staff_ids: string[];
+  }>("/api/client/staff/shifts/bulk", {
+    method: "POST",
+    body: JSON.stringify({
+      staff_ids: ids,
+      branch_id: branchId,
+      shift_id: shiftId,
+    }),
+  });
+  const confirmedIds = new Set((res.staff_ids ?? []).map(String));
+  if (
+    res.assigned_count !== ids.length ||
+    ids.some((id) => !confirmedIds.has(id))
+  ) {
+    throw new Error(
+      `The server confirmed ${confirmedIds.size} of ${ids.length} shift assignments.`,
+    );
+  }
+  return confirmedIds.size;
 }
 
 // ─── Capture settings / half-day windows / timing overrides ───────────────

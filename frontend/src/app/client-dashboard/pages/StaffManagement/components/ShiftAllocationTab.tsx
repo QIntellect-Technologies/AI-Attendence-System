@@ -5,8 +5,12 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { toastError, toastSuccess } from "../../../utils/notifications";
-import { CalendarClock, Search, TimerReset, X } from "lucide-react";
+import {
+  confirmDialog,
+  toastError,
+  toastSuccess,
+} from "../../../utils/notifications";
+import { CalendarClock, Check, Pencil, TimerReset, X } from "lucide-react";
 import {
   type OrgBranch,
   type OrgDepartment,
@@ -31,24 +35,6 @@ import { BranchDefaultShiftCard } from "./BranchDefaultShiftCard";
 
 // ─── Summary table (same visual language as the Staff Member Directory) ──────
 
-const matchesStaffSearch = (member: StaffMember, query: string): boolean => {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return [
-    member.name,
-    member.personCode,
-    member.employeeId,
-    member.department,
-    member.designationName,
-    member.role,
-    member.position,
-  ].some((field) =>
-    String(field ?? "")
-      .toLowerCase()
-      .includes(q),
-  );
-};
-
 const SummaryRow: FC<{
   member: StaffMember;
   showBranch: boolean;
@@ -57,6 +43,14 @@ const SummaryRow: FC<{
   selected: boolean;
   onSelect: () => void;
   gridTemplateColumns: string;
+  shifts: ShiftRecord[];
+  editing: boolean;
+  editingShiftId: string;
+  saving: boolean;
+  onEdit: () => void;
+  onShiftChange: (shiftId: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
 }> = ({
   member,
   showBranch,
@@ -65,6 +59,14 @@ const SummaryRow: FC<{
   selected,
   onSelect,
   gridTemplateColumns,
+  shifts,
+  editing,
+  editingShiftId,
+  saving,
+  onEdit,
+  onShiftChange,
+  onSave,
+  onCancel,
 }) => {
     const [hov, setHov] = useState(false);
     const avatarUrl = useAuthenticatedImageUrl(staffAvatarUrl(member));
@@ -87,7 +89,7 @@ const SummaryRow: FC<{
         style={{
           display: "grid",
           gridTemplateColumns,
-          minWidth: 820,
+          minWidth: 900,
           width: "100%",
           boxSizing: "border-box",
           gap: 12,
@@ -152,10 +154,91 @@ const SummaryRow: FC<{
         <div style={cell}>
           {member.designationName || member.role || member.position || "—"}
         </div>
-        <div style={cell}>{shiftText(member)}</div>
+        <div
+          onClick={editing ? (event) => event.stopPropagation() : undefined}
+          style={{ ...cell, overflow: "visible" }}
+        >
+          {editing ? (
+            <ModernSelect
+              value={editingShiftId}
+              onChange={onShiftChange}
+              options={[
+                { value: "", label: "Select shift" },
+                ...shifts.map((shift) => ({
+                  value: shift.id,
+                  label: `${shift.name} · ${shift.check_in_time}${shift.check_out_time ? `–${shift.check_out_time}` : ""}`,
+                })),
+              ]}
+              ariaLabel={`Select shift for ${member.name}`}
+              disabled={saving || shifts.length === 0}
+              width="100%"
+            />
+          ) : (
+            shiftText(member)
+          )}
+        </div>
+        <div
+          onClick={(event) => event.stopPropagation()}
+          style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}
+        >
+          {editing ? (
+            <>
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={saving || !editingShiftId}
+                aria-label={`Save shift for ${member.name}`}
+                title="Save shift"
+                style={rowActionStyle}
+              >
+                <Check size={15} />
+                <span>Save</span>
+              </button>
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={saving}
+                aria-label={`Cancel shift edit for ${member.name}`}
+                title="Cancel"
+                style={rowActionStyle}
+              >
+                <X size={15} />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={`Edit shift for ${member.name}`}
+              title="Edit shift"
+              style={rowActionStyle}
+            >
+              <Pencil size={15} />
+              <span>Edit</span>
+            </button>
+          )}
+        </div>
       </div>
     );
   };
+
+const rowActionStyle: React.CSSProperties = {
+  minWidth: 34,
+  height: 30,
+  padding: "0 8px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 4,
+  border: `1px solid ${T.border}`,
+  borderRadius: 8,
+  background: T.card,
+  color: T.teal600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+  fontSize: 11,
+  fontWeight: 700,
+};
 
 export const ShiftAllocationTab: FC<{
   staffRows: StaffMember[];
@@ -173,10 +256,11 @@ export const ShiftAllocationTab: FC<{
   onApplyShift: (target: {
     scope: "branch" | "department" | "individual";
     branchId: number;
+    apiBranchId: string;
     department?: string;
     staffId?: string;
     shiftId: string;
-  }) => Promise<void>;
+  }) => Promise<number>;
   onStaffRefresh?: () => void;
   /** Staff id to pre-select for an individual shift override. */
   overrideStaffId?: string | number | null;
@@ -205,7 +289,9 @@ export const ShiftAllocationTab: FC<{
     const [selectedShiftId, setSelectedShiftId] = useState<string>("");
     const [isApplying, setIsApplying] = useState(false);
     const [applyError, setApplyError] = useState<string | null>(null);
-    const [staffSearch, setStaffSearch] = useState("");
+    const [editingStaffId, setEditingStaffId] = useState<string | null>(null);
+    const [editingShiftId, setEditingShiftId] = useState("");
+    const [savingStaffId, setSavingStaffId] = useState<string | null>(null);
 
     useEffect(() => {
       if (overrideStaffId == null || overrideStaffId === "") return;
@@ -335,9 +421,8 @@ export const ShiftAllocationTab: FC<{
             (member) => member.department === selectedDepartment,
           );
       return [...list]
-        .filter((member) => matchesStaffSearch(member, staffSearch))
         .sort((a, b) => a.name.localeCompare(b.name));
-    }, [branchStaff, selectedDepartment, staffSearch]);
+    }, [branchStaff, selectedDepartment]);
 
     const selectedShift = liveShifts.find(
       (shift) => shift.id === selectedShiftId,
@@ -380,6 +465,7 @@ export const ShiftAllocationTab: FC<{
 
     const canApply =
       scopedBranchId > 0 &&
+      !!scopedApiBranchId &&
       !!selectedShiftId &&
       !isApplying &&
       (scope === "branch" ||
@@ -416,18 +502,24 @@ export const ShiftAllocationTab: FC<{
       selectedShiftId,
     ]);
 
-    // Summary table data. In Individual mode the search bar filters it too, so a
-    // searched person shows up here and can be picked by clicking their row.
+    // Use the same branch/department selection for the summary and allocation.
     const summarySource = useMemo(
       () =>
         scope === "individual"
-          ? staffRows.filter((member) => matchesStaffSearch(member, staffSearch))
-          : staffRows,
-      [scope, staffRows, staffSearch],
+          ? branchStaff
+            .filter(
+              (member) =>
+                selectedDepartment === "all" ||
+                member.department === selectedDepartment,
+            )
+          : selectedDepartment === "all"
+            ? branchStaff
+            : branchStaff.filter(
+              (member) => member.department === selectedDepartment,
+            ),
+      [branchStaff, scope, selectedDepartment],
     );
-    const searching = scope === "individual" && staffSearch.trim() !== "";
-    const summaryRows = searching ? summarySource : summarySource.slice(0, 12);
-    const summaryTruncated = summaryRows.length < summarySource.length;
+    const summaryRows = summarySource;
     const summaryHeaders = [
       "Staff ID",
       "Name",
@@ -435,13 +527,51 @@ export const ShiftAllocationTab: FC<{
       peopleModel.groupLabel,
       "Designation",
       "Shift",
+      "Actions",
     ];
     const summaryGridTemplate = isGlobalDashboard
-      ? "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr)"
-      : "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr)";
+      ? "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(100px, 0.7fr)"
+      : "minmax(100px, 0.8fr) minmax(180px, 1.4fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(160px, 1.2fr) minmax(100px, 0.7fr)";
+
+    const saveRowShift = async (member: StaffMember) => {
+      if (!scopedApiBranchId || !editingShiftId) return;
+      const currentShiftId = String(member.shiftIdRef ?? "");
+      if (currentShiftId && currentShiftId !== editingShiftId) {
+        const confirmation = await confirmDialog({
+          title: "Replace current shift?",
+          text: `Applying ${liveShifts.find((shift) => shift.id === editingShiftId)?.name ?? "the selected shift"} will replace ${shiftText(member)} for ${member.name}. Continue?`,
+          confirmButtonText: "Save shift",
+        });
+        if (!confirmation.isConfirmed) return;
+      }
+
+      setSavingStaffId(member.id);
+      try {
+        const assignedCount = await onApplyShift({
+          scope: "individual",
+          branchId: member.branchId,
+          apiBranchId: scopedApiBranchId,
+          staffId: member.id,
+          shiftId: editingShiftId,
+        });
+        toastSuccess(`Shift saved for ${assignedCount} staff member.`);
+        setEditingStaffId(null);
+        setEditingShiftId("");
+      } catch (error) {
+        toastError(
+          error instanceof Error ? error.message : "Failed to save shift.",
+        );
+      } finally {
+        setSavingStaffId(null);
+      }
+    };
 
     const handleApply = async () => {
       if (!canApply) return;
+      if (!scopedApiBranchId) {
+        toastError("The selected branch could not be resolved.");
+        return;
+      }
 
       // One confirm for the whole apply, not one per person — a branch-wide
       // apply can target hundreds.
@@ -452,11 +582,12 @@ export const ShiftAllocationTab: FC<{
             ? `${replacements[0].name} is currently on ${shiftText(replacements[0])}.`
             : `${replacements.length} people are currently on a different shift.`;
 
-        if (
-          !window.confirm(
-            `${summary}\n\nApplying ${incoming} REPLACES their current shift — nobody holds two shifts at once. Continue?`,
-          )
-        ) {
+        const confirmation = await confirmDialog({
+          title: "Replace current shift?",
+          text: `${summary}\n\nApplying ${incoming} replaces their current shift. Nobody holds two shifts at once. Continue?`,
+          confirmButtonText: "Apply shift",
+        });
+        if (!confirmation.isConfirmed) {
           return;
         }
       }
@@ -464,9 +595,10 @@ export const ShiftAllocationTab: FC<{
       setIsApplying(true);
       setApplyError(null);
       try {
-        await onApplyShift({
+        const appliedCount = await onApplyShift({
           scope,
           branchId: scopedBranchId,
+          apiBranchId: scopedApiBranchId,
           department:
             selectedDepartment === "all" ? undefined : selectedDepartment,
           staffId: selectedStaffId || undefined,
@@ -474,7 +606,7 @@ export const ShiftAllocationTab: FC<{
         });
         toastSuccess(
           selectedShift
-            ? `${selectedShift.name} (${formatShiftWindow(selectedShift)}) applied to ${targetCount} ${targetCount === 1
+            ? `${selectedShift.name} (${formatShiftWindow(selectedShift)}) applied to ${appliedCount} ${appliedCount === 1
               ? peopleModel.personSingular.toLowerCase()
               : peopleModel.personPlural.toLowerCase()
             }.`
@@ -576,7 +708,6 @@ export const ShiftAllocationTab: FC<{
                   setScope(value as "branch" | "department" | "individual");
                   setSelectedDepartment("all");
                   setSelectedStaffId("");
-                  setStaffSearch("");
                 }}
                 options={[
                   ...(isGlobalDashboard
@@ -666,6 +797,8 @@ export const ShiftAllocationTab: FC<{
                   })),
                 ]}
                 ariaLabel={`Select ${peopleModel.personSingular.toLowerCase()}`}
+                searchable={scope === "individual"}
+                searchPlaceholder={`Search ${peopleModel.personPlural.toLowerCase()}...`}
                 width="100%"
               />
             </div>
@@ -706,58 +839,6 @@ export const ShiftAllocationTab: FC<{
               {isApplying ? "Applying…" : "Apply Shift"}
             </JellyButton>
           </div>
-
-          {scope === "individual" && (
-            <div style={{ marginTop: 12 }}>
-              <label style={labelStyle}>Find {peopleModel.personSingular}</label>
-              <div style={{ position: "relative" }}>
-                <Search
-                  size={14}
-                  color={T.muted}
-                  style={{
-                    position: "absolute",
-                    left: 12,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    pointerEvents: "none",
-                  }}
-                />
-                <input
-                  type="text"
-                  value={staffSearch}
-                  onChange={(event) => setStaffSearch(event.target.value)}
-                  placeholder="Search by name, ID, department or designation…"
-                  aria-label={`Search ${peopleModel.personPlural.toLowerCase()}`}
-                  style={{
-                    ...inputStyle,
-                    paddingLeft: 34,
-                    paddingRight: staffSearch ? 34 : 12,
-                    fontWeight: 500,
-                  }}
-                />
-                {staffSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setStaffSearch("")}
-                    aria-label="Clear search"
-                    style={{
-                      position: "absolute",
-                      right: 8,
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 4,
-                      lineHeight: 0,
-                    }}
-                  >
-                    <X size={14} color={T.muted} />
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
 
           {liveShifts.length === 0 && !isLoadingShifts && (
             <div style={{ marginTop: 10, fontSize: 12, color: T.muted }}>
@@ -832,9 +913,10 @@ export const ShiftAllocationTab: FC<{
             }}
           >
             <span>Current Shift Summary</span>
-            {summaryTruncated && (
+            {summaryRows.length > 0 && (
               <span style={{ fontSize: 11, fontWeight: 600, color: T.muted }}>
-                Showing {summaryRows.length} of {summarySource.length}
+                {summaryRows.length}{" "}
+                {peopleModel.personPlural.toLowerCase()}
               </span>
             )}
           </div>
@@ -859,7 +941,7 @@ export const ShiftAllocationTab: FC<{
                 style={{
                   display: "grid",
                   gridTemplateColumns: summaryGridTemplate,
-                  minWidth: 820,
+                  minWidth: 900,
                   width: "100%",
                   boxSizing: "border-box",
                   gap: 12,
@@ -893,6 +975,20 @@ export const ShiftAllocationTab: FC<{
                   showBranch={isGlobalDashboard}
                   branchLabel={branchName(member.branchId)}
                   gridTemplateColumns={summaryGridTemplate}
+                  shifts={liveShifts}
+                  editing={editingStaffId === member.id}
+                  editingShiftId={editingShiftId}
+                  saving={savingStaffId === member.id}
+                  onEdit={() => {
+                    setEditingStaffId(member.id);
+                    setEditingShiftId(String(member.shiftIdRef ?? ""));
+                  }}
+                  onShiftChange={setEditingShiftId}
+                  onSave={() => void saveRowShift(member)}
+                  onCancel={() => {
+                    setEditingStaffId(null);
+                    setEditingShiftId("");
+                  }}
                   selectable={scope === "individual"}
                   selected={scope === "individual" && member.id === selectedStaffId}
                   onSelect={() => {

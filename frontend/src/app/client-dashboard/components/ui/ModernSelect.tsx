@@ -89,6 +89,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     align: "start",
     gap: 8,
     matchTriggerWidth: true,
+    flip: true,
+    maxPanelHeight: 300,
   });
 
   const selectedOption = useMemo(
@@ -225,9 +227,11 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
             aria-label={searchable ? undefined : ariaLabel}
             style={{
               position: "fixed",
-              top: position.top,
+              top: position.placement === "above" ? undefined : position.top,
+              bottom: position.bottom,
               left: position.left,
               width: position.width,
+              maxHeight: position.maxHeight,
               zIndex,
               background: T.card,
               border: `1px solid ${T.border}`,
@@ -263,7 +267,14 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 role="listbox"
                 aria-label={ariaLabel}
                 style={{
-                  maxHeight: 280,
+                  maxHeight: Math.max(
+                    0,
+                    Math.min(
+                      280,
+                      (position.maxHeight ?? 300) -
+                        (searchable ? 54 : 14),
+                    ),
+                  ),
                   overflowY: "auto",
                 }}
               >
