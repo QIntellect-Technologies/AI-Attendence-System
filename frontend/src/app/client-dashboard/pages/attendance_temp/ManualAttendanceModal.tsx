@@ -150,7 +150,14 @@ export const ManualAttendanceModal: FC<{
   }, [open, mode, record?.id, initialStaffId, initialDate]);
 
   const employeeOptions = useMemo(() => {
-    const options = staffOptions.map((option) => ({
+    const fixedStaffId = mode === "edit" ? record?.staffId : initialStaffId;
+    const availableStaffOptions =
+      fixedStaffId == null
+        ? staffOptions
+        : staffOptions.filter(
+            (option) => String(option.id) === String(fixedStaffId),
+          );
+    const options = availableStaffOptions.map((option) => ({
       value: String(option.id),
       label: option.name,
       description: option.code ? `Staff ID: ${option.code}` : undefined,
@@ -169,7 +176,11 @@ export const ManualAttendanceModal: FC<{
     }
 
     return options;
-  }, [mode, record, staffOptions]);
+  }, [initialStaffId, mode, record, staffOptions]);
+  const isEmployeeFixed = mode === "edit" || initialStaffId != null;
+  const fixedEmployee = employeeOptions.find(
+    (option) => option.value === staffId,
+  );
 
   const staffMissing = mode === "add" && !staffId;
   const checkInMissing = mode === "add" && !checkInLocal;
@@ -303,18 +314,33 @@ export const ManualAttendanceModal: FC<{
                 />
                 Employee
               </label>
-              <ModernSelect
-                value={staffId}
-                options={employeeOptions}
-                onChange={setStaffId}
-                placeholder="Select employee…"
-                ariaLabel="Employee"
-                width="100%"
-                minWidth={0}
-                disabled={saving}
-                searchable
-                searchPlaceholder="Search by name or staff ID..."
-              />
+              {isEmployeeFixed ? (
+                <div
+                  style={{
+                    ...inputStyle,
+                    minHeight: 40,
+                    boxSizing: "border-box",
+                    display: "flex",
+                    alignItems: "center",
+                    fontWeight: 600,
+                  }}
+                >
+                  {fixedEmployee?.label ?? record?.staffName ?? ""}
+                </div>
+              ) : (
+                <ModernSelect
+                  value={staffId}
+                  options={employeeOptions}
+                  onChange={setStaffId}
+                  placeholder="Select employee…"
+                  ariaLabel="Employee"
+                  width="100%"
+                  minWidth={0}
+                  disabled={saving}
+                  searchable
+                  searchPlaceholder="Search by name or staff ID..."
+                />
+              )}
               {touched && staffMissing && (
                 <p style={{ fontSize: 12, color: T.red600, margin: "6px 0 0" }}>
                   Please select an employee.
