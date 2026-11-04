@@ -878,7 +878,9 @@ export default function AdminLayout() {
           }}
         >
           <DashboardTabBar />
-          <Outlet />
+          <div style={{ flex: "1 0 auto" }}>
+            <Outlet />
+          </div>
           <footer
             style={{
               display: "flex",
